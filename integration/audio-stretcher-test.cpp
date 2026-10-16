@@ -55,7 +55,7 @@ struct Ring {
 int main() {
     rrv_audio_stretcher stretcher;
     Ring ring;
-    std::array<float, 1152 * 2> input{};
+    std::array<float, 1195 * 2> input{};
     std::array<float, 64 * 2> pending{};
     size_t pending_frames = 0;
     std::array<float, kDeviceFramesPerTick * 2> output{};
@@ -63,11 +63,12 @@ int main() {
     uint64_t stable_underruns = 0;
     uint64_t analyzed_frames = 0;
     uint64_t positive_crossings = 0;
+    std::vector<size_t> steady_queues;
     float previous = 0.0f;
 
     for (size_t tick = 0; tick < kTicks; ++tick) {
-        const size_t produced_frames = tick < 10 ? 1109u   // 52 kHz startup burst.
-            : tick < 70 ? 1088u                           // 51 kHz sustained burst.
+        const size_t produced_frames = tick < 60 ? 1195u   // 56 kHz startup burst.
+            : tick < 120 ? 1109u                           // 52 kHz sustained burst.
             : 1024u;                                       // Stable 48 kHz operation.
         for (size_t i = 0; i < produced_frames; ++i) {
             const float sample = static_cast<float>(std::sin(
@@ -91,6 +92,7 @@ int main() {
         ring.consume(output.data(), kDeviceFramesPerTick);
         if (tick >= 400) {
             stable_underruns += ring.underruns - underruns_before;
+            steady_queues.push_back(ring.size());
             for (size_t i = 0; i < kDeviceFramesPerTick; ++i) {
                 const float sample = output[2 * i];
                 if (previous <= 0.0f && sample > 0.0f)
@@ -105,13 +107,21 @@ int main() {
 
     const double measured_hz = static_cast<double>(positive_crossings) * 48000.0 /
                                static_cast<double>(analyzed_frames);
+    std::sort(steady_queues.begin(), steady_queues.end());
+    uint64_t queue_sum = 0;
+    for (size_t queue : steady_queues)
+        queue_sum += queue;
+    const double mean_steady_queue = static_cast<double>(queue_sum) /
+                                     static_cast<double>(steady_queues.size());
+    const size_t p95_steady_queue = steady_queues[(steady_queues.size() * 95u) / 100u];
     std::printf("tempo=%.4f queue=%zu maxQueue=%zu dropped=%llu startupUnderrun=%llu "
-                "steadyUnderrun=%llu pitch=%.2fHz\n",
+                "steadyUnderrun=%llu meanSteadyQueue=%.1f p95SteadyQueue=%zu pitch=%.2fHz\n",
                 stretcher.tempo(), ring.size(), ring.maximum,
                 static_cast<unsigned long long>(ring.dropped),
                 static_cast<unsigned long long>(ring.underruns - stable_underruns),
-                static_cast<unsigned long long>(stable_underruns), measured_hz);
-    if (ring.dropped != 0 || stable_underruns != 0 || ring.size() > 4096 ||
+                static_cast<unsigned long long>(stable_underruns), mean_steady_queue,
+                p95_steady_queue, measured_hz);
+    if (ring.dropped != 0 || stable_underruns != 0 || p95_steady_queue > 4096 ||
         ring.maximum > 8192 ||
         stretcher.tempo() < 0.98f || stretcher.tempo() > 1.02f ||
         measured_hz < 430.0 || measured_hz > 450.0)

@@ -102,7 +102,7 @@
         {
           "mode": "0644",
           "path": "tools/pcsx2-spu2/rrv_audio_stretcher.cpp",
-          "sha256": "0bac163cf01cb21d4ad6d4b2162000b7cdb67c0ec4fec057a7db8fbfd61002a1",
+          "sha256": "37980b073970b18c08f73e5d8a4723eadd214dd514be2e5961bc7b641f285fa0",
           "snapshot": "patches/upstreams/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
         },
         {

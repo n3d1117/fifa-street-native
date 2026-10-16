@@ -11,7 +11,7 @@ completed source decompilation or a verified complete game port.
 | Arithmetic | Scalar SQRT.S incorrectly read Fs instead of Ft; corrected compiler and active generated sites. DIV/RSQRT zero/denormal handling corrected at tested sites. |
 | VU1 | 13 captured microprogram images have native paths. 914 captured replay states matched; 213,759 live differential calls recorded no mismatch. Unknown later images can fall back. |
 | IOP / VU0 | Interpreter paths remain; these are explicit gaps toward fully native subsystem execution. |
-| Audio | Producer-side SoundTouch removed steady-state ring drops in measured story capture. Empty outside-thread event waits were fixed and regression-tested. Startup overrun dropped from 124,512 to 4,096 frames in the 8-second probe; remaining drops and perceptual quality still need work. |
+| Audio | Producer-side SoundTouch removed steady-state ring drops in measured story capture. Empty outside-thread event waits were fixed and regression-tested. Upstream SoundTouch window settings and bounded burst correction produce zero overrun across an actual 8-second startup capture; only initial buffer-fill silence remains. Audible quality still awaits listening confirmation. |
 | Saves | Native host-directory card save/reload exercised for slot A at 0%; complete card semantics and all checkpoints unverified. Saves live outside the bundle. |
 | Input / UI | Mac keyboard remapping exists. Resize with 4:3 content and native fullscreen implemented; final bundled fullscreen regression pending. PS5 hardware validation pending. |
 | Performance | Prior native run ~24.2 DISPFB2 changes/s. Instrumented same-process 50-FPS-patch A/B remained ~22 changes/s. These are framebuffer swaps, not proof of simulation speed or unique frames. |

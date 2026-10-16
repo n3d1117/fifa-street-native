@@ -5,12 +5,12 @@
 #include <cmath>
 
 namespace {
-constexpr float kBaseTargetFrames = 4096.0f;
+constexpr float kBaseTargetFrames = 3584.0f;
 constexpr uint64_t kStartupFrames = 4096;
 constexpr float kMinControlTempo = 0.05f;
 constexpr float kMaxControlTempo = 50.0f;
 constexpr float kMinAppliedTempo = 0.90f;
-constexpr float kMaxAppliedTempo = 1.10f;
+constexpr float kMaxAppliedTempo = 1.25f;
 constexpr float kInactiveGoodFactor = 1.04f;
 constexpr float kInactiveBadFactor = 1.2f;
 constexpr uint32_t kInactiveMinOkCount = 50;
@@ -21,8 +21,13 @@ constexpr uint32_t kResetThreshold = 5;
 rrv_audio_stretcher::rrv_audio_stretcher() {
     m_sound_touch.setSampleRate(48000);
     m_sound_touch.setChannels(2);
-    m_sound_touch.setSetting(SETTING_USE_QUICKSEEK, 1);
-    m_sound_touch.setSetting(SETTING_USE_AA_FILTER, 1);
+    // Match PCSX2 AudioStreamTypes defaults. The shorter seek/sequence window
+    // reduces SoundTouch's internal batching latency for this small host ring.
+    m_sound_touch.setSetting(SETTING_SEQUENCE_MS, 30);
+    m_sound_touch.setSetting(SETTING_SEEKWINDOW_MS, 20);
+    m_sound_touch.setSetting(SETTING_OVERLAP_MS, 10);
+    m_sound_touch.setSetting(SETTING_USE_QUICKSEEK, 0);
+    m_sound_touch.setSetting(SETTING_USE_AA_FILTER, 0);
     m_sound_touch.setTempo(1.0f);
 }
 
