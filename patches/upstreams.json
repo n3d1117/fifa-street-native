@@ -4,7 +4,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-tests",
       "patch": "patches/ps2recomp-tests.patch",
-      "patch_sha256": "e8f2d2ae932db672b4f0cc1e8c48e7e46c99973861797c5ae41f0ebedbf5d302",
+      "patch_sha256": "1446504b068d633a575b78bce75c6ea63be91ce19c515d777e7cfcb832afed4c",
       "path": "source/PS2Recomp",
       "untracked": [
         {
@@ -12,6 +12,12 @@
           "path": "ps2xIOP/include/ps2x/iop/iop_host_spu2.h",
           "sha256": "1d7f94465f0bb031f06fdbb8ae857c118b5aa6297cff5729365fc22f28bdf1fd",
           "snapshot": "patches/upstreams/ps2recomp-tests/ps2xIOP/include/ps2x/iop/iop_host_spu2.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_display_timing.h",
+          "sha256": "545a194f2e4a8dfb05ad26f1edd9cc95311551e7c422d5da95c4c37b176df9ea",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/include/runtime/ps2_display_timing.h"
         },
         {
           "mode": "0644",
@@ -68,7 +74,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-metal",
       "patch": "patches/ps2recomp-metal.patch",
-      "patch_sha256": "004d3c61001a664ace31d3da5b11009a277f61460a2a20a8f5323bcc1d8556f9",
+      "patch_sha256": "41ff93b929570445df53459cfd5bdb1386e822a8dd234cccbeb67a6761a4a319",
       "path": "source/PS2Recomp-metal",
       "untracked": [
         {
@@ -76,6 +82,12 @@
           "path": "ps2xIOP/include/ps2x/iop/iop_host_spu2.h",
           "sha256": "1d7f94465f0bb031f06fdbb8ae857c118b5aa6297cff5729365fc22f28bdf1fd",
           "snapshot": "patches/upstreams/ps2recomp-metal/ps2xIOP/include/ps2x/iop/iop_host_spu2.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_display_timing.h",
+          "sha256": "545a194f2e4a8dfb05ad26f1edd9cc95311551e7c422d5da95c4c37b176df9ea",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/include/runtime/ps2_display_timing.h"
         },
         {
           "mode": "0644",
@@ -132,7 +144,7 @@
       "base_revision": "e8818121566cfaf3d361e38745860b0a9438e27b",
       "id": "fukami",
       "patch": "patches/fukami.patch",
-      "patch_sha256": "8834b0a050da31504b0d67026220549b5b9fb122b6a02e3a939e8bacbd1640be",
+      "patch_sha256": "cb8ee26a6d8997858d6255e02329138d0b9b042fe9a07f87c0b36cd655580d67",
       "path": "source/fukami",
       "untracked": [
         {
@@ -154,7 +166,7 @@
       "base_revision": "fd9d310ccbb6b8b62c976da8886a3c8fd3a10ff3",
       "id": "pcsx2-metal",
       "patch": "patches/pcsx2-metal.patch",
-      "patch_sha256": "8e80be1fbaa05564bfbc0bd9ce632c759fb66d4671035e91cd65aece6e63c40e",
+      "patch_sha256": "4c97ecb6dee0a4f71f6a88090c04973e20dcb86ea27598fbcdc32ecc9d4dda12",
       "path": "source/deps/pcsx2-2.8.2-bridge",
       "untracked": [],
       "url": "https://github.com/PCSX2/pcsx2.git"

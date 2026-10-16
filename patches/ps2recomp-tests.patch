@@ -2634,10 +2634,22 @@ index 67c8184fd92cdc459958fbcf5fd675052a1d692a..4f8f991a8db76ae784d26aee5684b36a
      void run(uint8_t *vuCode, uint32_t codeSize,
               uint8_t *vuData, uint32_t dataSize,
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd7d803921 100644
+index c5e31c48d887460d816564641f48e20e0af2f32d..822856d201fd210e77aeec5ec559b364927b742b 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-@@ -9,6 +9,8 @@
+@@ -1,14 +1,20 @@
+ #include "runtime/ee_scheduler.h"
++#include "runtime/ps2_display_timing.h"
+ 
+ #include "ps2_log.h"
+ #include "ps2_runtime_macros.h"
+ 
+ #include <algorithm>
++#include <atomic>
+ #include <cassert>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
  #include <limits>
  #include <stdexcept>
  
@@ -2646,7 +2658,7 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
  namespace
  {
      constexpr int KE_OK = 0;
-@@ -31,7 +33,6 @@ namespace
+@@ -31,7 +37,6 @@ namespace
      constexpr uint32_t WEF_OR = 0x01u;
      constexpr uint32_t WEF_CLEAR = 0x10u;
      constexpr uint32_t WEF_CLEAR_ALL = 0x20u;
@@ -2654,7 +2666,7 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
      constexpr auto kVBlankDuration = std::chrono::microseconds(500);
      constexpr uint64_t kAlarmTickMicroseconds = 64u;
      constexpr uint32_t kDebugPublishDispatchInterval = 4096u;
-@@ -50,10 +51,16 @@ namespace
+@@ -50,10 +55,42 @@ namespace
          return std::chrono::seconds(wholeSeconds) + std::chrono::nanoseconds(remainingNanoseconds);
      }
  
@@ -2664,15 +2676,53 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
  
 +    uint64_t vblankPeriodMicroseconds(uint64_t smode1)
 +    {
++        const uint64_t defaultPeriodUs = ((smode1 >> 13u) & 0x3u) == 0x3u ? 20000u : 16667u;
++        const char *requestedHz = std::getenv("PS2X_EXPERIMENT_VSYNC_HZ");
++        uint64_t periodUs = defaultPeriodUs;
++        bool overrideUsed = false;
++        if (requestedHz != nullptr && std::strcmp(requestedHz, "60") == 0)
++        {
++            periodUs = 16667u;
++            overrideUsed = true;
++        }
++        else if (requestedHz != nullptr && std::strcmp(requestedHz, "120") == 0)
++        {
++            // Integer microseconds approximate 120 Hz (8333.333 us) with ~40 ppm error.
++            periodUs = 8333u;
++            overrideUsed = true;
++        }
++
++        if (overrideUsed)
++        {
++            static std::atomic_flag logged = ATOMIC_FLAG_INIT;
++            if (!logged.test_and_set(std::memory_order_relaxed))
++            {
++                std::fprintf(stderr, "[ps2x-experiment] guest VBlank cadence=%s Hz period=%llu us; EE clock and guest timers unchanged\n",
++                             requestedHz, static_cast<unsigned long long>(periodUs));
++            }
++        }
++
 +        // PS2 PAL runs its EE VBlank timer at 50 Hz. Other modes retain
-+        // the existing approximate 60 Hz period pending separate validation.
-+        return ((smode1 >> 13u) & 0x3u) == 0x3u ? 20000u : 16667u;
++        // the existing approximate 60 Hz period unless an explicit experiment is enabled.
++        return periodUs;
 +    }
 +
      template <typename Map>
      int allocatePositiveId(int &nextId, const Map &objects)
      {
-@@ -112,6 +119,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+@@ -72,6 +109,11 @@ namespace
+     }
+ }
+ 
++uint64_t ps2VsyncPeriodMicroseconds(const PS2Memory &memory)
++{
++    return vblankPeriodMicroseconds(memory.gs().smode1);
++}
++
+ EeScheduler::EeScheduler(PS2Runtime &runtime)
+     : m_runtime(runtime)
+ {
+@@ -112,6 +154,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
      m_insideInterrupt = false;
      m_pendingEeTimerInterrupts = 0u;
      m_eeCycle = 0u;
@@ -2680,19 +2730,19 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
      m_sliceEndCycle = kDefaultTimeSliceCycles;
      m_stopRequested.store(false, std::memory_order_release);
      m_checkpointPending.store(false, std::memory_order_release);
-@@ -146,8 +154,9 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+@@ -146,8 +189,9 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
      main.status = EeThreadStatus::Ready;
      m_threads.emplace(main.id, std::move(main));
      m_readyQueues[0].push_back(kMainThreadId);
 -    scheduleEvent(m_eeCycle + kVBlankPeriodCycles,
 -                  std::chrono::steady_clock::now() + kVBlankPeriod,
-+    const uint64_t periodUs = vblankPeriodMicroseconds(m_runtime.memory().gs().smode1);
++    const uint64_t periodUs = ps2VsyncPeriodMicroseconds(m_runtime.memory());
 +    scheduleEvent(m_eeCycle + microsecondsToEeCycles(periodUs),
 +                  std::chrono::steady_clock::now() + std::chrono::microseconds(periodUs),
                    EeEvent{EeEventType::VBlankStart, 0, 0});
      publishSnapshot();
  }
-@@ -204,6 +213,7 @@ void EeScheduler::run()
+@@ -204,6 +248,7 @@ void EeScheduler::run()
              running->resumeCompletion = {};
              try
              {
@@ -2700,7 +2750,7 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
                  completion(running->activeContext());
              }
              catch (const EeDispatcherTransfer &)
-@@ -296,6 +306,7 @@ void EeScheduler::run()
+@@ -296,6 +341,7 @@ void EeScheduler::run()
          {
              m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
              m_guestExecuting.store(true, std::memory_order_release);
@@ -2708,7 +2758,7 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
              function(m_rdram, &context, &m_runtime);
              m_guestExecuting.store(false, std::memory_order_release);
              m_insideInterrupt = false;
-@@ -390,8 +401,47 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+@@ -390,8 +436,47 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
  
  void EeScheduler::accountCycles(uint32_t cycles) noexcept
  {
@@ -2758,7 +2808,7 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
      m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
      m_runtime.advanceIopEeCycles(elapsed);
      if (m_pendingEeTimerInterrupts != 0u)
-@@ -757,6 +807,10 @@ int EeScheduler::rotateReadyQueue(int priority, bool interruptSafe)
+@@ -757,6 +842,10 @@ int EeScheduler::rotateReadyQueue(int priority, bool interruptSafe)
      GuestThread *self = currentThread();
      if (self && self->currentPriority == priority)
      {
@@ -2769,11 +2819,11 @@ index c5e31c48d887460d816564641f48e20e0af2f32d..b30489c0623da002d317bce021a21bbd
          enqueueReady(*self);
          m_currentThreadId = 0;
          m_rescheduleRequested = true;
-@@ -1847,11 +1901,12 @@ void EeScheduler::processDueDeadlines()
+@@ -1847,11 +1936,12 @@ void EeScheduler::processDueDeadlines()
          {
              if (scheduled.event.type == EeEventType::VBlankStart)
              {
-+                const uint64_t periodUs = vblankPeriodMicroseconds(m_runtime.memory().gs().smode1);
++                const uint64_t periodUs = ps2VsyncPeriodMicroseconds(m_runtime.memory());
                  scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
                                scheduled.hostDeadline + kVBlankDuration,
                                EeEvent{EeEventType::VBlankEnd, 0, m_vsyncTick + 1u});
@@ -3245,10 +3295,18 @@ index 9c54919904e16bf2386ac857a26cd16e4e15112b..77e9ebe9339a99df253b294ac99b2070
  
      void Ps2SwapDBuff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
-index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d88ace7ff 100644
+index 44eaef4d9ccb39201587080b983be3fbb78992c0..273119f36e4494e9178dd4c2f30acf1b7d1c0464 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
-@@ -17,6 +17,7 @@ extern "C"
+@@ -1,6 +1,7 @@
+ #include "Common.h"
+ #include "MPEG.h"
+ #include "runtime/ee_scheduler.h"
++#include "runtime/ps2_display_timing.h"
+ 
+ #if !defined(PS2X_HAS_FFMPEG)
+ #define PS2X_HAS_FFMPEG 1
+@@ -17,6 +18,7 @@ extern "C"
  #endif
  
  #include <deque>
@@ -3256,7 +3314,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
  #include <memory>
  
  #include "Syscalls/Helpers/State.h"
-@@ -25,6 +26,16 @@ namespace ps2_stubs
+@@ -25,6 +27,16 @@ namespace ps2_stubs
  {
      namespace
      {
@@ -3273,7 +3331,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          struct MpegDecodedFrame
          {
              int width = 0;
-@@ -476,6 +487,8 @@ namespace ps2_stubs
+@@ -476,6 +488,8 @@ namespace ps2_stubs
              uint32_t data = 0u;
              uint32_t handle = 0u;
              bool stream = false;
@@ -3282,7 +3340,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          };
  
          constexpr uint64_t kPictureClockOne = 1ull << 32u;
-@@ -483,6 +496,14 @@ namespace ps2_stubs
+@@ -483,6 +497,14 @@ namespace ps2_stubs
          constexpr uint64_t kDefaultPictureIntervalQ32 = 2ull * kPictureClockOne;
          constexpr size_t kMpegTimingScanLimit = 4096u;
          constexpr size_t kMaxDecodedPicturesAhead = 8u;
@@ -3297,7 +3355,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
  
          struct MpegPlaybackState
          {
-@@ -495,12 +516,15 @@ namespace ps2_stubs
+@@ -495,12 +517,15 @@ namespace ps2_stubs
              bool sawSequenceEnd = false;
              bool streamEnded = false;
              bool decoderFailed = false;
@@ -3313,7 +3371,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              std::unique_ptr<MpegFfmpegDecoder> decoder;
              uint8_t frameRateCode = 0u;
              uint8_t frameRateExtensionN = 0u;
-@@ -518,11 +542,15 @@ namespace ps2_stubs
+@@ -518,11 +543,15 @@ namespace ps2_stubs
          {
              uint32_t mpegAddr = 0u;
              uint32_t streamType = 0u;
@@ -3329,7 +3387,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          };
  
          struct MpegStubState
-@@ -545,6 +573,7 @@ namespace ps2_stubs
+@@ -545,6 +574,7 @@ namespace ps2_stubs
          };
  
          std::mutex g_mpeg_stub_mutex;
@@ -3337,7 +3395,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          constexpr uint32_t kMpegPictureWaitType = 1u;
          MpegStubState g_mpeg_stub_state;
  
-@@ -552,8 +581,7 @@ namespace ps2_stubs
+@@ -552,8 +582,7 @@ namespace ps2_stubs
          constexpr uint32_t kStubMovieWidth = 320u;
          constexpr uint32_t kStubMovieHeight = 240u;
          constexpr uint32_t kMpegStrM2V = 0u;
@@ -3347,7 +3405,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          constexpr uint8_t kMpegPackHeader = 0xBAu;
          constexpr uint8_t kMpegSystemHeader = 0xBBu;
          constexpr uint8_t kMpegProgramEnd = 0xB9u;
-@@ -562,6 +590,55 @@ namespace ps2_stubs
+@@ -562,6 +591,55 @@ namespace ps2_stubs
          constexpr size_t kStartCodeNotFound = std::numeric_limits<size_t>::max();
          constexpr uint32_t kMpegCallbackDataSize = 0x20u;
  
@@ -3403,7 +3461,64 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          uint64_t mpegPictureIntervalQ32(uint8_t frameRateCode, uint8_t frameRateExtensionN = 0u, uint8_t frameRateExtensionD = 0u)
          {
              uint64_t frameRateNumerator = 0u;
-@@ -1006,7 +1083,7 @@ namespace ps2_stubs
+@@ -701,13 +779,15 @@ namespace ps2_stubs
+         }
+ 
+         uint64_t decodedFrameIntervalQ32(const MpegPlaybackState &playback,
+-                                         const MpegDecodedFrame &frame)
++                                         const MpegDecodedFrame &frame,
++                                         uint64_t periodUs)
+         {
+             const uint64_t base = playback.pictureIntervalQ32 != 0u
+                                       ? playback.pictureIntervalQ32
+                                       : kDefaultPictureIntervalQ32;
+             const uint64_t fields = static_cast<uint64_t>(2 + std::max(0, frame.repeatPict));
+-            return std::max(kPictureClockOne, (base * fields + 1u) / 2u);
++            const uint64_t canonicalInterval = std::max(kPictureClockOne, (base * fields + 1u) / 2u);
++            return ps2x::display_timing::canonicalMpegTicksToVsyncQ32(canonicalInterval, periodUs);
+         }
+ 
+         constexpr uint64_t kMpegPtsWrap = 1ull << 33u;
+@@ -730,19 +810,10 @@ namespace ps2_stubs
+             return static_cast<int64_t>(delta);
+         }
+ 
+-        uint64_t mpegPtsDeltaToVSyncQ32(uint64_t delta90k)
+-        {
+-            // 90 kHz MPEG clock -> NTSC field clock (60000/1001 Hz):
+-            // fields = pts * 60000 / (90000 * 1001) = pts * 2 / 3003.
+-            constexpr uint64_t kPtsDivisor = 3003u;
+-            const uint64_t whole = delta90k / kPtsDivisor;
+-            const uint64_t remainder = delta90k % kPtsDivisor;
+-            const uint64_t wholeQ32 = whole * 2u * kPictureClockOne;
+-            const uint64_t remainderQ32 = ((remainder * 2u * kPictureClockOne) + kPtsDivisor / 2u) / kPtsDivisor;
+-            return wholeQ32 + remainderQ32;
+-        }
+-
+-        uint64_t presentationTickForFrame(MpegPlaybackState &playback, const MpegDecodedFrame &frame, uint64_t currentTickQ32)
++        uint64_t presentationTickForFrame(MpegPlaybackState &playback,
++                                          const MpegDecodedFrame &frame,
++                                          uint64_t currentTickQ32,
++                                          uint64_t periodUs)
+         {
+             if (frame.pts90k < 0)
+             {
+@@ -763,10 +834,12 @@ namespace ps2_stubs
+             const int64_t delta = mpegPtsDelta90k(playback.firstPresentedPts90k, frame.pts90k);
+             if (delta >= 0)
+             {
+-                return playback.ptsPresentationBaseTickQ32 + mpegPtsDeltaToVSyncQ32(static_cast<uint64_t>(delta));
++                return playback.ptsPresentationBaseTickQ32 +
++                       ps2x::display_timing::mpegPtsDeltaToVsyncQ32(static_cast<uint64_t>(delta), periodUs);
+             }
+ 
+-            const uint64_t backwards = mpegPtsDeltaToVSyncQ32(static_cast<uint64_t>(-delta));
++            const uint64_t backwards =
++                ps2x::display_timing::mpegPtsDeltaToVsyncQ32(static_cast<uint64_t>(-delta), periodUs);
+             return playback.ptsPresentationBaseTickQ32 > backwards
+                        ? playback.ptsPresentationBaseTickQ32 - backwards
+                        : 0u;
+@@ -1006,7 +1079,7 @@ namespace ps2_stubs
  
          void flushDecoderIfEnded(MpegPlaybackState &playback)
          {
@@ -3412,7 +3527,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              {
                  playback.decoder->flush(playback.decodedFrames);
              }
-@@ -1019,6 +1096,11 @@ namespace ps2_stubs
+@@ -1019,6 +1092,11 @@ namespace ps2_stubs
                  return;
              }
  
@@ -3424,7 +3539,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              const uint32_t feedEsIdx = g_mpeg_stub_state.feedEsTraceCount++;
              if (feedEsIdx < 32u)
              {
-@@ -1060,6 +1142,12 @@ namespace ps2_stubs
+@@ -1060,6 +1138,12 @@ namespace ps2_stubs
                      playback.videoSequenceSyncBuffer.size());
                  if (sequenceHeader == kStartCodeNotFound)
                  {
@@ -3437,7 +3552,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                      return;
                  }
  
-@@ -1099,6 +1187,11 @@ namespace ps2_stubs
+@@ -1099,6 +1183,11 @@ namespace ps2_stubs
  
              if (!playback.decoder->feed(data, size, playback.decodedFrames, pts90k, dts90k))
              {
@@ -3449,7 +3564,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                  playback.decoder.reset();
                  playback.waitingForVideoSequenceHeader = true;
                  playback.videoSequenceSyncBuffer.clear();
-@@ -1108,6 +1201,54 @@ namespace ps2_stubs
+@@ -1108,6 +1197,54 @@ namespace ps2_stubs
  
              playback.videoSequenceSyncBuffer.clear();
              flushDecoderIfEnded(playback);
@@ -3504,7 +3619,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          }
  
          void erasePssPrefix(MpegPlaybackState &playback, size_t count)
-@@ -1131,7 +1272,9 @@ namespace ps2_stubs
+@@ -1131,7 +1268,9 @@ namespace ps2_stubs
              }
          }
  
@@ -3515,7 +3630,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          {
              std::vector<MpegRegisteredCallback> out;
              auto it = g_mpeg_stub_state.callbacksByMpeg.find(mpegAddr);
-@@ -1142,9 +1285,14 @@ namespace ps2_stubs
+@@ -1142,9 +1281,14 @@ namespace ps2_stubs
  
              for (const MpegRegisteredCallback &callback : it->second)
              {
@@ -3531,7 +3646,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                  }
              }
              return out;
-@@ -1152,6 +1300,7 @@ namespace ps2_stubs
+@@ -1152,6 +1296,7 @@ namespace ps2_stubs
  
          void queueStreamCallbackEvent(uint32_t mpegAddr,
                                        uint32_t streamType,
@@ -3539,7 +3654,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                                        uint32_t dataAddr,
                                        uint32_t len,
                                        std::vector<MpegStreamCallbackEvent> &callbackEvents,
-@@ -1161,11 +1310,33 @@ namespace ps2_stubs
+@@ -1161,11 +1306,33 @@ namespace ps2_stubs
              MpegStreamCallbackEvent event{};
              event.mpegAddr = mpegAddr;
              event.streamType = streamType;
@@ -3574,7 +3689,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              if (!event.callbacks.empty())
              {
                  callbackEvents.push_back(std::move(event));
-@@ -1325,13 +1496,14 @@ namespace ps2_stubs
+@@ -1325,13 +1492,14 @@ namespace ps2_stubs
                              queueStreamCallbackEvent(
                                  mpegAddr,
                                  kMpegStrM2V,
@@ -3590,7 +3705,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                              playback,
                              buffer.data() + payloadStart,
                              packetEnd - payloadStart,
-@@ -1343,24 +1515,44 @@ namespace ps2_stubs
+@@ -1343,24 +1511,44 @@ namespace ps2_stubs
                  {
                      const MpegPesHeader pes = parsePesHeader(buffer.data(), packetEnd);
                      const size_t payloadStart = pes.payloadOffset;
@@ -3644,7 +3759,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                      }
                  }
  
-@@ -1396,21 +1588,11 @@ namespace ps2_stubs
+@@ -1396,21 +1584,11 @@ namespace ps2_stubs
  
          bool mpegDemuxBackpressured(const MpegPlaybackState &playback)
          {
@@ -3670,7 +3785,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          }
  
          void recordCdStreamBytesDemuxedUnlocked(
-@@ -1466,7 +1648,19 @@ namespace ps2_stubs
+@@ -1466,7 +1644,19 @@ namespace ps2_stubs
              {
                  playback.pssGuestAddrs.push_back(guestAddr + static_cast<uint32_t>(i));
              }
@@ -3691,7 +3806,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          }
  
          size_t appendGuestBytes(uint32_t mpegAddr,
-@@ -1583,7 +1777,8 @@ namespace ps2_stubs
+@@ -1583,7 +1773,8 @@ namespace ps2_stubs
                                           R5900Context *callerCtx,
                                           PS2Runtime *runtime,
                                           const MpegStreamCallbackEvent &event,
@@ -3701,7 +3816,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          {
              if (!rdram || !callerCtx || !runtime || callback.func == 0u || !runtime->hasFunction(callback.func))
              {
-@@ -1606,24 +1801,52 @@ namespace ps2_stubs
+@@ -1606,24 +1797,52 @@ namespace ps2_stubs
              SET_GPR_U32(&callbackCtx, 5, cbDataAddr);
              SET_GPR_U32(&callbackCtx, 6, callback.data);
              SET_GPR_U32(&callbackCtx, 7, 0u);
@@ -3760,7 +3875,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          {
              if (events.empty())
              {
-@@ -1634,7 +1857,7 @@ namespace ps2_stubs
+@@ -1634,7 +1853,7 @@ namespace ps2_stubs
              {
                  for (const MpegRegisteredCallback &callback : event.callbacks)
                  {
@@ -3769,7 +3884,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                  }
              }
          }
-@@ -1649,7 +1872,13 @@ namespace ps2_stubs
+@@ -1649,7 +1868,13 @@ namespace ps2_stubs
                  return;
              }
  
@@ -3784,7 +3899,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          }
  
          void writeBlankMpegFrame(uint8_t *rdram, uint32_t destAddr, uint32_t width, uint32_t height)
-@@ -1938,13 +2167,49 @@ namespace ps2_stubs
+@@ -1938,13 +2163,49 @@ namespace ps2_stubs
          const uint32_t callbackFunc = getRegU32(ctx, 7);
          const uint32_t callbackData = readAbiArg4(rdram, ctx);
  
@@ -3837,7 +3952,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
      }
  
      void sceMpegClearRefBuff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-@@ -2098,7 +2363,9 @@ namespace ps2_stubs
+@@ -2098,7 +2359,9 @@ namespace ps2_stubs
              if (!backpressured)
              {
                  consumed = appendGuestBytes(mpegAddr, playback, rdram, dataAddr, byteCount, callbackEvents);
@@ -3848,7 +3963,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              }
              decodedCount = playback.decodedFrames.size();
              traceIdx = g_mpeg_stub_state.demuxPssTraceCount++;
-@@ -2141,12 +2408,16 @@ namespace ps2_stubs
+@@ -2141,12 +2404,16 @@ namespace ps2_stubs
              });
          }
  
@@ -3866,7 +3981,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          static std::atomic<uint32_t> s_demuxRingEntryCount{0u};
          const uint32_t entryIdx = s_demuxRingEntryCount.fetch_add(1u, std::memory_order_relaxed);
          if (entryIdx < 4u)
-@@ -2189,7 +2460,9 @@ namespace ps2_stubs
+@@ -2189,7 +2456,9 @@ namespace ps2_stubs
                      ringBaseAddr,
                      ringSize,
                      callbackEvents);
@@ -3877,7 +3992,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              }
              decodedCount = playback.decodedFrames.size();
              traceIdx = g_mpeg_stub_state.demuxRingTraceCount++;
-@@ -2235,8 +2508,18 @@ namespace ps2_stubs
+@@ -2235,8 +2504,18 @@ namespace ps2_stubs
              });
          }
  
@@ -3897,7 +4012,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
      }
  
      void sceMpegDispCenterOffX(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-@@ -2280,8 +2563,52 @@ namespace ps2_stubs
+@@ -2280,8 +2559,52 @@ namespace ps2_stubs
          setReturnU32(ctx, getPlaybackState(mpegAddr).decodeMode);
      }
  
@@ -3950,7 +4065,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
          const uint32_t mpegAddr = getRegU32(ctx, 4);
          const uint32_t imageAddr = getRegU32(ctx, 5);
          uint32_t width = kStubMovieWidth;
-@@ -2292,6 +2619,57 @@ namespace ps2_stubs
+@@ -2292,6 +2615,57 @@ namespace ps2_stubs
          {
              std::unique_lock<std::mutex> lock(g_mpeg_stub_mutex);
              MpegPlaybackState &playback = getPlaybackState(mpegAddr);
@@ -4008,10 +4123,17 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
              if (playback.decodedFrames.empty() &&
                  !g_mpeg_stub_state.currentCdStreamEofSeen &&
                  !playback.streamEnded &&
-@@ -2329,6 +2707,15 @@ namespace ps2_stubs
+@@ -2326,9 +2700,20 @@ namespace ps2_stubs
+             {
+                 const uint64_t currentTick = runtime->eeScheduler().currentVSyncTick();
+                 const uint64_t currentTickQ32 = currentTick << 32u;
++                const uint64_t periodUs = ps2VsyncPeriodMicroseconds(runtime->memory());
                  const MpegDecodedFrame &nextFrame = playback.decodedFrames.front();
-                 const uint64_t frameIntervalQ32 = decodedFrameIntervalQ32(playback, nextFrame);
-                 uint64_t presentationTargetQ32 = presentationTickForFrame(playback, nextFrame, currentTickQ32);
+-                const uint64_t frameIntervalQ32 = decodedFrameIntervalQ32(playback, nextFrame);
+-                uint64_t presentationTargetQ32 = presentationTickForFrame(playback, nextFrame, currentTickQ32);
++                const uint64_t frameIntervalQ32 = decodedFrameIntervalQ32(playback, nextFrame, periodUs);
++                uint64_t presentationTargetQ32 =
++                    presentationTickForFrame(playback, nextFrame, currentTickQ32, periodUs);
 +                if (envTraceIdx < 32u || (envTraceIdx != UINT32_MAX && envTraceIdx % 120u == 0u))
 +                {
 +                    std::cerr << "[tarzan-mpeg] frame-schedule call=" << envTraceIdx
@@ -4024,7 +4146,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
  
                  if (currentTickQ32 > presentationTargetQ32 && currentTickQ32 - presentationTargetQ32 >= frameIntervalQ32)
                  {
-@@ -2344,6 +2731,11 @@ namespace ps2_stubs
+@@ -2344,6 +2729,11 @@ namespace ps2_stubs
                  if (currentTickQ32 < presentationTargetQ32)
                  {
                      const uint64_t eligibleTick = (presentationTargetQ32 + kPictureClockOne - 1u) >> 32u;
@@ -4036,7 +4158,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                      lock.unlock();
                      runtime->eeScheduler().waitVSync(
                          eligibleTick - 1u,
-@@ -2360,6 +2752,7 @@ namespace ps2_stubs
+@@ -2360,6 +2750,7 @@ namespace ps2_stubs
  
                  frame = std::move(playback.decodedFrames.front());
                  playback.decodedFrames.pop_front();
@@ -4044,7 +4166,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d
                  playback.width = static_cast<uint32_t>(frame.width);
                  playback.height = static_cast<uint32_t>(frame.height);
                  width = playback.width;
-@@ -2471,6 +2864,26 @@ namespace ps2_stubs
+@@ -2471,6 +2862,26 @@ namespace ps2_stubs
              presentationEnd == std::numeric_limits<uint64_t>::max() ||
              currentTickQ32 >= presentationEnd;
  
@@ -7869,10 +7991,16 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
              appendU64(packet, 0x0Eull);
              appendU64(packet, 0x8000008000ull); // TEXA, harmless setup preceding the IMAGE tag.
 diff --git a/ps2xTest/src/ps2_runtime_expansion_tests.cpp b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
-index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a977c2de915 100644
+index 4772f3fb772deec963ded9e93fc82d116f1ed441..00535ef93cc36e82bdd981513bb20b4f6781f498 100644
 --- a/ps2xTest/src/ps2_runtime_expansion_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
-@@ -10,6 +10,7 @@
+@@ -5,11 +5,13 @@
+ #include "ps2recomp/types.h"
+ #include "ps2_runtime.h"
+ #include "runtime/ps2_memory.h"
++#include "runtime/ps2_display_timing.h"
+ #include "ps2_syscalls.h"
+ #include "ps2_stubs.h"
  #include "runtime/gs/gs_frontend.h"
  #include "runtime/ee_scheduler.h"
  #include "runtime/gs/ps2_gs_psmct32.h"
@@ -7880,7 +8008,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
  #include "ps2_runtime_macros.h"
  #include "Stubs/MPEG.h"
  #include "Stubs/CD.h"
-@@ -18,6 +19,10 @@
+@@ -18,6 +20,10 @@
  #include "Stubs/VU.h"
  
  #include <atomic>
@@ -7891,7 +8019,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
  #include <cstdint>
  #include <cstring>
  #include <exception>
-@@ -113,6 +118,82 @@ namespace
+@@ -113,6 +119,82 @@ namespace
                 (static_cast<uint64_t>(upper) << 32);
      }
  
@@ -7974,7 +8102,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
      bool hasSignedRdWrite(const std::string &generated, uint8_t rd)
      {
          if (rd == 0u)
-@@ -180,6 +261,58 @@ namespace
+@@ -180,6 +262,58 @@ namespace
      std::atomic<uint32_t> gMpegStreamCallbackLen{0u};
      std::atomic<uint32_t> gMpegStreamCallbackUserData{0u};
      constexpr uint32_t kMpegCallbackStopPc = 0x00124FF0u;
@@ -8033,7 +8161,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
      std::atomic<int32_t> gMpegWaitResult{-999};
      std::atomic<uint32_t> gMpegWaitStage{0u};
      std::atomic<uint32_t> gMpegNoDuplicateStage{0u};
-@@ -245,6 +378,50 @@ namespace
+@@ -245,6 +379,50 @@ namespace
          runtime->requestStop();
      }
  
@@ -8084,7 +8212,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
      void testMpegWaitProducer(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
      {
          gMpegWaitStage.store(2u, std::memory_order_release);
-@@ -305,6 +482,8 @@ namespace
+@@ -305,6 +483,8 @@ namespace
          gMpegStreamCallbackLen.store(len, std::memory_order_release);
          gMpegStreamCallbackUserData.store(::getRegU32(ctx, 6), std::memory_order_release);
          gMpegStreamCallbackCount.fetch_add(1u, std::memory_order_acq_rel);
@@ -8093,10 +8221,51 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
          ctx->pc = 0u;
          runtime->requestStop();
      }
-@@ -507,6 +686,48 @@ void register_ps2_runtime_expansion_tests()
+@@ -507,6 +687,89 @@ void register_ps2_runtime_expansion_tests()
                        "ContinueToTarget should remain a non-stopping debug policy");
          });
  
++        tc.Run("MPEG presentation timing keeps PTS and frame-rate intervals in host time", [](TestCase &t)
++        {
++            constexpr uint64_t kQ32 = ps2x::display_timing::kQ32One;
++            constexpr uint64_t kPtsForOneSecond = 90000u;
++            constexpr uint64_t kPtsForThirtyFrames = 3003u * 30u;
++            constexpr uint64_t kCanonicalThirtyFpsInterval = 2u * kQ32;
++            constexpr uint64_t kCanonicalTwentyFiveFpsInterval =
++                (60000ull * kQ32 + (1001u * 25u) / 2u) / (1001u * 25u);
++            constexpr uint64_t kExpectedOneSecondQ32 = 1000000u * kQ32;
++            constexpr uint64_t kExpectedThirtyFrameDurationQ32 = 1001000u * kQ32;
++            constexpr uint64_t kExpectedThirtyFpsIntervalQ32 = 1001000000ull * kQ32 / 30000u;
++            constexpr uint64_t kExpectedTwentyFiveFpsIntervalQ32 = 40000ull * kQ32;
++            const std::array<uint64_t, 3> periodsUs = {20000u, 16667u, 8333u};
++
++            const auto absDiff = [](uint64_t left, uint64_t right)
++            { return left > right ? left - right : right - left; };
++            const auto durationQ32 = [](uint64_t ticksQ32, uint64_t periodUs)
++            { return ticksQ32 * periodUs; };
++
++            for (const uint64_t periodUs : periodsUs)
++            {
++                const uint64_t oneSecondTicks =
++                    ps2x::display_timing::mpegPtsDeltaToVsyncQ32(kPtsForOneSecond, periodUs);
++                const uint64_t thirtyFramePtsTicks =
++                    ps2x::display_timing::mpegPtsDeltaToVsyncQ32(kPtsForThirtyFrames, periodUs);
++                const uint64_t ptslessFrameTicks =
++                    ps2x::display_timing::canonicalMpegTicksToVsyncQ32(kCanonicalThirtyFpsInterval, periodUs);
++                const uint64_t ptslessPalFrameTicks =
++                    ps2x::display_timing::canonicalMpegTicksToVsyncQ32(kCanonicalTwentyFiveFpsInterval, periodUs);
++
++                t.IsTrue(absDiff(durationQ32(oneSecondTicks, periodUs), kExpectedOneSecondQ32) <= 2u * kQ32,
++                         "one second of 90-kHz PTS must remain one second at each guest VBlank cadence");
++                t.IsTrue(absDiff(durationQ32(thirtyFramePtsTicks, periodUs), kExpectedThirtyFrameDurationQ32) <= 2u * kQ32,
++                         "fractional 29.97-fps PTS spacing must retain its authored elapsed time");
++                t.IsTrue(absDiff(durationQ32(ptslessFrameTicks, periodUs), kExpectedThirtyFpsIntervalQ32) <= 2u * kQ32,
++                         "PTS-less MPEG frame-rate intervals must be rescaled to the same elapsed time");
++                t.IsTrue(absDiff(durationQ32(ptslessPalFrameTicks, periodUs), kExpectedTwentyFiveFpsIntervalQ32) <= 2u * kQ32,
++                         "PTS-less 25-fps PAL frame intervals must keep their authored 40-ms spacing");
++            }
++        });
++
 +        tc.Run("MPEG CD stream EOF ignores final sector padding beyond logical file size", [](TestCase &t)
 +        {
 +            const auto directory = std::filesystem::temp_directory_path() /
@@ -8142,7 +8311,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
          tc.Run("MPEG init and callback stubs return success instead of TODO errors", [](TestCase &t)
          {
              std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
-@@ -558,6 +779,7 @@ void register_ps2_runtime_expansion_tests()
+@@ -558,6 +821,7 @@ void register_ps2_runtime_expansion_tests()
              constexpr uint32_t kCallbackEntry = 0x00124000u;
              constexpr uint32_t kVideoUserData = 0x11223344u;
              constexpr uint32_t kAudioUserData = 0x55667788u;
@@ -8150,7 +8319,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
              constexpr uint32_t kVideoPacketAddr = 0x00128000u;
              constexpr uint32_t kAudioPacketAddr = 0x00129000u;
  
-@@ -580,12 +802,12 @@ void register_ps2_runtime_expansion_tests()
+@@ -580,12 +844,12 @@ void register_ps2_runtime_expansion_tests()
                  ps2_stubs::sceMpegAddCallback(rdram.data(), &addCtx, &runtime);
              };
  
@@ -8165,7 +8334,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
                  setRegU32(addCtx, 7, kCallbackEntry);
                  setRegU32(addCtx, 8, userData);
                  ps2_stubs::sceMpegAddStrCallback(rdram.data(), &addCtx, &runtime);
-@@ -606,8 +828,10 @@ void register_ps2_runtime_expansion_tests()
+@@ -606,8 +870,10 @@ void register_ps2_runtime_expansion_tests()
  
              registerGenericCallback(0u, 0xDEAD0000u);
              registerGenericCallback(2u, 0xDEAD0002u);
@@ -8178,7 +8347,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
  
              const std::vector<uint8_t> videoPayload = {
                  0x00u, 0x00u, 0x01u, 0xB3u, 0x14u, 0x00u, 0xF0u, 0x13u};
-@@ -640,7 +864,38 @@ void register_ps2_runtime_expansion_tests()
+@@ -640,7 +906,38 @@ void register_ps2_runtime_expansion_tests()
              t.Equals(gMpegStreamCallbackUserData.load(std::memory_order_acquire), kVideoUserData,
                       "video callback should receive registered user data");
  
@@ -8218,7 +8387,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
              const uint32_t audioPacketSize = writePesPacket(kAudioPacketAddr, 0xBDu, audioPayload);
  
              gMpegStreamCallbackCount.store(0u, std::memory_order_release);
-@@ -666,7 +921,24 @@ void register_ps2_runtime_expansion_tests()
+@@ -666,7 +963,24 @@ void register_ps2_runtime_expansion_tests()
                       static_cast<uint32_t>(audioPayload.size()),
                       "audio callback data should report PES payload length");
              t.Equals(gMpegStreamCallbackUserData.load(std::memory_order_acquire), kAudioUserData,
@@ -8244,7 +8413,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
  
              ps2_stubs::notifyMpegCdStreamEof();
  
-@@ -746,6 +1018,294 @@ void register_ps2_runtime_expansion_tests()
+@@ -746,6 +1060,294 @@ void register_ps2_runtime_expansion_tests()
              runtime.requestStop();
          });
  
@@ -8539,7 +8708,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a97
          tc.Run("sceMpegGetPicture blocks as a typed scheduler wait and resumes on EOF", [](TestCase &t)
          {
              PS2Runtime runtime;
-@@ -1233,6 +1793,65 @@ void register_ps2_runtime_expansion_tests()
+@@ -1233,6 +1835,65 @@ void register_ps2_runtime_expansion_tests()
                       "VU0 cache should rebuild after a direct MicroMem write");
          });
  

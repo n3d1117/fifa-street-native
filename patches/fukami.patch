@@ -1,3 +1,106 @@
+diff --git a/tools/pcsx2-gs-bridge/bridge.cpp b/tools/pcsx2-gs-bridge/bridge.cpp
+index e2ced31d2c7750dac9509596dbe3013631e57238..e784dee86a6840e0480ce9282fa4245bafc96d0a 100644
+--- a/tools/pcsx2-gs-bridge/bridge.cpp
++++ b/tools/pcsx2-gs-bridge/bridge.cpp
+@@ -755,6 +755,7 @@ struct RrvPcsx2GsBridge {
+     bool capture_in_progress = false;
+     bool fp_isolated = false;
+     bool full_frame = false;
++    bool present_throttle = false;
+     bool fpcr_path_logged[4]{};
+     bool open = false;
+ #if defined(RRV_PCSX2_GS_CANONICAL_RECEIPTS)
+@@ -1178,6 +1179,25 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+         GSRrvSetRoundSpriteUOnly(false);
+         GSRrvSetDropLargeSTTriangles(false);
+     }
++    // Generic render scale applies in field and full-frame modes. The legacy
++    // FULL_SCALE option is full-frame-only; this validated override is the
++    // product path for field-mode 2x rendering as well.
++    const char* upscale_override = std::getenv("RRV_PCSX2_GS_UPSCALE");
++    if (upscale_override && upscale_override[0] != '\0')
++    {
++        char* end = nullptr;
++        const long parsed = std::strtol(upscale_override, &end, 10);
++        if (end == upscale_override || *end != '\0' || parsed < 1 || parsed > 8)
++        {
++            SetError(error, error_capacity,
++                     "invalid RRV_PCSX2_GS_UPSCALE=%s (expected integer 1..8)", upscale_override);
++            return nullptr;
++        }
++        options.UpscaleMultiplier = static_cast<float>(parsed);
++    }
++    std::fprintf(stderr, "[pcsx2-gs-bridge] render mode=%s: actual UpscaleMultiplier=%g%s\n",
++                 full_frame ? "full" : "field", static_cast<double>(options.UpscaleMultiplier),
++                 upscale_override && upscale_override[0] != '\0' ? " [RRV_PCSX2_GS_UPSCALE]" : "");
+     // RRV_PCSX2_GS_INTERLACE=<n> selects Pcsx2Config::GSOptions::InterlaceMode
+     // (0=Automatic .. 9=AdaptiveBFF, see PCSX2 Config.h GSInterlaceMode).
+     // Default is unchanged (PCSX2's own Automatic) so this is observation-only
+@@ -1321,6 +1341,14 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+     // present-at-time, so on Linux RRV_PCSX2_GS_PRESENT_* are ignored and
+     // FIFO alone paces presentation.
+     const bool vsync = direct_requested && EnvFlag("RRV_PCSX2_GS_VSYNC", false);
++    // PCSX2's GSDevice present throttle avoids blocking Metal drawable
++    // acquisition when the guest produces frames faster than the display.
++    // Keep it opt-in and scoped to direct presentation; guest GSvsync/state
++    // processing remains unchanged.
++    const bool present_throttle = direct_requested && EnvFlag("RRV_PCSX2_GS_PRESENT_THROTTLE", false);
++    bridge->present_throttle = present_throttle;
++    if (present_throttle)
++        std::fprintf(stderr, "[pcsx2-gs-bridge] upstream present throttle=enabled\n");
+     // RRV_GATE3_FAST_FORWARD=N (replay debugging): the runtime runs the first N
+     // starts unpaced, so vsync would throttle them to the display rate; present
+     // without it and switch to FIFO at field N.
+@@ -1458,7 +1486,8 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+                      static_cast<double>(custom_aspect), options.IntegerScaling ? 1u : 0u);
+     const ScopedBridgeGsFpcr fpcr_guard(bridge->fp_isolated);
+     if (!GSopen(options, renderer, bridge->pcsx2_regs.data(),
+-                options.VsyncEnable ? GSVSyncMode::FIFO : GSVSyncMode::Disabled, false))
++                options.VsyncEnable ? GSVSyncMode::FIFO : GSVSyncMode::Disabled,
++                bridge->present_throttle))
+     {
+         if (direct_requested)
+             rrv_pcsx2_gs_bridge_clear_native_surface();
+@@ -2788,7 +2817,7 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
+     }
+     if (bridge->vsync_from_field && field_index >= bridge->vsync_from_field)
+     {
+-        GSSetVSyncMode(GSVSyncMode::FIFO, false);
++        GSSetVSyncMode(GSVSyncMode::FIFO, bridge->present_throttle);
+         std::fprintf(stderr, "[pcsx2-gs-bridge] fast-forward done at field %llu: presentation vsync=FIFO\n",
+                      static_cast<unsigned long long>(field_index));
+         bridge->vsync_from_field = 0;
+diff --git a/tools/pcsx2-gs-bridge/gsrunner_host.cpp b/tools/pcsx2-gs-bridge/gsrunner_host.cpp
+index a48658d96c381fc29220b437ef796fd33f24add9..9803ed8c9efedaedacef22b4f806dc8cd90e8d91 100644
+--- a/tools/pcsx2-gs-bridge/gsrunner_host.cpp
++++ b/tools/pcsx2-gs-bridge/gsrunner_host.cpp
+@@ -5,6 +5,8 @@
+ // and avoids exporting an accidental process `main` from the dylib.
+ #include <mutex>
+ #include <optional>
++#include <cstdlib>
++#include <cstring>
+ 
+ #include "rrv_pcsx2_gs_bridge.h"
+ 
+@@ -70,6 +72,17 @@ extern "C" int rrv_pcsx2_gs_bridge_configure_native_surface(
+     info.type = WindowInfo::Type::MacOS;
+     info.window_handle = native_view;
+     info.surface_handle = native_layer;
++    if (const char* refresh = std::getenv("RRV_PCSX2_GS_DISPLAY_HZ"); refresh && refresh[0] != '\0')
++    {
++        if (std::strcmp(refresh, "60") != 0 && std::strcmp(refresh, "120") != 0)
++        {
++            if (error && error_capacity)
++                std::snprintf(error, error_capacity,
++                              "invalid RRV_PCSX2_GS_DISPLAY_HZ=%s (expected 60 or 120)", refresh);
++            return 0;
++        }
++        info.surface_refresh_rate = std::strcmp(refresh, "120") == 0 ? 120.0f : 60.0f;
++    }
+ #else
+     // Linux (Gate 5): SDL's X11 (Display*, Window XID) or Wayland
+     // (wl_display*, wl_surface*) handles, in the shape PCSX2's own Qt host
 diff --git a/tools/pcsx2-spu2/CMakeLists.txt b/tools/pcsx2-spu2/CMakeLists.txt
 index e1b4b69e2ab74b852a60ef6829b4dadbf59e4738..690b367f85eae44c772fb8f56b054e8d0f225573 100644
 --- a/tools/pcsx2-spu2/CMakeLists.txt

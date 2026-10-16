@@ -1135,7 +1135,7 @@ index 605fe1d5c7c157563e0a571c372bcfd62e47969e..485b1daaae3351233274d9b6d7069238
  	// TODO: virtual void Write(Source* s, const GSVector4i& r) = 0;
  	// TODO: virtual void Write(Target* t, const GSVector4i& r) = 0;
 diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
-index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe0aec8f0a 100644
+index 6bf6af8ebfc570742018bfa989cd52bea64f4450..55b4aac51abd7fedefba72d7de951cd72fae478f 100644
 --- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
 +++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
 @@ -5,6 +5,7 @@
@@ -1160,7 +1160,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  #ifdef __APPLE__
  #include "GSMTLSharedHeader.h"
  
-@@ -23,6 +31,268 @@
+@@ -23,6 +31,273 @@
  	return simd::make_float2(vec.x, vec.y);
  }
  
@@ -1188,7 +1188,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
 +	static constexpr double kPeriod = 1001.0 / 60000.0;
 +	static constexpr size_t kTraceRows = 1u << 20;
 +	bool configured = false, pace = true, have = false;
-+	double margin = 0.002, creep = 2e-6, target = 0.0;
++	double margin = 0.002, creep = 2e-6, target = 0.0, period = kPeriod;
 +	u64 presents = 0, late = 0, reanchors = 0;
 +	std::string trace_path;
 +	std::unique_ptr<double[]> submit, planned;
@@ -1198,6 +1198,11 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
 +		if (configured)
 +			return;
 +		configured = true;
++        // Match the opt-in guest cadence; the original pacer stays unchanged.
++        if (const char* hz = std::getenv("RRV_PCSX2_GS_PRESENT_HZ"); hz &&
++            (std::strcmp(hz, "60") == 0 || std::strcmp(hz, "120") == 0))
++            period = 1.0 / std::strtod(hz, nullptr);
++
 +		if (const char* v = std::getenv("RRV_PCSX2_GS_PRESENT_PACING"); v && v[0] == '0')
 +			pace = false;
 +		if (const char* v = std::getenv("RRV_PCSX2_GS_PRESENT_MARGIN_US"); v && v[0])
@@ -1231,8 +1236,8 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
 +			target = earliest;
 +			return target;
 +		}
-+		const double next = target + kPeriod;
-+		if (earliest > next + 2.0 * kPeriod || next > earliest + 2.0 * kPeriod)
++		const double next = target + period;
++		if (earliest > next + 2.0 * period || next > earliest + 2.0 * period)
 +		{
 +			++reanchors;
 +			target = earliest;
@@ -1429,7 +1434,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  GSDevice* MakeGSDeviceMTL()
  {
  	return new GSDeviceMTL();
-@@ -195,6 +465,7 @@
+@@ -195,6 +470,7 @@
  	if (!m_texture_upload_cmdbuf)
  	{
  		m_texture_upload_cmdbuf = MRCRetain([m_queue commandBuffer]);
@@ -1437,7 +1442,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		m_texture_upload_encoder = MRCRetain([m_texture_upload_cmdbuf blitCommandEncoder]);
  		pxAssertRel(m_texture_upload_encoder, "Failed to create texture upload encoder!");
  		[m_texture_upload_cmdbuf setLabel:@"Texture Upload"];
-@@ -221,6 +492,7 @@
+@@ -221,6 +497,7 @@
  	if (!m_vertex_upload_cmdbuf)
  	{
  		m_vertex_upload_cmdbuf = MRCRetain([m_queue commandBuffer]);
@@ -1445,7 +1450,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		m_vertex_upload_encoder = MRCRetain([m_vertex_upload_cmdbuf blitCommandEncoder]);
  		pxAssertRel(m_vertex_upload_encoder, "Failed to create vertex upload encoder!");
  		[m_vertex_upload_cmdbuf setLabel:@"Vertex Upload"];
-@@ -235,6 +507,7 @@
+@@ -235,6 +512,7 @@
  	{
  		m_encoders_in_current_cmdbuf = 0;
  		m_current_render_cmdbuf = MRCRetain([m_queue commandBuffer]);
@@ -1453,7 +1458,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		pxAssertRel(m_current_render_cmdbuf, "Failed to create draw command buffer!");
  		[m_current_render_cmdbuf setLabel:@"Draw"];
  	}
-@@ -282,6 +555,7 @@
+@@ -282,6 +560,7 @@
  	else if (m_vertex_upload_cmdbuf)
  	{
  		[m_vertex_upload_encoder endEncoding];
@@ -1461,7 +1466,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		[m_vertex_upload_cmdbuf commit];
  		m_vertex_upload_encoder = nil;
  		m_vertex_upload_cmdbuf = nil;
-@@ -289,6 +563,7 @@
+@@ -289,6 +568,7 @@
  	if (m_texture_upload_cmdbuf)
  	{
  		[m_texture_upload_encoder endEncoding];
@@ -1469,7 +1474,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		[m_texture_upload_cmdbuf commit];
  		m_texture_upload_encoder = nil;
  		m_texture_upload_cmdbuf = nil;
-@@ -344,12 +619,14 @@
+@@ -344,12 +624,14 @@
  				dev->DrawCommandBufferFinished(draw, buf);
  		}];
  	}
@@ -1484,7 +1489,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		[spinCmdBuf setLabel:@"Spin"];
  		id<MTLComputeCommandEncoder> spinCmdEncoder = [spinCmdBuf computeCommandEncoder];
  		[spinCmdEncoder setLabel:@"Spin"];
-@@ -359,8 +636,15 @@
+@@ -359,8 +641,15 @@
  		[spinCmdEncoder setBuffer:m_spin_buffer offset:0 atIndex:1];
  		[spinCmdEncoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
  		[spinCmdEncoder endEncoding];
@@ -1501,7 +1506,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  #pragma clang diagnostic push
  #pragma clang diagnostic ignored "-Wunguarded-availability"
  			u64 begin = [buf GPUStartTime] * s_to_ns;
-@@ -370,6 +654,7 @@
+@@ -370,6 +659,7 @@
  			if (GSDeviceMTL* dev = backref->second)
  				dev->m_spin_manager.SpinCompleted(spin_cycles, static_cast<u32>(begin), static_cast<u32>(end));
  		}];
@@ -1509,7 +1514,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		[spinCmdBuf commit];
  	}
  }
-@@ -725,10 +1010,21 @@ static constexpr MTLPixelFormat ConvertPixelFormat(GSTexture::Format format)
+@@ -725,10 +1015,21 @@ static constexpr MTLPixelFormat ConvertPixelFormat(GSTexture::Format format)
  void GSDeviceMTL::DoInterlace(GSTexture* sTex, const GSVector4& sRect, GSTexture* dTex, const GSVector4& dRect, ShaderInterlace shader, Filter filter, const InterlaceConstantBuffer& cb)
  { @autoreleasepool {
  	id<MTLCommandBuffer> cmdbuf = GetRenderCmdBuf();
@@ -1532,7 +1537,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  		!can_discard ? LoadAction::DontCareIfFull : LoadAction::Load, &cb, sizeof(cb));
  }}
  
-@@ -863,19 +1159,32 @@ static void OnMainThread(Fn&& fn)
+@@ -863,19 +1164,32 @@ static void OnMainThread(Fn&& fn)
  void GSDeviceMTL::AttachSurfaceOnMainThread()
  {
  	pxAssert([NSThread isMainThread]);
@@ -1568,7 +1573,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	m_view = nullptr;
  	m_layer = nullptr;
  }
-@@ -982,6 +1291,8 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -982,6 +1296,8 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  
  bool GSDeviceMTL::Create(GSVSyncMode vsync_mode, bool allow_present_throttle)
  { @autoreleasepool {
@@ -1577,7 +1582,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	if (!GSDevice::Create(vsync_mode, allow_present_throttle))
  		return false;
  
-@@ -1000,11 +1311,16 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1000,11 +1316,16 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  			Console.Warning("Metal: Couldn't find adapter %s, using default", GSConfig.Adapter.c_str());
  		m_dev = GSMTLDevice(MRCTransfer(MTLCreateSystemDefaultDevice()));
  		if (!m_dev.dev)
@@ -1594,7 +1599,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  
  	m_pass_desc = MRCTransfer([MTLRenderPassDescriptor new]);
  	[m_pass_desc colorAttachments][0].loadAction = MTLLoadActionClear;
-@@ -1086,6 +1402,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1086,6 +1407,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  	m_spin_buffer = MRCTransfer([m_dev.dev newBufferWithLength:4 options:spin_opts]);
  	[m_spin_buffer setLabel:@"Spin Buffer"];
  	id<MTLCommandBuffer> initCommands = [m_queue commandBuffer];
@@ -1602,7 +1607,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	id<MTLBlitCommandEncoder> clearSpinBuffer = [initCommands blitCommandEncoder];
  	[clearSpinBuffer fillBuffer:m_spin_buffer range:NSMakeRange(0, 4) value:0];
  	[clearSpinBuffer updateFence:m_spin_fence];
-@@ -1338,13 +1655,19 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1338,13 +1660,19 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  	pdesc.colorAttachments[0].pixelFormat = layer_px_fmt;
  	m_imgui_pipeline = MakePipeline(pdesc, LoadShader(@"vs_imgui"), LoadShader(@"ps_imgui"), @"imgui");
  
@@ -1622,7 +1627,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	std::lock_guard<std::mutex> guard(m_backref->first);
  	m_backref->second = nullptr;
  
-@@ -1356,6 +1679,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1356,6 +1684,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  
  void GSDeviceMTL::DestroySurface()
  {
@@ -1630,7 +1635,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	if (!m_layer)
  		return;
  	OnMainThread([this]{ DetachSurfaceOnMainThread(); });
-@@ -1364,6 +1688,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1364,6 +1693,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  
  bool GSDeviceMTL::UpdateWindow()
  {
@@ -1638,7 +1643,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	DestroySurface();
  
  	if (!AcquireWindow(false))
-@@ -1408,6 +1733,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1408,6 +1738,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  
  void GSDeviceMTL::ResizeWindow(u32 new_window_width, u32 new_window_height, float new_window_scale)
  {
@@ -1646,7 +1651,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	m_window_info.surface_scale = new_window_scale;
  	if (!m_layer ||
  		(m_window_info.surface_width == new_window_width && m_window_info.surface_height == new_window_height))
-@@ -1426,6 +1752,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1426,6 +1757,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  void GSDeviceMTL::UpdateTexture(id<MTLTexture> texture, u32 x, u32 y, u32 width, u32 height, const void* data, u32 data_stride)
  {
  	id<MTLCommandBuffer> cmdbuf = [m_queue commandBuffer];
@@ -1654,7 +1659,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	id<MTLBlitCommandEncoder> enc = [cmdbuf blitCommandEncoder];
  	size_t bytes = data_stride * height;
  	MRCOwned<id<MTLBuffer>> buf = MRCTransfer([m_dev.dev newBufferWithLength:bytes options:m_resource_options_shared_wc]);
-@@ -1440,6 +1767,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1440,6 +1772,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  	   destinationLevel:0
  	  destinationOrigin:MTLOriginMake(0, 0, 0)];
  	[enc endEncoding];
@@ -1662,7 +1667,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	[cmdbuf commit];
  }
  
-@@ -1456,6 +1784,12 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1456,6 +1789,12 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  	}
  	id<MTLCommandBuffer> buf = GetRenderCmdBuf();
  	m_current_drawable = MRCRetain([m_layer nextDrawable]);
@@ -1675,7 +1680,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	EndRenderPass();
  	if (!m_current_drawable)
  	{
-@@ -1480,15 +1814,38 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1480,15 +1819,38 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  	EndRenderPass();
  	if (m_current_drawable)
  	{
@@ -1715,7 +1720,7 @@ index 6bf6af8ebfc570742018bfa989cd52bea64f4450..626bb6821aa414aa9a919a40458aa2fe
  	}
  	FlushEncoders();
  	FrameCompleted();
-@@ -1772,6 +2129,15 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+@@ -1772,6 +2134,15 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
  	cb.SetTarget(dRect, ds);
  	cb.SetTime(shaderTime);
  	id<MTLRenderPipelineState> pipe = m_present_pipeline[static_cast<int>(shader)];

@@ -259,6 +259,8 @@ def main() -> int:
                     bad["symbol_map_row_count"] = summary["processed"]
                 if bad:
                     fail(f"compiler quality summary is not clean: {bad}; see {log_path}")
+                subprocess.run([sys.executable, str(ROOT / "scripts/patch-generated-experiments.py"),
+                                "--generated-dir", str(stage), "--elf", str(elf)], check=True)
                 staged = regular_files(stage)
                 if not staged:
                     fail("compiler succeeded but staged no output files")

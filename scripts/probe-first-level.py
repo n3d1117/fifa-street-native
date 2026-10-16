@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--label', required=True)
 parser.add_argument('--app', type=Path, help='exercise an installed bundle through its actual launcher')
+parser.add_argument('--user-dir', type=Path, default=Path.home() / 'Library/Application Support/TarzanFreeridePS2', help='use an isolated copy of saves for diagnostic navigation')
 parser.add_argument('--skip-cutscene', action='store_true')
 parser.add_argument('--fast', action='store_true', help='debug-only movie bypass and shorter saved-game route')
 parser.add_argument('--keep-story', action='store_true', help='with --fast, skip only the logo movie and retain the mission story')
@@ -24,6 +25,7 @@ parser.add_argument('--capture-story-audio', action='store_true', help='arm conf
 parser.add_argument('--seconds', type=int, default=180)
 parser.add_argument('--hold-ms', type=int, default=150)
 parser.add_argument('--route-captures', action='store_true', help='capture each menu before and after input to diagnose route timing')
+parser.add_argument('--play', action='store_true', help='after observed VU0 activity, dismiss tutorial cards and walk briefly; capture evidence')
 args = parser.parse_args()
 if args.keep_story and not args.fast:
     parser.error('--keep-story requires --fast')
@@ -126,14 +128,22 @@ if args.fast:
     os.environ['TARZAN_DEBUG_SKIP_MOVIES'] = '1'
     if args.keep_story:
         os.environ['TARZAN_DEBUG_KEEP_STORY'] = '1'
-command = [str(runner), '--user-dir', str(Path.home() / 'Library/Application Support/TarzanFreeridePS2'),
+command = [str(runner), '--user-dir', str(args.user_dir.resolve()),
            str(ROOT / 'extracted/disc/SLES_503.50')]
 if args.app:
     command = [str(args.app.resolve(strict=True) / 'Contents/MacOS/TarzanFreeridePS2Launcher')]
+runtime_log = out / 'stdout.log'
+runtime_log_offset = 0
+if args.app:
+    if args.user_dir != Path.home() / 'Library/Application Support/TarzanFreeridePS2':
+        parser.error('--app uses the installed launcher user directory; --user-dir is runner-only')
+    runtime_log = Path.home() / 'Library/Application Support/TarzanFreeridePS2/Logs/native.log'
+    runtime_log_offset = runtime_log.stat().st_size if runtime_log.exists() else 0
 with (out / 'stdout.log').open('wb') as log:
     process = subprocess.Popen(command, cwd=ROOT, env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT)
     started = time.monotonic()
     result = {'pid': process.pid, 'command': command, 'started': time.time(),
+              'runtime_log': str(runtime_log), 'runtime_log_offset': runtime_log_offset,
               'gameplay_verified': False, 'skip_cutscene': args.skip_cutscene, 'debug_skip_movies': args.fast, 'inputs': []}
     (out / 'launch.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({'pid': process.pid, 'output': str(out)}), flush=True)
@@ -174,11 +184,12 @@ with (out / 'stdout.log').open('wb') as log:
                 subprocess.run([str(capture), str(process.pid), str(out / ('route-%03d-after' % second)), '1'], check=False)
         story_seen = False
         capture_armed = False
+        play_sent = False
         while time.monotonic() - started < args.seconds and process.poll() is None:
             if args.capture_story_audio and not capture_armed:
-                with (out / 'stdout.log').open('rb') as audio_log:
+                with runtime_log.open('rb') as audio_log:
                     audio_log.seek(0, 2)
-                    audio_log.seek(max(0, audio_log.tell() - 16384))
+                    audio_log.seek(max(runtime_log_offset, audio_log.tell() - 16384))
                     recent = audio_log.read().decode('utf-8', errors='replace')
                 story_seen = story_seen or 'W1_1_GM.PSS' in recent
                 levels = re.findall(r'\[tarzan-spu2-health\][^\n]*rms=([0-9.]+)', recent)
@@ -189,6 +200,21 @@ with (out / 'stdout.log').open('wb') as log:
                                                      'rms_at_trigger': float(levels[-1])}
                     subprocess.run([str(capture), str(process.pid), str(out / 'story-audio-trigger'), '1'], check=False)
                     print('story audio capture armed', result['story_audio_capture'], flush=True)
+            if args.play and not play_sent:
+                with runtime_log.open('rb') as game_log:
+                    game_log.seek(0, 2)
+                    game_log.seek(max(runtime_log_offset, game_log.tell() - 65536))
+                    recent_game = game_log.read().decode('utf-8', errors='replace')
+                if '[vu0rec] image=' in recent_game or '[vu0rec] calls=' in recent_game:
+                    play_sent = True
+                    time.sleep(2.0)
+                    subprocess.run(['osascript', '-e', 'tell application "System Events" to set frontmost of first process whose unix id is %d to true' % process.pid], check=True, capture_output=True)
+                    subprocess.run([str(capture), str(process.pid), str(out / 'play-before'), '1'], check=False)
+                    for play_key, hold in [(7,150), (7,150), (7,150), (126,1800)]:
+                        subprocess.run([str(ROOT / 'build/send-native-key'), '--pid', str(process.pid), '--key-code', str(play_key), '--hold-ms', str(hold)], check=True)
+                        time.sleep(.6)
+                    subprocess.run([str(capture), str(process.pid), str(out / 'play-after'), '1'], check=False)
+                    result['play_probe'] = {'elapsed_seconds': round(time.monotonic() - started, 3), 'ready_hint': 'VU0 activity', 'movement_hold_ms': 1800}
             time.sleep(.2)
         capture = ROOT / 'build/capture-window'
         if capture.is_file() and process.poll() is None:
@@ -197,8 +223,9 @@ with (out / 'stdout.log').open('wb') as log:
         if process.poll() is None:
             # Normal Quit services Metal teardown and writes deferred profiles.
             # SIGTERM alone can be intercepted by the GS dependency's handlers.
-            quit_script = ('tell application "System Events" to tell (first process whose unix id is %d) '
-                           'to click menu item "Quit Tarzan PS2" of menu 1 of menu bar item 2 of menu bar 1') % process.pid
+            quit_script = ('tell application "System Events"\n tell (first process whose unix id is %d)\n'
+                           'set frontmost to true\n click menu item "Quit Tarzan PS2" of menu 1 of menu bar item 2 of menu bar 1\n'
+                           'end tell\nend tell') % process.pid
             result['shutdown'] = 'app_menu'
             try:
                 subprocess.run(['osascript', '-e', quit_script], capture_output=True, timeout=3, check=False)
@@ -215,5 +242,11 @@ with (out / 'stdout.log').open('wb') as log:
                     result['shutdown'] = 'kill_fallback'
                     process.kill()
                     process.wait()
+        if args.app and runtime_log.exists():
+            with runtime_log.open('rb') as app_log:
+                app_log.seek(runtime_log_offset)
+                log.seek(0)
+                log.write(app_log.read())
+                log.truncate()
         result.update(exit_code=process.returncode, elapsed_seconds=round(time.monotonic() - started, 3))
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')

@@ -32,10 +32,21 @@ if(TARZAN_USE_METAL)
     if(NOT EXISTS "${TARZAN_SOUNDTOUCH_LIBRARY}")
         message(FATAL_ERROR "Missing pinned PCSX2 SoundTouch library: ${TARZAN_SOUNDTOUCH_LIBRARY}")
     endif()
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    execute_process(COMMAND "${Python3_EXECUTABLE}" "${TARZAN_ROOT}/scripts/patch-generated-experiments.py"
+        --generated-dir "${TARZAN_GENERATED_DIR}" --elf "${TARZAN_ROOT}/extracted/disc/SLES_503.50"
+        RESULT_VARIABLE _tarzan_experiment_patch_result)
+    if(NOT _tarzan_experiment_patch_result EQUAL 0)
+        message(FATAL_ERROR "Could not install guarded experimental game hooks")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${TARZAN_ROOT}/scripts/patch-generated-experiments.py")
+    target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_LIST_DIR}")
     target_compile_definitions(ps2_runtime PRIVATE TARZAN_USE_METAL=1)
     add_library(tarzanMetalHost STATIC
         "${CMAKE_CURRENT_LIST_DIR}/metal-host.mm"
         "${CMAKE_CURRENT_LIST_DIR}/keyboard-controls.mm"
+        "${CMAKE_CURRENT_LIST_DIR}/experimental-settings.mm"
+        "${CMAKE_CURRENT_LIST_DIR}/experimental-clock.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/spu2-host.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/metal-gs-adapter.cpp")
     target_include_directories(tarzanMetalHost PRIVATE
@@ -50,7 +61,8 @@ if(TARZAN_USE_METAL)
         -isystem "${TARZAN_NATIVE_TOOLS_ROOT}/tools/build/llvm19/include/c++/v1")
     set_target_properties(tarzanMetalHost PROPERTIES UNITY_BUILD OFF)
     set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/metal-host.mm"
-        "${CMAKE_CURRENT_LIST_DIR}/keyboard-controls.mm" PROPERTIES
+        "${CMAKE_CURRENT_LIST_DIR}/keyboard-controls.mm"
+        "${CMAKE_CURRENT_LIST_DIR}/experimental-settings.mm" PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties("${CMAKE_CURRENT_LIST_DIR}/metal-gs-adapter.cpp" PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
@@ -59,7 +71,7 @@ if(TARZAN_USE_METAL)
     target_link_options(tarzanMetalHost PRIVATE -stdlib=libc++)
     target_link_libraries(tarzanMetalHost PUBLIC
         "${TARZAN_METAL_BRIDGE}"
-        "-framework AppKit" "-framework QuartzCore" "-framework Metal")
+        "-framework AppKit" "-framework QuartzCore" "-framework Metal" "-framework CoreGraphics")
     find_package(Threads REQUIRED)
     target_link_libraries(tarzanMetalHost PRIVATE "${TARZAN_SPU2_BACKEND}" Threads::Threads ps2_iop)
     target_link_libraries(tarzanMetalHost PRIVATE "${TARZAN_SOUNDTOUCH_LIBRARY}")

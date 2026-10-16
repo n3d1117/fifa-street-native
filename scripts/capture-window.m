@@ -3,11 +3,11 @@
 #import <ImageIO/ImageIO.h>
 #include <unistd.h>
 int main(int argc,const char **argv){ @autoreleasepool {
- if(argc!=4)return 2; int pid=atoi(argv[1]);NSString *dir=[NSString stringWithUTF8String:argv[2]];int count=atoi(argv[3]);
+ if(argc!=4 && argc!=5)return 2; int pid=atoi(argv[1]);NSString *dir=[NSString stringWithUTF8String:argv[2]];int count=atoi(argv[3]);NSString *title=argc==5?[NSString stringWithUTF8String:argv[4]]:nil;
  [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
  NSArray *ws=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly,kCGNullWindowID));CGWindowID wid=0;
  double largest=0;
- for(NSDictionary *w in ws)if([w[(id)kCGWindowOwnerPID] intValue]==pid && [w[(id)kCGWindowLayer] intValue]==0){
+ for(NSDictionary *w in ws)if([w[(id)kCGWindowOwnerPID] intValue]==pid && [w[(id)kCGWindowLayer] intValue]==0 && (!title || [w[(id)kCGWindowName] isEqualToString:title])){
   CGRect bounds=CGRectZero;
   if(CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds], &bounds)){
    double area=bounds.size.width*bounds.size.height;

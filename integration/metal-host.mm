@@ -5,6 +5,7 @@
 #include "metal-host.hpp"
 #include "metal-gs-adapter.hpp"
 #include "keyboard-controls.hpp"
+#include "experimental-settings.hpp"
 #include "gamepad-input.hpp"
 #include "spu2-host.hpp"
 
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 NSWindow* s_window;
@@ -24,7 +26,7 @@ CAMetalLayer* s_layer;
 RrvPcsx2GsBridgeSurface s_surface{};
 bool s_should_close{};
 bool s_fullscreen{};
-constexpr CGFloat kGameAspect = 4.0 / 3.0;
+CGFloat gameAspect() { return tarzan_experiments_hd_widescreen() ? 16.0 / 9.0 : 4.0 / 3.0; }
 thread_local std::unique_ptr<tarzan::ps2::MetalGsAdapter> s_gs;
 std::array<std::atomic_bool, 19> s_keys{};
 std::atomic_bool s_lifecycle_pending{false};
@@ -57,10 +59,10 @@ void layout_game_view() {
         [s_view setFrame:bounds];
     } else {
         CGFloat width = bounds.size.width;
-        CGFloat height = width / kGameAspect;
+        CGFloat height = width / gameAspect();
         if (height > bounds.size.height) {
             height = bounds.size.height;
-            width = height * kGameAspect;
+            width = height * gameAspect();
         }
         [s_view setFrame:NSMakeRect(NSMidX(bounds) - width / 2.0,
                                     NSMidY(bounds) - height / 2.0, width, height)];
@@ -88,6 +90,9 @@ void apply_pending_surface_resize() {
 
 @interface TarzanMetalWindowDelegate : NSObject <NSWindowDelegate>
 - (void)showKeyboardControls:(id)sender;
+- (void)showSettings:(id)sender;
+- (void)windowDidResignKey:(NSNotification*)notification;
+- (void)windowDidBecomeKey:(NSNotification*)notification;
 - (void)requestClose:(id)sender;
 - (void)windowDidResize:(NSNotification*)notification;
 - (void)windowDidChangeBackingProperties:(NSNotification*)notification;
@@ -100,6 +105,20 @@ void apply_pending_surface_resize() {
     (void)sender;
     for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
     keyboard_controls_show();
+}
+- (void)showSettings:(id)sender {
+    (void)sender;
+    for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
+    tarzan_experiments_show();
+}
+- (void)windowDidResignKey:(NSNotification*)notification {
+    (void)notification;
+    for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
+    tarzan_gamepad_set_active(0);
+}
+- (void)windowDidBecomeKey:(NSNotification*)notification {
+    (void)notification;
+    tarzan_gamepad_set_active(1);
 }
 - (void)requestClose:(id)sender { (void)sender; s_should_close = true; }
 - (void)windowDidResize:(NSNotification*)notification {
@@ -129,6 +148,35 @@ static id s_becomeObserver;
 extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32_t height) {
     @autoreleasepool {
         keyboard_controls_configure(std::getenv("TARZAN_PS2_USER_DIR"));
+        tarzan_experiments_configure(std::getenv("TARZAN_PS2_USER_DIR"));
+        if (const char* hd = std::getenv("TARZAN_EXPERIMENT_HD"); hd && hd[0] == '1' && hd[1] == 0)
+            tarzan_experiments_set_hd_widescreen(1);
+        if (const char* fps = std::getenv("TARZAN_EXPERIMENT_FPS"); fps && (std::strcmp(fps, "60") == 0 || std::strcmp(fps, "120") == 0)) {
+            tarzan_experiments_set_high_fps(1);
+            tarzan_experiments_set_target_fps(std::atoi(fps));
+        }
+        if (tarzan_experiments_high_fps()) {
+            const char* rate = tarzan_experiments_target_fps() == 120 ? "120" : "60";
+            setenv("PS2X_EXPERIMENT_VSYNC_HZ", rate, 1);
+            setenv("RRV_PCSX2_GS_VSYNC", "1", 1);
+            setenv("RRV_PCSX2_GS_PRESENT_THROTTLE", "1", 1);
+            // The guest may run faster than the display. Keep drawable pacing
+            // on the display's cadence, not on the guest update cadence.
+            NSScreen* screen = [NSScreen mainScreen];
+            const CGDirectDisplayID display = [[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue];
+            CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display);
+            double refresh = mode ? CGDisplayModeGetRefreshRate(mode) : 0.0;
+            if (mode) CGDisplayModeRelease(mode);
+            if (!(refresh > 0.0)) refresh = 60.0;
+            const char* presentRate = refresh >= 100.0 && tarzan_experiments_target_fps() == 120 ? "120" : "60";
+            setenv("RRV_PCSX2_GS_PRESENT_HZ", presentRate, 1);
+            setenv("RRV_PCSX2_GS_DISPLAY_HZ", presentRate, 1);
+        }
+        if (tarzan_experiments_hd_widescreen()) {
+            setenv("RRV_PCSX2_GS_ASPECT", "16:9", 1);
+            setenv("RRV_PCSX2_GS_UPSCALE", "2", 1);
+        }
+
         NSApplication* app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         [app finishLaunching];
@@ -155,10 +203,10 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
         // behind that reference; stop() closes first, then clears it explicitly.
         [s_window setReleasedWhenClosed:NO];
         [s_window setTitle:[NSString stringWithUTF8String:title ? title : "Tarzan PS2"]];
-        [s_window setContentAspectRatio:NSMakeSize(kGameAspect, 1.0)];
-        [s_window setContentSize:NSMakeSize(std::max<CGFloat>(480.0, height * kGameAspect),
+        [s_window setContentAspectRatio:NSMakeSize(gameAspect(), 1.0)];
+        [s_window setContentSize:NSMakeSize(std::max<CGFloat>(480.0, height * gameAspect()),
                                              std::max<CGFloat>(360.0, height))];
-        [s_window setContentMinSize:NSMakeSize(480.0, 360.0)];
+        [s_window setContentMinSize:NSMakeSize(360.0 * gameAspect(), 360.0)];
         [s_window setCollectionBehavior:[s_window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
         s_delegate = [TarzanMetalWindowDelegate new];
         [s_window setDelegate:s_delegate];
@@ -166,6 +214,8 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
         NSMenuItem* appItem = [NSMenuItem new];
         [mainMenu addItem:appItem];
         NSMenu* appMenu = [[NSMenu alloc] initWithTitle:@"Tarzan Freeride PS2"];
+        [appMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Settings…"
+            action:@selector(showSettings:) keyEquivalent:@","]];
         [appMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Keyboard Controls…"
             action:@selector(showKeyboardControls:) keyEquivalent:@""]];
         [appMenu addItem:[NSMenuItem separatorItem]];
@@ -183,7 +233,7 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
         [viewItem setSubmenu:viewMenu];
         [NSApp setMainMenu:mainMenu];
         for (NSMenuItem* item in [appMenu itemArray])
-            if ([item action] == @selector(showKeyboardControls:) || [item action] == @selector(requestClose:))
+            if ([item action] == @selector(showSettings:) || [item action] == @selector(showKeyboardControls:) || [item action] == @selector(requestClose:))
                 [item setTarget:s_delegate];
         s_container = [[NSView alloc] initWithFrame:[[s_window contentView] bounds]];
         [s_container setWantsLayer:YES];
@@ -228,8 +278,11 @@ extern "C" void tarzan_metal_host_poll(void) {
         NSEvent* event;
         while ((event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:1.0/240.0]
             inMode:NSDefaultRunLoopMode dequeue:YES])) {
-            if ([event type] == NSEventTypeKeyDown || [event type] == NSEventTypeKeyUp ||
-                [event type] == NSEventTypeFlagsChanged) {
+            // PID-targeted diagnostic key events can have no AppKit window.
+            // A focused settings/remapping window must never control the game.
+            if (([NSApp keyWindow] == nil || [NSApp keyWindow] == s_window) &&
+                ([event type] == NSEventTypeKeyDown || [event type] == NSEventTypeKeyUp ||
+                 [event type] == NSEventTypeFlagsChanged)) {
                 bool down = [event type] == NSEventTypeKeyDown;
                 if ([event type] == NSEventTypeFlagsChanged) {
                     const NSUInteger code = [event keyCode];
