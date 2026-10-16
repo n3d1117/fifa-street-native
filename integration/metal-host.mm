@@ -155,6 +155,9 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
             tarzan_experiments_set_high_fps(1);
             tarzan_experiments_set_target_fps(std::atoi(fps));
         }
+        if (const char* scale = std::getenv("TARZAN_EXPERIMENT_SCALE"); scale &&
+            scale[0] >= '1' && scale[0] <= '4' && scale[1] == 0)
+            tarzan_experiments_set_render_scale(scale[0] - '0');
         if (tarzan_experiments_high_fps()) {
             const char* rate = tarzan_experiments_target_fps() == 120 ? "120" : "60";
             setenv("PS2X_EXPERIMENT_VSYNC_HZ", rate, 1);
@@ -174,7 +177,12 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
         }
         if (tarzan_experiments_hd_widescreen()) {
             setenv("RRV_PCSX2_GS_ASPECT", "16:9", 1);
-            setenv("RRV_PCSX2_GS_UPSCALE", "2", 1);
+        }
+
+        const int scale = tarzan_experiments_render_scale();
+        if (scale > 1) {
+            const char scaleValue[] = {static_cast<char>('0' + scale), 0};
+            setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
         }
 
         NSApplication* app = [NSApplication sharedApplication];
