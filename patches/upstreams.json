@@ -1,0 +1,128 @@
+{
+  "repositories": [
+    {
+      "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
+      "id": "ps2recomp-tests",
+      "patch": "patches/ps2recomp-tests.patch",
+      "patch_sha256": "0ec88bc44b9c50940a7c92ddcf2bf72defbcce264e14a8762db052ef1c741925",
+      "path": "source/PS2Recomp",
+      "untracked": [
+        {
+          "mode": "0644",
+          "path": "ps2xIOP/include/ps2x/iop/iop_host_spu2.h",
+          "sha256": "1d7f94465f0bb031f06fdbb8ae857c118b5aa6297cff5729365fc22f28bdf1fd",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xIOP/include/ps2x/iop/iop_host_spu2.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_host_arena.h",
+          "sha256": "d12d2cefca52e1e53c5d9b6d49d8b896f53255ad1035cd2c188d279230b7fc28",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/include/runtime/ps2_host_arena.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp.h",
+          "sha256": "346225a68c2f9e682652f880c9aaae9794e8daf578612a310a48b6cbad29272a",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/include/runtime/ps2_vu1_recomp.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h",
+          "sha256": "6f3f93b703ef4c476b8efaed92e52d76a3c97c7a8669ebc969985ced31118b67",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp",
+          "sha256": "7acc9302e82cf46d13eaacc22226ddf600bddb5656dbed792a852fcc3f806fe1",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xTest/src/ps2_vif_error_tests.cpp",
+          "sha256": "8d7c67f4b9a9b6514c8d1dda2e13352c89096a3f7bb020a42f7ad6c8b51cffde",
+          "snapshot": "patches/upstreams/ps2recomp-tests/ps2xTest/src/ps2_vif_error_tests.cpp"
+        }
+      ],
+      "url": "https://github.com/ran-j/PS2Recomp.git"
+    },
+    {
+      "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
+      "id": "ps2recomp-metal",
+      "patch": "patches/ps2recomp-metal.patch",
+      "patch_sha256": "558f2c64179fb56da787c994fa8bd26fd898383a71f6fc6a8cc2b70ed0fdbacd",
+      "path": "source/PS2Recomp-metal",
+      "untracked": [
+        {
+          "mode": "0644",
+          "path": "ps2xIOP/include/ps2x/iop/iop_host_spu2.h",
+          "sha256": "1d7f94465f0bb031f06fdbb8ae857c118b5aa6297cff5729365fc22f28bdf1fd",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xIOP/include/ps2x/iop/iop_host_spu2.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_host_arena.h",
+          "sha256": "d12d2cefca52e1e53c5d9b6d49d8b896f53255ad1035cd2c188d279230b7fc28",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/include/runtime/ps2_host_arena.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp.h",
+          "sha256": "346225a68c2f9e682652f880c9aaae9794e8daf578612a310a48b6cbad29272a",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/include/runtime/ps2_vu1_recomp.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h",
+          "sha256": "6f3f93b703ef4c476b8efaed92e52d76a3c97c7a8669ebc969985ced31118b67",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp",
+          "sha256": "7acc9302e82cf46d13eaacc22226ddf600bddb5656dbed792a852fcc3f806fe1",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp"
+        },
+        {
+          "mode": "0644",
+          "path": "ps2xTest/src/ps2_vif_error_tests.cpp",
+          "sha256": "8d7c67f4b9a9b6514c8d1dda2e13352c89096a3f7bb020a42f7ad6c8b51cffde",
+          "snapshot": "patches/upstreams/ps2recomp-metal/ps2xTest/src/ps2_vif_error_tests.cpp"
+        }
+      ],
+      "url": "https://github.com/ran-j/PS2Recomp.git"
+    },
+    {
+      "base_revision": "e8818121566cfaf3d361e38745860b0a9438e27b",
+      "id": "fukami",
+      "patch": "patches/fukami.patch",
+      "patch_sha256": "8834b0a050da31504b0d67026220549b5b9fb122b6a02e3a939e8bacbd1640be",
+      "path": "source/fukami",
+      "untracked": [
+        {
+          "mode": "0644",
+          "path": "tools/pcsx2-spu2/rrv_audio_stretcher.cpp",
+          "sha256": "0bac163cf01cb21d4ad6d4b2162000b7cdb67c0ec4fec057a7db8fbfd61002a1",
+          "snapshot": "patches/upstreams/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
+        },
+        {
+          "mode": "0644",
+          "path": "tools/pcsx2-spu2/rrv_audio_stretcher.hpp",
+          "sha256": "4b681676f711a7b0a9cee376d49b425c2e4ed181745e102faffef577239b1e0e",
+          "snapshot": "patches/upstreams/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.hpp"
+        }
+      ],
+      "url": "https://github.com/danisandoval/fukami.git"
+    },
+    {
+      "base_revision": "fd9d310ccbb6b8b62c976da8886a3c8fd3a10ff3",
+      "id": "pcsx2-metal",
+      "patch": "patches/pcsx2-metal.patch",
+      "patch_sha256": "8e80be1fbaa05564bfbc0bd9ce632c759fb66d4671035e91cd65aece6e63c40e",
+      "path": "source/deps/pcsx2-2.8.2-bridge",
+      "untracked": [],
+      "url": "https://github.com/PCSX2/pcsx2.git"
+    }
+  ],
+  "schema_version": 1
+}

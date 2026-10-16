@@ -1,0 +1,25 @@
+--- a/ps2xRecomp/src/lib/vu_translation_helpers.cpp
++++ b/ps2xRecomp/src/lib/vu_translation_helpers.cpp
+@@ -165,14 +165,14 @@
+     std::string CodeGenerator::translateVU_VCALLMSR(const Instruction &inst)
+     {
+-        // VCALLMSR calls a VU0 microprogram at address stored in integer register
+-        uint8_t vis_reg_idx = inst.rd; // Source integer register (vis)
+-
++        // VCALLMSR's encoded source is the CMSAR0 control register (index 27),
++        // not an element of the 16-entry VI array. CTC2 writes CMSAR0 to
++        // vu0_cmsar0; use its low nine instruction-index bits here.
++        (void)inst;
+         return fmt::format(
+             "{{ "
+-            "    uint16_t instr_index = ctx->vi[{}] & 0x1FF; "             // Get instruction index from VI[IS], mask to 9 bits
+-            "    uint32_t target_byte_addr = (uint32_t)instr_index << 3; " // Convert to byte address
+-            "    ctx->vu0_pc = target_byte_addr; "
+-            "    runtime->vu0StartMicroProgram(rdram, ctx, target_byte_addr); "
++            "    uint16_t instr_index = (uint16_t)(ctx->vu0_cmsar0 & 0x1FF); "
++            "    uint32_t target_byte_addr = (uint32_t)instr_index << 3; "
++            "    ctx->vu0_tpc = instr_index; "
++            "    runtime->vu0StartMicroProgram(rdram, ctx, target_byte_addr); "
+             "}}");
+-            vis_reg_idx);
+     }

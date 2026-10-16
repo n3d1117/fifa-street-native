@@ -1,0 +1,187 @@
+diff --git a/tools/pcsx2-spu2/CMakeLists.txt b/tools/pcsx2-spu2/CMakeLists.txt
+index e1b4b69e2ab74b852a60ef6829b4dadbf59e4738..690b367f85eae44c772fb8f56b054e8d0f225573 100644
+--- a/tools/pcsx2-spu2/CMakeLists.txt
++++ b/tools/pcsx2-spu2/CMakeLists.txt
+@@ -26,6 +26,8 @@ option(RRV_SPU2_BUILD_TESTS "Build spu2_selftest" ON)
+ option(RRV_SPU2_TSAN_TESTS "Also build a ThreadSanitizer variant of the library + selftest" ON)
+ 
+ set(_spu2 "${RRV_PCSX2_SOURCE_DIR}/pcsx2/SPU2")
++add_subdirectory("${RRV_PCSX2_SOURCE_DIR}/3rdparty/soundtouch"
++    "${CMAKE_CURRENT_BINARY_DIR}/soundtouch")
+ # spu2.cpp (AudioStream/VMManager/GSCapture glue) and Debug.cpp/Wavedump_wav.cpp
+ # (devbuild only) are intentionally not compiled; rrv_pcsx2_spu2.cpp replaces spu2.cpp.
+ set(RRV_SPU2_PCSX2_SOURCES
+@@ -43,7 +45,8 @@ set(RRV_SPU2_PCSX2_SOURCES
+ function(rrv_spu2_library name)
+     add_library(${name} STATIC
+         ${RRV_SPU2_PCSX2_SOURCES}
+-        ${CMAKE_CURRENT_LIST_DIR}/rrv_pcsx2_spu2.cpp)
++        ${CMAKE_CURRENT_LIST_DIR}/rrv_pcsx2_spu2.cpp
++        ${CMAKE_CURRENT_LIST_DIR}/rrv_audio_stretcher.cpp)
+     # Order matters: shim/ first so it wins over same-named PCSX2 headers;
+     # pcsx2/ only provides SPU2/*.h.
+     target_include_directories(${name}
+@@ -58,7 +61,7 @@ function(rrv_spu2_library name)
+         # produces identical output samples.
+         -ffp-contract=off)
+     find_package(Threads REQUIRED)
+-    target_link_libraries(${name} PUBLIC Threads::Threads)
++    target_link_libraries(${name} PUBLIC Threads::Threads pcsx2-soundtouch)
+ endfunction()
+ 
+ rrv_spu2_library(rrv_pcsx2_spu2)
+@@ -85,6 +88,15 @@ if(RRV_SPU2_BUILD_TESTS)
+         add_test(NAME rspu2_determinism COMMAND rspu2_driver_test determinism)
+     endif()
+ 
++    # These backend regression tests validate the native SPU2 output path.
++    # The separate SoundTouch synthetic test covers the optional host stretcher.
++    set_tests_properties(spu2_tone spu2_determinism spu2_threading PROPERTIES
++        ENVIRONMENT "TARZAN_AUDIO_STRETCH=0")
++    if(_rspu2_tests)
++        set_tests_properties(rspu2_unit rspu2_stream rspu2_determinism PROPERTIES
++            ENVIRONMENT "TARZAN_AUDIO_STRETCH=0")
++    endif()
++
+     if(RRV_SPU2_TSAN_TESTS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+         if(_rspu2_tests)
+             add_executable(rspu2_driver_test_tsan test/rspu2_driver_test.cpp "${_rspu2_src}")
+diff --git a/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp b/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
+index 9b3965f4f09897522ae26517ce1d1a643f2afdc6..99762050fccc99668448f45801cae72aa6b45210 100644
+--- a/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
++++ b/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
+@@ -13,6 +13,7 @@
+ // CPU/DMA controller is replaced by timestamped commands.
+ 
+ #include "rrv_pcsx2_spu2.h"
++#include "rrv_audio_stretcher.hpp"
+ 
+ #include "SPU2/defs.h"
+ #include "SPU2/regs.h"
+@@ -24,7 +25,9 @@
+ #include "R3000A.h"
+ 
+ #include <atomic>
++#include <array>
+ #include <condition_variable>
++#include <cstdlib>
+ #include <deque>
+ #include <mutex>
+ #include <thread>
+@@ -445,6 +448,10 @@ struct rrv_spu2
+ 	u64 ring_mask = 0;
+ 	alignas(64) std::atomic<u64> ring_head{0}; // frames written
+ 	alignas(64) std::atomic<u64> ring_tail{0}; // frames read
++	rrv_audio_stretcher audio_stretcher;
++	std::array<float, 64 * 2> stretch_input{};
++	size_t stretch_input_frames{};
++	bool stretch_enabled{true};
+ 
+ 	// ---- stats
+ 	std::atomic<u64> frames_mixed{0};
+@@ -457,6 +464,7 @@ struct rrv_spu2
+ 	std::atomic<u64> dma_truncated{0};
+ 	std::atomic<u64> output_hash{0};
+ 	std::atomic<u64> worker_cpu_ns{0};
++	std::atomic<u64> frames_enqueued{0};
+ };
+ 
+ namespace
+@@ -472,18 +480,38 @@ void rrv_out::push_frame(float l, float r, s16 raw_l, s16 raw_r)
+ 	st.out_hash = (st.out_hash ^ raw) * 0x100000001b3ull;
+ 	s->output_hash.store(st.out_hash, std::memory_order_relaxed);
+ 	s->frames_mixed.fetch_add(1, std::memory_order_relaxed);
++	auto push_output = [](void* context, float left, float right) -> bool {
++		auto* instance = static_cast<rrv_spu2*>(context);
++		const u64 out_head = instance->ring_head.load(std::memory_order_relaxed);
++		const u64 out_tail = instance->ring_tail.load(std::memory_order_acquire);
++		if (out_head - out_tail > instance->ring_mask) {
++			instance->overruns.fetch_add(1, std::memory_order_relaxed);
++			return false;
++		}
++		const u64 index = (out_head & instance->ring_mask) * 2u;
++		instance->ring[index] = left;
++		instance->ring[index + 1u] = right;
++		instance->ring_head.store(out_head + 1u, std::memory_order_release);
++		instance->frames_enqueued.fetch_add(1, std::memory_order_relaxed);
++		return true;
++	};
++	if (!s->stretch_enabled) {
++		push_output(s, l, r);
++		return;
++	}
++
++	s->stretch_input[2u * s->stretch_input_frames] = l;
++	s->stretch_input[2u * s->stretch_input_frames + 1u] = r;
++	if (++s->stretch_input_frames < s->stretch_input.size() / 2u)
++		return;
+ 
+ 	const u64 head = s->ring_head.load(std::memory_order_relaxed);
+ 	const u64 tail = s->ring_tail.load(std::memory_order_acquire);
+-	if (head - tail > s->ring_mask) // full: drop, never block the core
+-	{
+-		s->overruns.fetch_add(1, std::memory_order_relaxed);
+-		return;
+-	}
+-	const u64 i = (head & s->ring_mask) * 2;
+-	s->ring[i] = l;
+-	s->ring[i + 1] = r;
+-	s->ring_head.store(head + 1, std::memory_order_release);
++	const u64 underruns = s->underruns.load(std::memory_order_relaxed);
++	s->audio_stretcher.process(s->stretch_input.data(), s->stretch_input_frames,
++		head - tail, underruns,
++		push_output, s);
++	s->stretch_input_frames = 0;
+ }
+ 
+ namespace
+@@ -738,6 +766,8 @@ rrv_spu2* rrv_spu2_create(const rrv_spu2_config* cfg)
+ 	rrv_spu2* s = new rrv_spu2();
+ 	if (cfg)
+ 		s->cfg = *cfg;
++		const char* stretch = std::getenv("TARZAN_AUDIO_STRETCH");
++		s->stretch_enabled = !(stretch && stretch[0] == '0' && stretch[1] == '\0');
+ 	const u32 frames = next_pow2(s->cfg.output_ring_frames ? s->cfg.output_ring_frames : 8192);
+ 	s->ring.assign(size_t(frames) * 2, 0.0f);
+ 	s->ring_mask = frames - 1;
+@@ -829,6 +859,7 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
+ {
+ 	const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
+ 	const u64 head = s->ring_head.load(std::memory_order_acquire);
++	const u64 queued = head - tail;
+ 	const size_t avail = static_cast<size_t>(std::min<u64>(head - tail, frames));
+ 	for (size_t i = 0; i < avail; i++)
+ 	{
+@@ -857,6 +888,7 @@ void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* o)
+ 	o->dma_truncated = s->dma_truncated.load(std::memory_order_relaxed);
+ 	o->output_hash = s->output_hash.load(std::memory_order_relaxed);
+ 	o->worker_cpu_ns = s->worker_cpu_ns.load(std::memory_order_relaxed);
++	o->frames_enqueued = s->frames_enqueued.load(std::memory_order_relaxed);
+ }
+ 
+ uint64_t rrv_spu2_state_hash(rrv_spu2* s, uint64_t t)
+diff --git a/tools/pcsx2-spu2/rrv_pcsx2_spu2.h b/tools/pcsx2-spu2/rrv_pcsx2_spu2.h
+index aac411ec6e9d5d9bb07ede973a75f227029b9eee..a43306f5a107bb3d01518a0f6ddc892e34725ead 100644
+--- a/tools/pcsx2-spu2/rrv_pcsx2_spu2.h
++++ b/tools/pcsx2-spu2/rrv_pcsx2_spu2.h
+@@ -57,6 +57,7 @@ typedef struct rrv_spu2_stats
+ 	uint64_t dma_truncated;      /* DMA requests longer than 0x80000 halfwords (truncated) */
+ 	uint64_t output_hash;        /* running hash of every mixed s16 frame (valid after a barrier) */
+ 	uint64_t worker_cpu_ns;      /* worker thread CPU time (threaded mode only; host-side stat) */
++	uint64_t frames_enqueued;    /* time-stretched frames accepted by the output ring */
+ } rrv_spu2_stats;
+ 
+ /* Pass as spu_addr16 to keep the core's current TSA instead of writing it. */
+diff --git a/tools/pcsx2-spu2/test/spu2_selftest.cpp b/tools/pcsx2-spu2/test/spu2_selftest.cpp
+index c179067d772af61b7c19275ad465890b2848e71f..d2ba1014a7d6eae20903c53942d39817d9523092 100644
+--- a/tools/pcsx2-spu2/test/spu2_selftest.cpp
++++ b/tools/pcsx2-spu2/test/spu2_selftest.cpp
+@@ -410,7 +410,7 @@ bool test_threading()
+ 	rrv_spu2_destroy(s);
+ 	std::printf("threading: concurrent consumer pulled %" PRIu64 " of %" PRIu64 " frames (overrun %" PRIu64 ", underrun %" PRIu64 ")\n",
+ 		pulled.load(), st.frames_mixed, st.overrun_frames, st.underrun_frames);
+-	const bool ok = pulled.load() > 0 && pulled.load() + st.overrun_frames <= st.frames_mixed;
++	const bool ok = pulled.load() > 0 && pulled.load() <= st.frames_enqueued;
+ 	std::printf("threading: %s\n", ok ? "PASS" : "FAIL");
+ 	return ok;
+ }

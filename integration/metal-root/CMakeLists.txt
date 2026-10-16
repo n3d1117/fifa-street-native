@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(TarzanMetalWrapper LANGUAGES C CXX OBJC OBJCXX)
+get_filename_component(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+add_subdirectory("${TARZAN_ROOT}/integration" "${CMAKE_BINARY_DIR}/integration")
+include("${TARZAN_ROOT}/integration/metal.cmake")

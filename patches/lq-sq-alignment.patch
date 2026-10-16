@@ -1,0 +1,92 @@
+diff --git a/ps2xRecomp/src/lib/instruction_translator.cpp b/ps2xRecomp/src/lib/instruction_translator.cpp
+index 7684097..a5e4a5f 100644
+--- a/ps2xRecomp/src/lib/instruction_translator.cpp
++++ b/ps2xRecomp/src/lib/instruction_translator.cpp
+@@ -70,7 +70,12 @@ namespace ps2recomp
+     MemoryAccessHint InstructionTranslator::effectiveMemoryHintFor(const Instruction &inst, const MemoryAccessHint &memoryHint) const
+     {
+         // TODO disable for now since it causing issues with some games.
+-        return memoryHint;
++        MemoryAccessHint effectiveHint = memoryHint;
++        if (effectiveHint.hasAddress && (inst.opcode == OPCODE_LQ || inst.opcode == OPCODE_SQ))
++        {
++            effectiveHint.address &= ~0xFu;
++        }
++        return effectiveHint;
+     }
+ 
+     std::string InstructionTranslator::translateMemoryRead(const Instruction &inst,
+@@ -196,9 +201,9 @@ namespace ps2recomp
+         case OPCODE_SW:
+             return genWrite(32, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("GPR_U32(ctx, {})", inst.rt)) + ";";
+         case OPCODE_LQ:
+-            return fmt::format("SET_GPR_VEC(ctx, {}, {});", inst.rt, genRead(128, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate)));
++            return fmt::format("SET_GPR_VEC(ctx, {}, {});", inst.rt, genRead(128, fmt::format("(ADD32(GPR_U32(ctx, {}), {}) & ~0xFu)", inst.rs, inst.simmediate)));
+         case OPCODE_SQ:
+-            return genWrite(128, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("GPR_VEC(ctx, {})", inst.rt)) + ";";
++            return genWrite(128, fmt::format("(ADD32(GPR_U32(ctx, {}), {}) & ~0xFu)", inst.rs, inst.simmediate), fmt::format("GPR_VEC(ctx, {})", inst.rt)) + ";";
+         case OPCODE_LD:
+             return fmt::format("SET_GPR_U64(ctx, {}, {});", inst.rt, genRead(64, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate)));
+         case OPCODE_SD:
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index 463b6cf..a9e22a1 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -205,6 +205,29 @@ void register_code_generator_tests()
+                  "LWU must not sign-extend bit 31 into the allocator bitmap value");
+     });
+ 
++    tc.Run("EE LQ/SQ align effective addresses while VU0 LQC2/SQC2 preserve them", [](TestCase &t) {
++        CodeGenerator gen({}, {});
++        const std::string lq = gen.translateInstruction(makeIType(0x8F20u, OPCODE_LQ, 1u, 2u, 3u));
++        const std::string sq = gen.translateInstruction(makeIType(0x8F24u, OPCODE_SQ, 1u, 2u, 3u));
++        const std::string lqc2 = gen.translateInstruction(makeIType(0x8F28u, OPCODE_LQC2, 1u, 2u, 3u));
++        const std::string sqc2 = gen.translateInstruction(makeIType(0x8F2Cu, OPCODE_SQC2, 1u, 2u, 3u));
++
++        t.IsTrue(lq.find("& ~0xFu") != std::string::npos, "LQ must align its effective address down to 16 bytes");
++        t.IsTrue(sq.find("& ~0xFu") != std::string::npos, "SQ must align its effective address down to 16 bytes");
++        t.IsTrue(lqc2.find("& ~0xFu") == std::string::npos, "LQC2 must preserve the unaligned effective address");
++        t.IsTrue(sqc2.find("& ~0xFu") == std::string::npos, "SQC2 must preserve the unaligned effective address");
++
++        MemoryAccessHint hint{};
++        hint.hasAddress = true;
++        hint.address = 0x1003u;
++        const std::string hintedLq = gen.translateInstruction(makeIType(0x8F30u, OPCODE_LQ, 1u, 2u, 3u), hint);
++        const std::string hintedLqc2 = gen.translateInstruction(makeIType(0x8F34u, OPCODE_LQC2, 1u, 2u, 3u), hint);
++        t.IsTrue(hintedLq.find("FAST_READ128(0x1000u)") != std::string::npos,
++                 "resolved LQ memory hints must use the aligned effective address");
++        t.IsTrue(hintedLqc2.find("FAST_READ128(0x1003u)") != std::string::npos,
++                 "resolved LQC2 memory hints must retain the raw effective address");
++    });
++
+     tc.Run("SYSCALL publishes its continuation before entering the runtime", [](TestCase &t) {
+         Function func;
+         func.name = "syscall_resume";
+@@ -1087,6 +1110,27 @@ void register_code_generator_tests()
+                 t.IsTrue(ctc2Code.find("Unimplemented") == std::string::npos, "CTC2 FBRST should be implemented");
+         });
+ 
++        tc.Run("VCALLMSR reads CMSAR0 without indexing the VI array", [](TestCase& t) {
++            CodeGenerator gen({}, {});
++            Instruction call{};
++            call.opcode = OPCODE_COP2;
++            call.rs = COP2_CO;
++            call.function = VU0_S1_VCALLMSR;
++            call.rd = VU0_CR_CMSAR0;
++            call.raw = (static_cast<uint32_t>(VU0_CR_CMSAR0) << 11) |
++                       (static_cast<uint32_t>(VU0_S1_VCALLMSR));
++
++            const std::string code = gen.translateInstruction(call);
++            t.IsTrue(code.find("ctx->vu0_cmsar0 & 0x1FF") != std::string::npos,
++                     "VCALLMSR must use the CMSAR0 instruction index");
++            t.IsTrue(code.find("ctx->vu0_tpc = instr_index") != std::string::npos,
++                     "VCALLMSR must publish the architectural TPC in instruction units");
++            t.IsTrue(code.find("vu0StartMicroProgram(rdram, ctx, target_byte_addr)") != std::string::npos,
++                     "VCALLMSR must start the microprogram at the corresponding byte address");
++            t.IsTrue(code.find("ctx->vi[27]") == std::string::npos,
++                     "CMSAR0 control register 27 must never index the 16-entry VI array");
++        });
++
+         tc.Run("scalar logical immediates emit low64 operations", [](TestCase &t) {
+             CodeGenerator gen({}, {});
+ 
