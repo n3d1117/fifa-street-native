@@ -29,3 +29,31 @@ compare with original PS2 playback. This is not whole-game audio qualification.
 Three ring overruns in the debug-skip navigation run occurred during silence;
 there were no clipping windows across the 314-second run. Temporary per-block
 mixer instrumentation was removed before packaging; local captures are ignored.
+
+## Movie synchronization correction
+
+The later audio lead had two independent clock causes. Late video frames shifted
+the presentation epoch, accumulating video delay; the epoch now remains fixed.
+Synchronous guest IOP RPC instructions also advanced the SPU timeline in addition
+to the full EE-issued IOP budget. The IOP scheduler now accumulates an absolute
+issued target, crediting work already executed before advancing further. Reset
+clears the target and fractional 1:8 carry, while the SPU epoch stays monotonic.
+Interactive hardware time follows the monotonic host clock rather than allowing
+estimated EE block costs to accelerate it. Explicit diagnostic overrides remain.
+
+The physical-guest RPC regression checks budget debt, repayment, reset and
+fractional carry; the IOP emulator smoke suite passes. The strict-clock regression
+and 33 focused MPEG/VBlank/VU/MFIFO tests pass. The first real story run with only
+the EE clock correction still produced about 51k mixed frames/s: that change alone
+was insufficient. With IOP budget accounting corrected, the real W1_1_GM movie
+trace returns to approximately 48k frames/s with a fixed video PTS epoch. This
+removes measured cumulative clock drift; it does not certify lip-sync or all
+movies. Listening confirmation and the earlier initial pre-roll comparison remain
+separate acceptance gates.
+
+Build 8 story-to-gameplay qualification: 42 health intervals averaged
+48.00024k mixed frames/s (47.98–48.02k range), with no accumulating video
+PTS offset. The movie EOF transition logged a silent ring flush/underrun burst
+(19,520 underrun and 16,896 overrun frames); it is not counted as clean audio
+throughout the transition. First-mission movement was captured and the process
+quit normally. Further listening and later-movie acceptance remain required.

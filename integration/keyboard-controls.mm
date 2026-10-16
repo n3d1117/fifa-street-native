@@ -146,13 +146,19 @@ void setDefaults() {
 
 void showPanelOnMain() {
     if (!s_actions) s_actions = [KeyboardControlsActions new];
-    if (s_window) { [s_window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES]; return; }
+    if (s_window) {
+        refreshButtons();
+        [s_window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+        return;
+    }
     const CGFloat width = 440, rowHeight = 32, top = 64;
     const CGFloat height = top + rowHeight * kActionCount + 92;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
     [s_window setTitle:@"Keyboard Controls"];
+    [s_window setReleasedWhenClosed:NO];
     [s_window setDelegate:s_actions];
     [s_window center];
     NSView* content = [s_window contentView];
@@ -191,10 +197,10 @@ void showPanelOnMain() {
 - (void)windowWillClose:(NSNotification*)notification {
     (void)notification;
     if (s_keyMonitor) { [NSEvent removeMonitor:s_keyMonitor]; s_keyMonitor = nil; }
+    if (s_capturingAction) setStatus(@"Click a binding to change it. Changes apply immediately.");
     s_capturingAction = 0;
-    s_window = nil;
-    s_status = nil;
-    s_buttons.fill(nil);
+    // Keep the window and controls alive for reuse; NSWindow's default close
+    // behavior can otherwise release an ARC-owned window a second time.
 }
 - (void)keyboardControlsCapture:(NSButton*)sender { startCapture(static_cast<uint32_t>([sender tag])); }
 - (void)keyboardControlsReset:(id)sender { (void)sender; setDefaults(); }

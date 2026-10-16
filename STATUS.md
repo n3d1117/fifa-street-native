@@ -11,11 +11,13 @@ completed source decompilation or a verified complete game port.
 | Arithmetic | Scalar SQRT.S incorrectly read Fs instead of Ft; corrected compiler and active generated sites. DIV/RSQRT zero/denormal handling corrected at tested sites. |
 | VU1 | 13 captured microprogram images have native paths. 914 captured replay states matched; 213,759 live differential calls recorded no mismatch. Unknown later images can fall back. |
 | IOP / VU0 | Native exact-image VU0 skinning now works in first-mission gameplay; 3,928,064 live differential calls and 1,000 IEEE/VI edge cases matched. Unknown VU0 programs still fall back; IOP remains interpreted. |
-| Audio | Found movie PES loss: MPEG ignored zero (buffer-full) callback results and discarded whole audio packets. Fixed packet-by-packet acceptance/retry, incomplete packets and ring wrapping. Startup: 19,986 non-silent blocks align with source; story onset: 51,428 blocks over 15 seconds align with the selected source stream, with no decoded clipping. Five focused MPEG tests pass. Build 6 installed; final listening confirmation remains pending. See `docs/audio.md`. |
+| Audio | Found movie PES loss: MPEG ignored zero (buffer-full) callback results and discarded whole audio packets. Fixed packet-by-packet acceptance/retry, incomplete packets and ring wrapping. Startup: 19,986 non-silent blocks align with source; story onset: 51,428 blocks over 15 seconds align with the selected source stream, with no decoded clipping. Five focused MPEG tests pass. Build 8 corrects immutable movie-PTS timing and double-counted synchronous IOP RPC cycles. The real story trace returns to ~48k mixed frames/s, versus ~51k before correction. Listening confirmation remains pending. See `docs/audio.md`. |
 | Saves | Native host-directory card save/reload exercised for slot A at 0%; complete card semantics and all checkpoints unverified. Saves live outside the bundle. |
-| Input / UI | Mac keyboard remapping exists. Resize with 4:3 content and native fullscreen implemented; installed bundle resize/fullscreen and normal Quit checked. PS5 hardware validation pending. |
+| Input / UI | Mac keyboard remapping exists. Resize with 4:3 content and native fullscreen implemented; installed bundle resize/fullscreen and normal Quit checked. Settings/keyboard windows retain their ARC ownership across close/reopen; 100 zombie-diagnostic cycles and 50 normal gameplay cycles passed. PS5 hardware validation pending. |
+| Loading | Measured host reads through first-mission assets: ~9 MB in ~14 ms; disk reads are not the dominant delay in that run. Mission-transition samples show guest texture conversion/initialization. Three integer conversion handlers compile at O2 with original checkpoints retained; speedup not yet established by controlled A/B. |
 | Performance | Native VU0 run sustained ~25 DISPFB2 changes/s in first-mission gameplay, versus earlier interpreter/differential runs ~22–23/s. Separate runs, not a controlled speedup measurement. A fixed 4096-tag MFIFO limit caused the faster path to stall; corrected to configured ring capacity and covered by a 4098-tag regression. These are framebuffer swaps, not proof of simulation speed or unique frames. |
 | Metal | Measured steady section: 50-Hz field service, p95 interval 20.50 ms; aggregate asynchronous GPU work ~3.52 ms/field; no GPU framebuffer readbacks. CPU work/timing is the next target. |
+| Image quality | Upscaled world-menu tile grid traced to ST triangle strips. A guarded half-pixel UI coverage correction removed the black grid in 4×/16:9 capture. Optional Sharper image uses upstream Metal CAS 50% and sharp bilinear presentation; original texture detail remains unchanged. |
 | Experiments | Off by default: 60/120 FPS targets and 16:9 mode. Independent internal resolution selector defaults to Native, with 2×/3×/4× options. First-mission high-FPS runs measured ~26–29 framebuffer swaps/s; menus approach the requested cadence. 2×/16:9 held ~25/s. First-mission 4×/4:3 and 3×/16:9 runs also reached ~25/s after loading; screenshots showed sharper geometry with no obvious new artifacts. Movie pacing now converts authored PTS and PTS-less frame intervals using the effective VBlank period; regression coverage includes 50/60/120 Hz. See `docs/experiments.md`. |
 | Runtime bindings | Audit found 33 active configured names mapped to unimplemented handlers; execution on later title paths is unknown. Other shims also need behavioral validation. |
 | Mobile / tvOS | Feasibility only. AppKit host, deployment/toolchain support, audio/session lifecycle and device performance need separate work. |
@@ -45,8 +47,12 @@ first-mission evidence must never be presented as whole-game completion.
 
 ## Next acceptance gates
 
-1. Obtain listening confirmation for startup and pre-mission audio in build 3; investigate the separate ~93 ms initial stream pre-roll discrepancy against original playback.
-2. Build 4 with native VU0, the MFIFO correction and the smaller Dock icon is packaged and installed. Build 6 adds independent resolution selection; a 120-Hz real story-to-gameplay route completed with no logged audio underruns or clipping. Later movies and whole-game behavior remain unqualified.
+1. Confirm audible lip-sync in the installed build 8, including startup and the
+   complete first-mission movie. Timing traces qualify clock rates, not perceptual
+   synchronization; the ~93 ms initial pre-roll remains to compare with original.
+2. Resolve the 16:9 main-menu backdrop edge exposure. Engine/level flags also
+   remain active in menus, so they cannot safely select a menu-only camera fix.
+   Preserve the working gameplay camera while identifying the backdrop instance.
 3. Optimize measured guest render/culling and character-update CPU hotspots.
    Upstream presentation throttling removed the sampled Metal drawable wait;
    high-FPS first-mission movement works but 60/120 FPS targets remain unmet.

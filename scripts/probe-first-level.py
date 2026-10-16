@@ -9,6 +9,8 @@ import argparse
 import json
 import os
 import re
+import struct
+from types import SimpleNamespace
 from pathlib import Path
 import subprocess
 import time
@@ -16,6 +18,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--label', required=True)
+parser.add_argument('--runner', type=Path, help='use a preserved runner for controlled A/B probes')
 parser.add_argument('--app', type=Path, help='exercise an installed bundle through its actual launcher')
 parser.add_argument('--user-dir', type=Path, default=Path.home() / 'Library/Application Support/TarzanFreeridePS2', help='use an isolated copy of saves for diagnostic navigation')
 parser.add_argument('--skip-cutscene', action='store_true')
@@ -25,6 +28,7 @@ parser.add_argument('--capture-story-audio', action='store_true', help='arm conf
 parser.add_argument('--seconds', type=int, default=180)
 parser.add_argument('--hold-ms', type=int, default=150)
 parser.add_argument('--route-captures', action='store_true', help='capture each menu before and after input to diagnose route timing')
+parser.add_argument('--diagnostic-input', action='store_true', help='process-local FIFO input independent of desktop focus (diagnostic only)')
 parser.add_argument('--play', action='store_true', help='after observed VU0 activity, dismiss tutorial cards and walk briefly; capture evidence')
 args = parser.parse_args()
 if args.keep_story and not args.fast:
@@ -43,8 +47,12 @@ def english_menu_present(lines):
     language = any(line.get('text', '').strip().casefold() == 'language'
                    and line.get('confidence', 0) >= 0.5 for line in lines)
     english = any(line.get('text', '').strip().casefold() == 'english'
-                  and line.get('confidence', 0) >= 0.6 for line in lines)
-    return language and english
+                  and line.get('confidence', 0) >= 0.5 for line in lines)
+    # Sharpened outlined fonts can score 0.5 in Vision even when text matches.
+    # Require another exact menu label at high confidence, on two frames.
+    other_language = any(line.get('text', '').strip().casefold() in ('français', 'español', 'italiano', 'deutsch')
+                         and line.get('confidence', 0) >= 0.9 for line in lines)
+    return language and english and other_language
 
 
 def wait_for_english_menu(process, started, out, capture, result, first_second):
@@ -92,7 +100,7 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
                 result['navigation_guard'] = {
                     'status': 'english_menu_confirmed',
                     'required_labels': ['LANGUAGE', 'ENGLISH'],
-                    'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.6},
+                    'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.5, 'other_language': 0.9},
                     'confirming_frame_elapsed_seconds': [round(previous_match_elapsed, 3), frame['elapsed_seconds']],
                     'elapsed_seconds': round(guard_elapsed, 3),
                     'frames': frames,
@@ -113,7 +121,7 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
     result['navigation_guard'] = {
         'status': 'english_menu_not_confirmed',
         'required_labels': ['LANGUAGE', 'ENGLISH'],
-        'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.6},
+        'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.5, 'other_language': 0.9},
         'elapsed_seconds': round(max(0.0, elapsed), 3),
         'frames': frames,
     }
@@ -123,7 +131,27 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
 
 out = ROOT / 'runtime/checks' / args.label
 out.mkdir(parents=True, exist_ok=False)
-runner = ROOT / 'build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner'
+diagnostic_fd = None
+if args.diagnostic_input:
+    fifo = out / 'input.fifo'
+    os.mkfifo(fifo, 0o600)
+    diagnostic_fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+    os.environ['TARZAN_DIAGNOSTIC_INPUT_FIFO'] = str(fifo)
+
+def send_probe_key(pid, key, hold_ms):
+    if diagnostic_fd is None:
+        return subprocess.run([str(ROOT / 'build/send-native-key'), '--pid', str(pid),
+                               '--key-code', str(key), '--hold-ms', str(hold_ms)],
+                              capture_output=True, text=True, check=True)
+    logical = {7:5, 36:17, 125:2, 126:1, 8:7}[key]
+    os.write(diagnostic_fd, struct.pack('<I', 1 << logical))
+    time.sleep(hold_ms / 1000)
+    os.write(diagnostic_fd, struct.pack('<I', 0))
+    return SimpleNamespace(returncode=0)
+
+runner = (args.runner or ROOT / 'build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner').resolve(strict=True)
+if args.runner and args.app:
+    parser.error('--runner and --app are mutually exclusive')
 if args.fast:
     os.environ['TARZAN_DEBUG_SKIP_MOVIES'] = '1'
     if args.keep_story:
@@ -171,9 +199,10 @@ with (out / 'stdout.log').open('wb') as log:
                 route_delay = wait_for_english_menu(process, started, out, capture, result, second)
             if args.route_captures and capture.is_file():
                 subprocess.run([str(capture), str(process.pid), str(out / ('route-%03d-before' % second)), '1'], check=False)
-            subprocess.run(['osascript', '-e', 'tell application "System Events" to set frontmost of first process whose unix id is %d to true' % process.pid], check=True, capture_output=True)
-            sent = subprocess.run([str(ROOT / 'build/send-native-key'), '--pid', str(process.pid),
-                                   '--key-code', str(key), '--hold-ms', str(args.hold_ms)], capture_output=True, text=True)
+            if not args.diagnostic_input:
+                subprocess.run(['osascript', '-e', 'tell application "System Events" to set frontmost of first process whose unix id is %d to true' % process.pid], check=True, capture_output=True)
+                time.sleep(.15)
+            sent = send_probe_key(process.pid, key, args.hold_ms)
             actual_elapsed = time.monotonic() - started
             result['inputs'].append({'second': second, 'scheduled_elapsed_seconds': round(target_second, 3),
                                      'actual_elapsed_seconds': round(actual_elapsed, 3),
@@ -207,14 +236,16 @@ with (out / 'stdout.log').open('wb') as log:
                     recent_game = game_log.read().decode('utf-8', errors='replace')
                 if '[vu0rec] image=' in recent_game or '[vu0rec] calls=' in recent_game:
                     play_sent = True
+                    ready_elapsed = time.monotonic() - started
                     time.sleep(2.0)
                     subprocess.run(['osascript', '-e', 'tell application "System Events" to set frontmost of first process whose unix id is %d to true' % process.pid], check=True, capture_output=True)
                     subprocess.run([str(capture), str(process.pid), str(out / 'play-before'), '1'], check=False)
                     for play_key, hold in [(7,150), (7,150), (7,150), (126,1800)]:
-                        subprocess.run([str(ROOT / 'build/send-native-key'), '--pid', str(process.pid), '--key-code', str(play_key), '--hold-ms', str(hold)], check=True)
+                        send_probe_key(process.pid, play_key, hold)
                         time.sleep(.6)
                     subprocess.run([str(capture), str(process.pid), str(out / 'play-after'), '1'], check=False)
-                    result['play_probe'] = {'elapsed_seconds': round(time.monotonic() - started, 3), 'ready_hint': 'VU0 activity', 'movement_hold_ms': 1800}
+                    result['play_probe'] = {'elapsed_seconds': round(time.monotonic() - started, 3), 'ready_hint': 'VU0 activity', 'ready_elapsed_seconds': round(ready_elapsed, 3),
+                                            'movement_hold_ms': 1800}
             time.sleep(.2)
         capture = ROOT / 'build/capture-window'
         if capture.is_file() and process.poll() is None:

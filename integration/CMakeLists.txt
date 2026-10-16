@@ -81,6 +81,17 @@ target_precompile_headers(ps2EntryRunner PRIVATE
 set_source_files_properties("${TARZAN_GENERATED_DIR}/register_functions.cpp" PROPERTIES
     SKIP_UNITY_BUILD_INCLUSION ON
     COMPILE_OPTIONS "-O1;-fno-lto;-fno-fast-math;-ffp-contract=off")
+# First-mission load profiles identify these integer texture conversion loops.
+# Optimize only these translation units; preserve guest checkpoints and arithmetic.
+foreach(texture_converter IN ITEMS
+    "BlockConv8to32__FPUcPUc_0x403df0.cpp"
+    "PageConv8to32__FiiPUcPUc_0x404370.cpp"
+    "Conv8to32__FiiPUcPUc_0x404d40.cpp")
+    set_source_files_properties("${TARZAN_GENERATED_DIR}/${texture_converter}"
+        TARGET_DIRECTORY ps2EntryRunner PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION ON
+        COMPILE_OPTIONS "-O2;-fno-lto;-fno-fast-math;-ffp-contract=off")
+endforeach()
 set_target_properties(ps2EntryRunner PROPERTIES
     UNITY_BUILD ON
     UNITY_BUILD_BATCH_SIZE 32

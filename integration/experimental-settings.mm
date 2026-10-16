@@ -18,6 +18,8 @@ std::atomic<bool> s_highFPS{false};
 std::atomic<bool> s_hdWidescreen{false};
 std::atomic<bool> s_pendingHighFPS{false};
 std::atomic<bool> s_pendingHDWidescreen{false};
+std::atomic<bool> s_sharperImage{false};
+std::atomic<bool> s_pendingSharperImage{false};
 std::atomic<int> s_targetFPS{60};
 std::atomic<int> s_pendingTargetFPS{60};
 std::atomic<int> s_renderScale{1};
@@ -27,6 +29,7 @@ NSString* s_userDirectory;
 NSWindow* s_window;
 NSButton* s_highFPSButton;
 NSButton* s_hdWidescreenButton;
+NSButton* s_sharperImageButton;
 NSPopUpButton* s_targetFPSPopup;
 NSPopUpButton* s_renderScalePopup;
 NSTextField* s_status;
@@ -34,6 +37,7 @@ TarzanExperimentalSettingsActions* s_actions;
 
 constexpr NSInteger kHighFPSTag = 1;
 constexpr NSInteger kHDWidescreenTag = 2;
+constexpr NSInteger kSharperImageTag = 3;
 
 bool isIntegerNumber(id value) {
     return [value isKindOfClass:[NSNumber class]] &&
@@ -69,6 +73,8 @@ void refreshControls() {
         [s_highFPSButton setState:s_pendingHighFPS.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_hdWidescreenButton)
         [s_hdWidescreenButton setState:s_pendingHDWidescreen.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
+    if (s_sharperImageButton)
+        [s_sharperImageButton setState:s_pendingSharperImage.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_targetFPSPopup)
         [s_targetFPSPopup selectItemWithTag:s_pendingTargetFPS.load(std::memory_order_relaxed)];
     if (s_renderScalePopup)
@@ -81,6 +87,8 @@ void updatePendingFromControl(NSButton* sender) {
         s_pendingHighFPS.store(enabled, std::memory_order_relaxed);
     else if ([sender tag] == kHDWidescreenTag)
         s_pendingHDWidescreen.store(enabled, std::memory_order_relaxed);
+    else if ([sender tag] == kSharperImageTag)
+        s_pendingSharperImage.store(enabled, std::memory_order_relaxed);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 
@@ -104,7 +112,8 @@ bool saveSettings() {
         @"highFPS": @(s_pendingHighFPS.load(std::memory_order_relaxed)),
         @"hdWidescreen": @(s_pendingHDWidescreen.load(std::memory_order_relaxed)),
         @"targetFPS": @(s_pendingTargetFPS.load(std::memory_order_relaxed)),
-        @"renderScale": @(s_pendingRenderScale.load(std::memory_order_relaxed))
+        @"renderScale": @(s_pendingRenderScale.load(std::memory_order_relaxed)),
+        @"sharperImage": @(s_pendingSharperImage.load(std::memory_order_relaxed))
     };
     NSError* error = nil;
     NSData* data = [NSPropertyListSerialization dataWithPropertyList:plist
@@ -136,7 +145,7 @@ void showWindowOnMain() {
     }
 
     const CGFloat width = 590;
-    const CGFloat height = 432;
+    const CGFloat height = 492;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -148,14 +157,14 @@ void showWindowOnMain() {
 
     NSTextField* heading = [NSTextField labelWithString:@"Experimental"];
     [heading setFont:[NSFont boldSystemFontOfSize:15]];
-    [heading setFrame:NSMakeRect(22, 382, 546, 22)];
+    [heading setFrame:NSMakeRect(22, 442, 546, 22)];
     [content addSubview:heading];
 
     s_highFPSButton = [NSButton checkboxWithTitle:@"Higher frame rate" target:s_actions action:@selector(settingChanged:)];
     [s_highFPSButton setTag:kHighFPSTag];
-    [s_highFPSButton setFrame:NSMakeRect(22, 338, 350, 24)];
+    [s_highFPSButton setFrame:NSMakeRect(22, 398, 350, 24)];
     [content addSubview:s_highFPSButton];
-    s_targetFPSPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(406, 336, 150, 28) pullsDown:NO];
+    s_targetFPSPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(406, 396, 150, 28) pullsDown:NO];
     [s_targetFPSPopup addItemWithTitle:@"60 FPS"];
     [[s_targetFPSPopup lastItem] setTag:60];
     [s_targetFPSPopup addItemWithTitle:@"120 FPS"];
@@ -164,7 +173,7 @@ void showWindowOnMain() {
     [s_targetFPSPopup setAction:@selector(targetChanged:)];
     [content addSubview:s_targetFPSPopup];
     NSTextField* fpsDetail = [NSTextField labelWithString:@"Experimental; target may not be reached in all scenes."];
-    [fpsDetail setFrame:NSMakeRect(46, 304, 510, 24)];
+    [fpsDetail setFrame:NSMakeRect(46, 364, 510, 24)];
     [fpsDetail setMaximumNumberOfLines:2];
     [[fpsDetail cell] setWraps:YES];
     [[fpsDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
@@ -173,10 +182,10 @@ void showWindowOnMain() {
 
     s_hdWidescreenButton = [NSButton checkboxWithTitle:@"Widescreen (16:9)" target:s_actions action:@selector(settingChanged:)];
     [s_hdWidescreenButton setTag:kHDWidescreenTag];
-    [s_hdWidescreenButton setFrame:NSMakeRect(22, 274, 546, 24)];
+    [s_hdWidescreenButton setFrame:NSMakeRect(22, 334, 546, 24)];
     [content addSubview:s_hdWidescreenButton];
     NSTextField* hdDetail = [NSTextField labelWithString:@"Correct 16:9 camera framing. Some 4:3 movies and UI may be letterboxed."];
-    [hdDetail setFrame:NSMakeRect(46, 244, 510, 28)];
+    [hdDetail setFrame:NSMakeRect(46, 304, 510, 28)];
     [hdDetail setMaximumNumberOfLines:2];
     [[hdDetail cell] setWraps:YES];
     [[hdDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
@@ -184,9 +193,9 @@ void showWindowOnMain() {
     [content addSubview:hdDetail];
 
     NSTextField* scaleLabel = [NSTextField labelWithString:@"Internal render scale"];
-    [scaleLabel setFrame:NSMakeRect(22, 202, 210, 22)];
+    [scaleLabel setFrame:NSMakeRect(22, 262, 210, 22)];
     [content addSubview:scaleLabel];
-    s_renderScalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 198, 180, 28) pullsDown:NO];
+    s_renderScalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 258, 180, 28) pullsDown:NO];
     const char* scaleTitles[] = {"Native (1×)", "2×", "3×", "4×"};
     for (int scale = 1; scale <= 4; ++scale) {
         [s_renderScalePopup addItemWithTitle:[NSString stringWithUTF8String:scaleTitles[scale - 1]]];
@@ -196,15 +205,27 @@ void showWindowOnMain() {
     [s_renderScalePopup setAction:@selector(renderScaleChanged:)];
     [content addSubview:s_renderScalePopup];
     NSTextField* scaleDetail = [NSTextField labelWithString:@"Higher scales sharpen 3D geometry; textures and movies keep their original resolution. Higher scales use more GPU."];
-    [scaleDetail setFrame:NSMakeRect(22, 142, 546, 46)];
+    [scaleDetail setFrame:NSMakeRect(22, 202, 546, 46)];
     [scaleDetail setMaximumNumberOfLines:2];
     [[scaleDetail cell] setWraps:YES];
     [[scaleDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
     [scaleDetail setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:scaleDetail];
 
+    s_sharperImageButton = [NSButton checkboxWithTitle:@"Sharper image" target:s_actions action:@selector(settingChanged:)];
+    [s_sharperImageButton setTag:kSharperImageTag];
+    [s_sharperImageButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [content addSubview:s_sharperImageButton];
+    NSTextField* sharperImageDetail = [NSTextField labelWithString:@"Contrast-adaptive sharpening and sharper display scaling. Original artwork remains unchanged."];
+    [sharperImageDetail setFrame:NSMakeRect(46, 116, 510, 28)];
+    [sharperImageDetail setMaximumNumberOfLines:2];
+    [[sharperImageDetail cell] setWraps:YES];
+    [[sharperImageDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [sharperImageDetail setTextColor:[NSColor secondaryLabelColor]];
+    [content addSubview:sharperImageDetail];
+
     s_status = [NSTextField labelWithString:@"Changes apply after restarting the game."];
-    [s_status setFrame:NSMakeRect(22, 65, 420, 20)];
+    [s_status setFrame:NSMakeRect(22, 70, 420, 20)];
     [s_status setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:s_status];
     NSButton* save = [NSButton buttonWithTitle:@"Save" target:s_actions action:@selector(saveSettings:)];
@@ -221,12 +242,8 @@ void showWindowOnMain() {
 @implementation TarzanExperimentalSettingsActions
 - (void)windowWillClose:(NSNotification*)notification {
     (void)notification;
-    s_window = nil;
-    s_highFPSButton = nil;
-    s_hdWidescreenButton = nil;
-    s_targetFPSPopup = nil;
-    s_renderScalePopup = nil;
-    s_status = nil;
+    // Keep the window and its controls alive for reuse. NSWindow releases itself
+    // on close by default; ARC clients must disable that behavior.
 }
 - (void)settingChanged:(NSButton*)sender { updatePendingFromControl(sender); }
 - (void)targetChanged:(NSPopUpButton*)sender { updatePendingTargetFromControl(sender); }
@@ -248,6 +265,7 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         NSDictionary* plist = loadSettings(s_userDirectory);
         const bool highFPS = isBoolean(plist[@"highFPS"]) && [plist[@"highFPS"] boolValue];
         const bool hdWidescreen = isBoolean(plist[@"hdWidescreen"]) && [plist[@"hdWidescreen"] boolValue];
+        const bool sharperImage = isBoolean(plist[@"sharperImage"]) && [plist[@"sharperImage"] boolValue];
         int targetFPS = 60;
         id targetValue = plist[@"targetFPS"];
         if ([targetValue isKindOfClass:[NSNumber class]] &&
@@ -261,10 +279,12 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         if (renderScale == 0) renderScale = 1;
         s_highFPS.store(highFPS, std::memory_order_relaxed);
         s_hdWidescreen.store(hdWidescreen, std::memory_order_relaxed);
+        s_sharperImage.store(sharperImage, std::memory_order_relaxed);
         s_targetFPS.store(targetFPS, std::memory_order_relaxed);
         s_renderScale.store(renderScale, std::memory_order_relaxed);
         s_pendingHighFPS.store(highFPS, std::memory_order_relaxed);
         s_pendingHDWidescreen.store(hdWidescreen, std::memory_order_relaxed);
+        s_pendingSharperImage.store(sharperImage, std::memory_order_relaxed);
         s_pendingTargetFPS.store(targetFPS, std::memory_order_relaxed);
         s_pendingRenderScale.store(renderScale, std::memory_order_relaxed);
     }
@@ -279,6 +299,7 @@ extern "C" int tarzan_experiments_high_fps() { return s_highFPS.load(std::memory
 extern "C" int tarzan_experiments_target_fps() { return s_targetFPS.load(std::memory_order_relaxed); }
 extern "C" int tarzan_experiments_hd_widescreen() { return s_hdWidescreen.load(std::memory_order_relaxed) ? 1 : 0; }
 extern "C" int tarzan_experiments_render_scale() { return s_renderScale.load(std::memory_order_relaxed); }
+extern "C" int tarzan_experiments_sharper_image() { return s_sharperImage.load(std::memory_order_relaxed) ? 1 : 0; }
 
 extern "C" void tarzan_experiments_set_high_fps(int enabled) {
     const bool value = enabled != 0;
@@ -302,4 +323,10 @@ extern "C" void tarzan_experiments_set_render_scale(int renderScale) {
     if (renderScale < 1 || renderScale > 4) return;
     s_renderScale.store(renderScale, std::memory_order_relaxed);
     s_pendingRenderScale.store(renderScale, std::memory_order_relaxed);
+}
+
+extern "C" void tarzan_experiments_set_sharper_image(int enabled) {
+    const bool value = enabled != 0;
+    s_sharperImage.store(value, std::memory_order_relaxed);
+    s_pendingSharperImage.store(value, std::memory_order_relaxed);
 }

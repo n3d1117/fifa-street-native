@@ -13,10 +13,12 @@ int tarzan_experiments_high_fps();
 int tarzan_experiments_target_fps();
 int tarzan_experiments_hd_widescreen();
 int tarzan_experiments_render_scale();
+int tarzan_experiments_sharper_image();
 // Diagnostic setters update the active and pending snapshots only. They do not
 // update the controls or save the plist.
 void tarzan_experiments_set_high_fps(int enabled);
 void tarzan_experiments_set_target_fps(int target_fps);
 void tarzan_experiments_set_hd_widescreen(int enabled);
 void tarzan_experiments_set_render_scale(int render_scale);
+void tarzan_experiments_set_sharper_image(int enabled);
 }

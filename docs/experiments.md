@@ -1,6 +1,6 @@
 # Experiments
 
-Settings → Experimental stores per-user preferences outside the app. Both
+Settings → Experimental stores per-user preferences outside the app. Optional
 experiments default off and apply after restarting. The normal path retains
 original guest timing, 4:3 camera framing and native GS render scale.
 Internal resolution is independently selectable as Native, 2×, 3× or 4×.
@@ -14,6 +14,9 @@ Internal resolution is independently selectable as Native, 2×, 3× or 4×.
   authored duration; authored movie frames are not interpolated. Presentation uses PCSX2's existing display-rate
   throttle so a 60 Hz display does not block every 120 Hz guest field.
 - **Widescreen:** 16:9 window/fullscreen layout and the PAL camera/FOV patch.
+- **Sharper image:** opt-in upstream Metal contrast-adaptive sharpening at 50%
+  plus sharp bilinear presentation. FXAA stays off; source texture detail is
+  unchanged. Native-resolution artwork can still look soft at large sizes.
 - **Internal resolution:** Native (default), 2×, 3× or 4× GS rendering in the
   existing field renderer. Independent of widescreen and FPS. Higher scales
   sharpen geometry edges and increase GPU/memory work; original texture and
@@ -50,3 +53,43 @@ Resolution approach: [PCSX2 rendering and texture detail](https://pcsx2.net/blog
 Additional first-mission checks: 4×/4:3 and 3×/16:9 both reached about
 25 swaps/s after loading, with movement and sharper geometry visible in
 captures. These are short compatibility checks, not all-scene GPU budgets.
+
+Clarity investigation (2026-10-16): the world-selection background uses
+ST triangle-strip quads, not GS sprites. Sprite Round=2/Align=1, half-pixel
+Native+TextureOffset=5, and half-texel ST inset did not remove the grid in
+4×/16:9 captures. The official Tarzan game database specifies Normal HPO=1
+for blur/shadow alignment; this alone did not remove the grid either.
+References: [upscaling coverage and sampling](https://pcsx2.net/blog/2015/explanation-hacks-needed-for-upscaling-glitches/),
+[upstream Tarzan renderer fix](https://github.com/PCSX2/pcsx2/blob/master/bin/resources/GameIndex.yaml),
+[alignment improvements](https://pcsx2.net/blog/2025/pcsx2-2.4_2.2/).
+
+Loading instrumentation: `TARZAN_TRACE_CD_IO=1` reports actual host reads and
+cumulative bytes/time (first 32 calls, every 1024 calls and each MiB boundary).
+Short sector-padding reads are distinct from failed reads. Guest texture
+conversion appeared prominently in the measured mission transition; three
+integer conversion handlers now compile individually at O2, with all original
+guest checkpoints and strict arithmetic retained. No measured load-speedup
+claim follows merely from this compiler change. Probe scheduled input waits
+are not game loading time; `ready_elapsed_seconds` is only a VU0 activity hint.
+
+The working correction extends the right/bottom coverage of the traced
+full-texture UI strips by half a guest pixel, only above native scale. It is
+guarded to clamped 256-wide, axis-aligned four-vertex ST quads with constant
+Q=1, depth and color and full 0..1 texture mapping. It does not modify the
+texture bytes, original native-scale path or perspective geometry. The
+4×/16:9 world-selection capture no longer shows the black grid.
+`TARZAN_UPSCALE_UI_COVERAGE=0` disables this correction for diagnosis.
+
+Window lifecycle: Experimental Settings and Keyboard Controls now retain
+their ARC-owned windows across close/reopen; keyboard capture monitors still
+clean up on close. A combined 100-cycle close/reopen run with Objective-C
+zombie diagnostics reported no lifetime errors. Movie timing no longer
+accumulates late-frame shifts into its PTS epoch; late frames present promptly
+without discarding decoded frames or changing audio clocks.
+
+Repeatable routing: `probe-first-level.py --diagnostic-input --fast --keep-story`
+skips only the logo and exercises the real first-mission story using a bounded,
+process-local FIFO input path. It uses copied saves when supplied `--user-dir`,
+does not depend on desktop keyboard focus, and is disabled during normal play.
+Movie audio and video now share real-time hardware pacing; synchronous IOP RPC
+work consumes the accumulated IOP budget instead of double-counting cycles.

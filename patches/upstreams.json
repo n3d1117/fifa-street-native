@@ -4,7 +4,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-tests",
       "patch": "patches/ps2recomp-tests.patch",
-      "patch_sha256": "1446504b068d633a575b78bce75c6ea63be91ce19c515d777e7cfcb832afed4c",
+      "patch_sha256": "181ba675f757d45cf0f1bd43e9625be8e17e0f10535489a677ffb639cad8f00a",
       "path": "source/PS2Recomp",
       "untracked": [
         {
@@ -74,7 +74,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-metal",
       "patch": "patches/ps2recomp-metal.patch",
-      "patch_sha256": "41ff93b929570445df53459cfd5bdb1386e822a8dd234cccbeb67a6761a4a319",
+      "patch_sha256": "3ef2f6dafc986888d0922bb83e9b8057b0a4c6ca93c5c1fcfaef9c0da19b1940",
       "path": "source/PS2Recomp-metal",
       "untracked": [
         {
@@ -144,7 +144,7 @@
       "base_revision": "e8818121566cfaf3d361e38745860b0a9438e27b",
       "id": "fukami",
       "patch": "patches/fukami.patch",
-      "patch_sha256": "cb8ee26a6d8997858d6255e02329138d0b9b042fe9a07f87c0b36cd655580d67",
+      "patch_sha256": "7d17fe0fd8ba1be1e23af4f37bb765fa22f4f3ebd9fc10a6f63afea8172a8142",
       "path": "source/fukami",
       "untracked": [
         {
@@ -166,7 +166,7 @@
       "base_revision": "fd9d310ccbb6b8b62c976da8886a3c8fd3a10ff3",
       "id": "pcsx2-metal",
       "patch": "patches/pcsx2-metal.patch",
-      "patch_sha256": "4c97ecb6dee0a4f71f6a88090c04973e20dcb86ea27598fbcdc32ecc9d4dda12",
+      "patch_sha256": "5888c6c1a3f0f11f01152e7440e562027850876cfb735666c5b26b3b79d100fa",
       "path": "source/deps/pcsx2-2.8.2-bridge",
       "untracked": [],
       "url": "https://github.com/PCSX2/pcsx2.git"

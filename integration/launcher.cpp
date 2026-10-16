@@ -173,10 +173,13 @@ int main(int argc, char *argv[])
 
         if (setenv("TARZAN_PS2_USER_DIR", options.userDirectory.c_str(), 1) != 0)
             throw std::runtime_error("Unable to configure keyboard settings directory");
-        // Use KillzoneRecomp's real-time cycle floor for interactive play;
-        // preserve an explicit override for deterministic diagnostic runs.
+        // Pace hardware time from the host clock. Estimated block costs must
+        // neither slow it down nor accelerate audio during movie playback.
+        // Preserve explicit overrides for deterministic diagnostic runs.
         if (!std::getenv("PS2X_WALLCLOCK") && setenv("PS2X_WALLCLOCK", "1", 0) != 0)
             throw std::runtime_error("Unable to configure real-time game timing");
+        if (!std::getenv("PS2X_WALLCLOCK_STRICT") && setenv("PS2X_WALLCLOCK_STRICT", "1", 0) != 0)
+            throw std::runtime_error("Unable to configure real-time hardware timing");
         // Tarzan's relocated IOP modules end below 0x80000. Reserve that
         // region and leave room for the native 320 KiB movie sound buffer.
         // The IOP loader checks every relocated module against this boundary.

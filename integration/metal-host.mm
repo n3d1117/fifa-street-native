@@ -7,6 +7,7 @@
 #include "keyboard-controls.hpp"
 #include "experimental-settings.hpp"
 #include "gamepad-input.hpp"
+#include "diagnostic-input.hpp"
 #include "spu2-host.hpp"
 
 #include <memory>
@@ -149,6 +150,7 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
     @autoreleasepool {
         keyboard_controls_configure(std::getenv("TARZAN_PS2_USER_DIR"));
         tarzan_experiments_configure(std::getenv("TARZAN_PS2_USER_DIR"));
+        tarzan_diagnostic_input_configure(std::getenv("TARZAN_DIAGNOSTIC_INPUT_FIFO"));
         if (const char* hd = std::getenv("TARZAN_EXPERIMENT_HD"); hd && hd[0] == '1' && hd[1] == 0)
             tarzan_experiments_set_hd_widescreen(1);
         if (const char* fps = std::getenv("TARZAN_EXPERIMENT_FPS"); fps && (std::strcmp(fps, "60") == 0 || std::strcmp(fps, "120") == 0)) {
@@ -179,8 +181,19 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
             setenv("RRV_PCSX2_GS_ASPECT", "16:9", 1);
         }
 
+        if (const char* sharp = std::getenv("TARZAN_EXPERIMENT_SHARP"); sharp && sharp[0] == '1' && sharp[1] == 0)
+            tarzan_experiments_set_sharper_image(1);
+        if (tarzan_experiments_sharper_image()) {
+            setenv("RRV_PCSX2_GS_CAS", "50", 1);
+            setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
+        }
+        // Match the upstream SLES-50350 game-database blur/shadow fix.
+        if (!std::getenv("RRV_PCSX2_GS_FIELD_HPO"))
+            setenv("RRV_PCSX2_GS_FIELD_HPO", "1", 1);
         const int scale = tarzan_experiments_render_scale();
         if (scale > 1) {
+            if (!std::getenv("TARZAN_UPSCALE_UI_COVERAGE"))
+                setenv("TARZAN_UPSCALE_UI_COVERAGE", "1", 1);
             const char scaleValue[] = {static_cast<char>('0' + scale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
         }
@@ -306,6 +319,7 @@ extern "C" void tarzan_metal_host_poll(void) {
             }
             [NSApp sendEvent:event];
         }
+        tarzan_diagnostic_input_poll();
         tarzan_gamepad_poll();
         [NSApp updateWindows];
         if (s_lifecycle_pending.load(std::memory_order_acquire))
@@ -324,6 +338,7 @@ extern "C" void tarzan_metal_host_stop(void) {
         s_resignObserver=nil;
         s_becomeObserver=nil;
         tarzan_spu2_host_stop();
+        tarzan_diagnostic_input_shutdown();
         tarzan_gamepad_shutdown();
         [s_window setDelegate:nil];
         [NSApp setMainMenu:nil];
@@ -410,4 +425,4 @@ extern "C" int tarzan_metal_gs_capabilities(uint32_t* renderer, uint32_t* flags)
     *flags = s_gs->capabilities().capability_flags;
     return 1;
 }
-extern "C" int tarzan_metal_key_down(uint32_t key) { return key<19 && s_keys[key].load(std::memory_order_relaxed); }
+extern "C" int tarzan_metal_key_down(uint32_t key) { return key<19 && (s_keys[key].load(std::memory_order_relaxed) || tarzan_diagnostic_input_key_down(key)); }

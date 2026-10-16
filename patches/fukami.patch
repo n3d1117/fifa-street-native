@@ -1,5 +1,5 @@
 diff --git a/tools/pcsx2-gs-bridge/bridge.cpp b/tools/pcsx2-gs-bridge/bridge.cpp
-index e2ced31d2c7750dac9509596dbe3013631e57238..e784dee86a6840e0480ce9282fa4245bafc96d0a 100644
+index e2ced31d2c7750dac9509596dbe3013631e57238..02350381555179b922b44445802c01cb554a3bbf 100644
 --- a/tools/pcsx2-gs-bridge/bridge.cpp
 +++ b/tools/pcsx2-gs-bridge/bridge.cpp
 @@ -755,6 +755,7 @@ struct RrvPcsx2GsBridge {
@@ -10,7 +10,7 @@ index e2ced31d2c7750dac9509596dbe3013631e57238..e784dee86a6840e0480ce9282fa4245b
      bool fpcr_path_logged[4]{};
      bool open = false;
  #if defined(RRV_PCSX2_GS_CANONICAL_RECEIPTS)
-@@ -1178,6 +1179,25 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+@@ -1178,6 +1179,57 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
          GSRrvSetRoundSpriteUOnly(false);
          GSRrvSetDropLargeSTTriangles(false);
      }
@@ -33,10 +33,42 @@ index e2ced31d2c7750dac9509596dbe3013631e57238..e784dee86a6840e0480ce9282fa4245b
 +    std::fprintf(stderr, "[pcsx2-gs-bridge] render mode=%s: actual UpscaleMultiplier=%g%s\n",
 +                 full_frame ? "full" : "field", static_cast<double>(options.UpscaleMultiplier),
 +                 upscale_override && upscale_override[0] != '\0' ? " [RRV_PCSX2_GS_UPSCALE]" : "");
++    if (!full_frame)
++    {
++        if (const char* value = std::getenv("RRV_PCSX2_GS_FIELD_HPO"); value && value[0])
++        {
++            if (value[0] < '0' || value[0] > '5' || value[1])
++            {
++                SetError(error, error_capacity, "RRV_PCSX2_GS_FIELD_HPO must be 0..5");
++                return nullptr;
++            }
++            options.UserHacks_HalfPixelOffset = static_cast<GSHalfPixelOffset>(value[0] - '0');
++        }
++        if (const char* value = std::getenv("RRV_PCSX2_GS_FIELD_ROUND_SPRITE"); value && value[0])
++        {
++            if (value[0] < '0' || value[0] > '2' || value[1])
++            {
++                SetError(error, error_capacity, "RRV_PCSX2_GS_FIELD_ROUND_SPRITE must be 0..2");
++                return nullptr;
++            }
++            options.UserHacks_RoundSprite = value[0] - '0';
++        }
++        if (const char* value = std::getenv("RRV_PCSX2_GS_FIELD_ALIGN_SPRITE"); value && value[0])
++        {
++            if ((value[0] != '0' && value[0] != '1') || value[1])
++            {
++                SetError(error, error_capacity, "RRV_PCSX2_GS_FIELD_ALIGN_SPRITE must be 0 or 1");
++                return nullptr;
++            }
++            options.UserHacks_AlignSpriteX = value[0] == '1';
++        }
++        std::fprintf(stderr, "[pcsx2-gs-bridge] field sprite round=%d align=%u\n",
++                     int(options.UserHacks_RoundSprite), options.UserHacks_AlignSpriteX ? 1u : 0u);
++    }
      // RRV_PCSX2_GS_INTERLACE=<n> selects Pcsx2Config::GSOptions::InterlaceMode
      // (0=Automatic .. 9=AdaptiveBFF, see PCSX2 Config.h GSInterlaceMode).
      // Default is unchanged (PCSX2's own Automatic) so this is observation-only
-@@ -1321,6 +1341,14 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+@@ -1321,6 +1373,14 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
      // present-at-time, so on Linux RRV_PCSX2_GS_PRESENT_* are ignored and
      // FIFO alone paces presentation.
      const bool vsync = direct_requested && EnvFlag("RRV_PCSX2_GS_VSYNC", false);
@@ -51,7 +83,30 @@ index e2ced31d2c7750dac9509596dbe3013631e57238..e784dee86a6840e0480ce9282fa4245b
      // RRV_GATE3_FAST_FORWARD=N (replay debugging): the runtime runs the first N
      // starts unpaced, so vsync would throttle them to the display rate; present
      // without it and switch to FIFO at field N.
-@@ -1458,7 +1486,8 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+@@ -1370,6 +1430,22 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+         }
+     }
+     options.IntegerScaling = EnvFlag("RRV_PCSX2_GS_INTEGER_SCALING", false);
++    // Use the upstream sharp bilinear presentation kernel without changing
++    // per-draw PS2 texture filtering. Unset retains the original smooth path.
++    if (const char* filter = std::getenv("RRV_PCSX2_GS_PRESENT_FILTER"); filter && filter[0])
++    {
++        const std::string_view value(filter);
++        if (value == "sharp") options.LinearPresent = GSPostBilinearMode::BilinearSharp;
++        else if (value == "smooth") options.LinearPresent = GSPostBilinearMode::BilinearSmooth;
++        else if (value == "nearest") options.LinearPresent = GSPostBilinearMode::Off;
++        else
++        {
++            SetError(error, error_capacity, "RRV_PCSX2_GS_PRESENT_FILTER must be sharp, smooth or nearest, got %s", filter);
++            return nullptr;
++        }
++        std::fprintf(stderr, "[pcsx2-gs-bridge] presentation filter=%s\n", filter);
++    }
++
+     // Optional presentation post-processing, both off by default (owner
+     // decision 2026-09-29). RRV_PCSX2_GS_FXAA=1 runs PCSX2's FXAA pass on the
+     // merged frame (GSRenderer::Merge -> GSDevice::FXAA). RRV_PCSX2_GS_CAS=
+@@ -1458,7 +1534,8 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
                       static_cast<double>(custom_aspect), options.IntegerScaling ? 1u : 0u);
      const ScopedBridgeGsFpcr fpcr_guard(bridge->fp_isolated);
      if (!GSopen(options, renderer, bridge->pcsx2_regs.data(),
@@ -61,7 +116,7 @@ index e2ced31d2c7750dac9509596dbe3013631e57238..e784dee86a6840e0480ce9282fa4245b
      {
          if (direct_requested)
              rrv_pcsx2_gs_bridge_clear_native_surface();
-@@ -2788,7 +2817,7 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
+@@ -2788,7 +2865,7 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
      }
      if (bridge->vsync_from_field && field_index >= bridge->vsync_from_field)
      {

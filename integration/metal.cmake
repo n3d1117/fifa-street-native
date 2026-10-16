@@ -47,6 +47,7 @@ if(TARZAN_USE_METAL)
         "${CMAKE_CURRENT_LIST_DIR}/keyboard-controls.mm"
         "${CMAKE_CURRENT_LIST_DIR}/experimental-settings.mm"
         "${CMAKE_CURRENT_LIST_DIR}/experimental-clock.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/diagnostic-input.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/spu2-host.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/metal-gs-adapter.cpp")
     target_include_directories(tarzanMetalHost PRIVATE
