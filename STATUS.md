@@ -11,9 +11,9 @@ completed source decompilation or a verified complete game port.
 | Arithmetic | Scalar SQRT.S incorrectly read Fs instead of Ft; corrected compiler and active generated sites. DIV/RSQRT zero/denormal handling corrected at tested sites. |
 | VU1 | 13 captured microprogram images have native paths. 914 captured replay states matched; 213,759 live differential calls recorded no mismatch. Unknown later images can fall back. |
 | IOP / VU0 | Interpreter paths remain; these are explicit gaps toward fully native subsystem execution. |
-| Audio | Producer-side SoundTouch removed steady-state ring drops in measured story capture. Empty outside-thread event waits were fixed and regression-tested. Upstream SoundTouch window settings and bounded burst correction produce zero overrun across an actual 8-second startup capture; only initial buffer-fill silence remains. Audible quality still awaits listening confirmation. |
+| Audio | Producer-side SoundTouch removed steady-state ring drops in measured story capture. Empty outside-thread event waits were fixed and regression-tested. Upstream SoundTouch window settings and bounded burst correction produce zero overrun across an actual 8-second startup capture; only initial buffer-fill silence remains. User reports severe distortion during the first ~5 seconds and the pre-mission cutscene despite those transport improvements. Audible movie quality is NOT fixed; SPU stream playback is under investigation. |
 | Saves | Native host-directory card save/reload exercised for slot A at 0%; complete card semantics and all checkpoints unverified. Saves live outside the bundle. |
-| Input / UI | Mac keyboard remapping exists. Resize with 4:3 content and native fullscreen implemented; final bundled fullscreen regression pending. PS5 hardware validation pending. |
+| Input / UI | Mac keyboard remapping exists. Resize with 4:3 content and native fullscreen implemented; installed bundle resize/fullscreen and normal Quit checked. PS5 hardware validation pending. |
 | Performance | Prior native run ~24.2 DISPFB2 changes/s. Instrumented same-process 50-FPS-patch A/B remained ~22 changes/s. These are framebuffer swaps, not proof of simulation speed or unique frames. |
 | Metal | Measured steady section: 50-Hz field service, p95 interval 20.50 ms; aggregate asynchronous GPU work ~3.52 ms/field; no GPU framebuffer readbacks. CPU work/timing is the next target. |
 | Runtime bindings | Audit found 33 active configured names mapped to unimplemented handlers; execution on later title paths is unknown. Other shims also need behavioral validation. |
@@ -45,7 +45,7 @@ first-mission evidence must never be presented as whole-game completion.
 ## Next acceptance gates
 
 1. Fix and verify startup audio without hiding it with a mute/gain workaround.
-2. Validate resize/fullscreen and install the signed bundle in Applications.
+2. Signed build 2 is installed in Applications; retain resize/fullscreen and clean Quit behavior.
 3. Profile CPU hotspots, preserve original timing, then re-evaluate the published
    PAL 50 FPS patch with simulation/movement and audio synchronization checks.
 4. Audit title-used runtime bindings; validate each mission, cutscene, menu,

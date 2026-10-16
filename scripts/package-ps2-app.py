@@ -104,7 +104,7 @@ def write_info_plist(contents):
         "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": "org.rrv.tarzan-freeride-ps2",
         "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": "Tarzan Freeride PS2",
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "1", "LSMinimumSystemVersion": "11.0",
+        "CFBundleVersion": "2", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
         "NSPrincipalClass": "NSApplication",
     }
@@ -146,7 +146,7 @@ def main():
     if output.exists():
         raise RuntimeError("refusing to overwrite existing bundle: " + str(output))
     if not args.icon.is_file():
-        raise RuntimeError("custom icon is missing: " + str(args.icon))
+        raise RuntimeError("custom icon is missing; run scripts/make-icon.sh: " + str(args.icon))
     runner = args.runner.resolve()
     if not args.prepare_only and not runner.is_file():
         raise RuntimeError("Metal runner is not ready at the expected path; build it or pass --runner. Legacy build/game is never used.")

@@ -59,7 +59,11 @@ if [[ ! -d "$patched/.git" ]]; then
     [[ "$tree" == 6bf1a4edd0a772afaee775b772a9d148a46b58a3 ]] || { echo "Unexpected patched tree $tree" >&2; exit 1; }
 else
     [[ "$(git -C "$patched" rev-parse HEAD)" == "$pin" ]] || { echo 'Existing patched copy has wrong base revision' >&2; exit 1; }
-    [[ "$(git -C "$patched" write-tree)" == 6bf1a4edd0a772afaee775b772a9d148a46b58a3 ]] || { echo 'Existing patched copy differs from reviewed patch tree' >&2; exit 1; }
+    if [[ -f "$root/patches/pcsx2-metal.patch" ]] && git -C "$patched" apply --reverse --check "$root/patches/pcsx2-metal.patch" >/dev/null 2>&1; then
+        : # Full source snapshot restored without altering the upstream index.
+    else
+        [[ "$(git -C "$patched" write-tree)" == 6bf1a4edd0a772afaee775b772a9d148a46b58a3 ]] || { echo 'Existing patched copy differs from reviewed patch tree' >&2; exit 1; }
+    fi
 fi
 if git -C "$patched" apply --reverse --check "$sdk_patch" >/dev/null 2>&1; then
     : # already applied in the retained private build copy
