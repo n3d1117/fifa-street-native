@@ -3355,7 +3355,7 @@ index 9c54919904e16bf2386ac857a26cd16e4e15112b..d73bdf67bed28cd2e0d304f84c7c0cf6
  
      void Ps2SwapDBuff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
-index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043713eb58b 100644
+index 44eaef4d9ccb39201587080b983be3fbb78992c0..3676984d435e021421bbc423282bf63d88ace7ff 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
 @@ -17,6 +17,7 @@ extern "C"
@@ -3423,7 +3423,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
              std::unique_ptr<MpegFfmpegDecoder> decoder;
              uint8_t frameRateCode = 0u;
              uint8_t frameRateExtensionN = 0u;
-@@ -518,6 +542,7 @@ namespace ps2_stubs
+@@ -518,11 +542,15 @@ namespace ps2_stubs
          {
              uint32_t mpegAddr = 0u;
              uint32_t streamType = 0u;
@@ -3431,7 +3431,15 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
              uint32_t dataAddr = 0u;
              uint32_t len = 0u;
              uint64_t pts = 0xFFFFFFFFFFFFFFFFull;
-@@ -545,6 +570,7 @@ namespace ps2_stubs
+             uint64_t dts = 0xFFFFFFFFFFFFFFFFull;
+             std::vector<MpegRegisteredCallback> callbacks;
++            uint32_t packetBytes = 0u;
++            uint32_t demuxBytes = 0u;
++            uint64_t generation = 0u;
+         };
+ 
+         struct MpegStubState
+@@ -545,6 +573,7 @@ namespace ps2_stubs
          };
  
          std::mutex g_mpeg_stub_mutex;
@@ -3439,7 +3447,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          constexpr uint32_t kMpegPictureWaitType = 1u;
          MpegStubState g_mpeg_stub_state;
  
-@@ -552,8 +578,7 @@ namespace ps2_stubs
+@@ -552,8 +581,7 @@ namespace ps2_stubs
          constexpr uint32_t kStubMovieWidth = 320u;
          constexpr uint32_t kStubMovieHeight = 240u;
          constexpr uint32_t kMpegStrM2V = 0u;
@@ -3449,7 +3457,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          constexpr uint8_t kMpegPackHeader = 0xBAu;
          constexpr uint8_t kMpegSystemHeader = 0xBBu;
          constexpr uint8_t kMpegProgramEnd = 0xB9u;
-@@ -562,6 +587,55 @@ namespace ps2_stubs
+@@ -562,6 +590,55 @@ namespace ps2_stubs
          constexpr size_t kStartCodeNotFound = std::numeric_limits<size_t>::max();
          constexpr uint32_t kMpegCallbackDataSize = 0x20u;
  
@@ -3505,7 +3513,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          uint64_t mpegPictureIntervalQ32(uint8_t frameRateCode, uint8_t frameRateExtensionN = 0u, uint8_t frameRateExtensionD = 0u)
          {
              uint64_t frameRateNumerator = 0u;
-@@ -1006,7 +1080,7 @@ namespace ps2_stubs
+@@ -1006,7 +1083,7 @@ namespace ps2_stubs
  
          void flushDecoderIfEnded(MpegPlaybackState &playback)
          {
@@ -3514,7 +3522,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
              {
                  playback.decoder->flush(playback.decodedFrames);
              }
-@@ -1019,6 +1093,11 @@ namespace ps2_stubs
+@@ -1019,6 +1096,11 @@ namespace ps2_stubs
                  return;
              }
  
@@ -3526,7 +3534,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
              const uint32_t feedEsIdx = g_mpeg_stub_state.feedEsTraceCount++;
              if (feedEsIdx < 32u)
              {
-@@ -1060,6 +1139,12 @@ namespace ps2_stubs
+@@ -1060,6 +1142,12 @@ namespace ps2_stubs
                      playback.videoSequenceSyncBuffer.size());
                  if (sequenceHeader == kStartCodeNotFound)
                  {
@@ -3539,7 +3547,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                      return;
                  }
  
-@@ -1099,6 +1184,11 @@ namespace ps2_stubs
+@@ -1099,6 +1187,11 @@ namespace ps2_stubs
  
              if (!playback.decoder->feed(data, size, playback.decodedFrames, pts90k, dts90k))
              {
@@ -3551,7 +3559,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                  playback.decoder.reset();
                  playback.waitingForVideoSequenceHeader = true;
                  playback.videoSequenceSyncBuffer.clear();
-@@ -1108,6 +1198,54 @@ namespace ps2_stubs
+@@ -1108,6 +1201,54 @@ namespace ps2_stubs
  
              playback.videoSequenceSyncBuffer.clear();
              flushDecoderIfEnded(playback);
@@ -3606,7 +3614,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          }
  
          void erasePssPrefix(MpegPlaybackState &playback, size_t count)
-@@ -1131,7 +1269,9 @@ namespace ps2_stubs
+@@ -1131,7 +1272,9 @@ namespace ps2_stubs
              }
          }
  
@@ -3617,7 +3625,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          {
              std::vector<MpegRegisteredCallback> out;
              auto it = g_mpeg_stub_state.callbacksByMpeg.find(mpegAddr);
-@@ -1142,9 +1282,14 @@ namespace ps2_stubs
+@@ -1142,9 +1285,14 @@ namespace ps2_stubs
  
              for (const MpegRegisteredCallback &callback : it->second)
              {
@@ -3633,7 +3641,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                  }
              }
              return out;
-@@ -1152,6 +1297,7 @@ namespace ps2_stubs
+@@ -1152,6 +1300,7 @@ namespace ps2_stubs
  
          void queueStreamCallbackEvent(uint32_t mpegAddr,
                                        uint32_t streamType,
@@ -3641,7 +3649,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                                        uint32_t dataAddr,
                                        uint32_t len,
                                        std::vector<MpegStreamCallbackEvent> &callbackEvents,
-@@ -1161,11 +1307,33 @@ namespace ps2_stubs
+@@ -1161,11 +1310,33 @@ namespace ps2_stubs
              MpegStreamCallbackEvent event{};
              event.mpegAddr = mpegAddr;
              event.streamType = streamType;
@@ -3676,7 +3684,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
              if (!event.callbacks.empty())
              {
                  callbackEvents.push_back(std::move(event));
-@@ -1325,13 +1493,14 @@ namespace ps2_stubs
+@@ -1325,13 +1496,14 @@ namespace ps2_stubs
                              queueStreamCallbackEvent(
                                  mpegAddr,
                                  kMpegStrM2V,
@@ -3692,7 +3700,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                              playback,
                              buffer.data() + payloadStart,
                              packetEnd - payloadStart,
-@@ -1343,19 +1512,30 @@ namespace ps2_stubs
+@@ -1343,24 +1515,44 @@ namespace ps2_stubs
                  {
                      const MpegPesHeader pes = parsePesHeader(buffer.data(), packetEnd);
                      const size_t payloadStart = pes.payloadOffset;
@@ -3716,6 +3724,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                      {
 +                        // Retain the 4-byte private substream header: game callbacks
 +                        // consume it and begin their audio copy at dataAddr + 4.
++                        const size_t eventsBefore = callbackEvents.size();
                          queueStreamCallbackEvent(
                              mpegAddr,
 -                            kMpegStrPCM,
@@ -3732,7 +3741,20 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                              playback.pssGuestAddrs[payloadStart],
                              static_cast<uint32_t>(packetEnd - payloadStart),
                              callbackEvents,
-@@ -1396,21 +1576,11 @@ namespace ps2_stubs
+                             pes.pts90k,
+                             pes.dts90k);
++                        if (!finalChunk && callbackEvents.size() != eventsBefore) {
++                            // The callback may reject a full packet when its audio
++                            // ring is full. Finish it before consuming another PES.
++                            callbackEvents.back().packetBytes = static_cast<uint32_t>(packetEnd);
++                            callbackEvents.back().generation = playback.cdStreamGeneration;
++                            erasePssPrefix(playback, packetEnd);
++                            return;
++                        }
+                     }
+                 }
+ 
+@@ -1396,21 +1588,11 @@ namespace ps2_stubs
  
          bool mpegDemuxBackpressured(const MpegPlaybackState &playback)
          {
@@ -3758,7 +3780,28 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          }
  
          void recordCdStreamBytesDemuxedUnlocked(
-@@ -1583,7 +1753,8 @@ namespace ps2_stubs
+@@ -1466,7 +1648,19 @@ namespace ps2_stubs
+             {
+                 playback.pssGuestAddrs.push_back(guestAddr + static_cast<uint32_t>(i));
+             }
+-            processPssBuffer(mpegAddr, playback, callbackEvents);
++        }
++
++        // Leave incomplete/rejected PES bytes in the caller's input ring. Reporting
++        // them consumed lets CD refill overwrite bytes still needed by callbacks.
++        size_t demuxAppendedBytes(uint32_t mpegAddr, MpegPlaybackState &playback,
++                                  size_t appended, std::vector<MpegStreamCallbackEvent> &events) {
++            processPssBuffer(mpegAddr, playback, events);
++            const size_t remaining = playback.pssBuffer.size();
++            const size_t consumed = appended >= remaining ? appended - remaining : 0u;
++            erasePssPrefix(playback, remaining);
++            if (!events.empty() && events.back().packetBytes != 0u)
++                events.back().demuxBytes = static_cast<uint32_t>(consumed);
++            return consumed;
+         }
+ 
+         size_t appendGuestBytes(uint32_t mpegAddr,
+@@ -1583,7 +1777,8 @@ namespace ps2_stubs
                                           R5900Context *callerCtx,
                                           PS2Runtime *runtime,
                                           const MpegStreamCallbackEvent &event,
@@ -3768,7 +3811,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          {
              if (!rdram || !callerCtx || !runtime || callback.func == 0u || !runtime->hasFunction(callback.func))
              {
-@@ -1606,24 +1777,28 @@ namespace ps2_stubs
+@@ -1606,24 +1801,52 @@ namespace ps2_stubs
              SET_GPR_U32(&callbackCtx, 5, cbDataAddr);
              SET_GPR_U32(&callbackCtx, 6, callback.data);
              SET_GPR_U32(&callbackCtx, 7, 0u);
@@ -3781,8 +3824,34 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
 -            invocation.kind = GuestInvocationKind::RpcCallback;
 +            invocation.kind = currentSequence ? GuestInvocationKind::HleCall : GuestInvocationKind::RpcCallback;
              invocation.context = callbackCtx;
-             invocation.onComplete = [runtime, cbDataAddr](const R5900Context &, R5900Context &)
-             {
+-            invocation.onComplete = [runtime, cbDataAddr](const R5900Context &, R5900Context &)
+-            {
++            invocation.onComplete = [runtime, cbDataAddr, event](const R5900Context &done, R5900Context &parent)
++            {
++                if (event.packetBytes != 0u) {
++                    const bool accepted = getRegU32(&done, 2) != 0u;
++                    const uint32_t consumed = event.demuxBytes - (accepted ? 0u : event.packetBytes);
++                    // HleCall has returned to the demux caller's context. A zero
++                    // callback result leaves this PES unconsumed for the next call.
++                    setReturnS32(&parent, static_cast<int32_t>(consumed));
++                    std::vector<uint32_t> completed;
++                    bool changed = false;
++                    {
++                        std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
++                        auto it = g_mpeg_stub_state.playbackByMpeg.find(event.mpegAddr);
++                        if (it != g_mpeg_stub_state.playbackByMpeg.end() &&
++                            it->second.cdStreamGeneration == event.generation)
++                            recordCdStreamBytesDemuxedUnlocked(consumed, completed, changed);
++                    }
++                    for (uint32_t id : completed)
++                        runtime->eeScheduler().completeExternalWait(kMpegPictureWaitType, id, KE_OK);
++                    if (tarzanMpegTraceEnabled()) {
++                        static unsigned traceCount = 0;
++                        if (traceCount++ < 256)
++                            std::cerr << "[tarzan-mpeg-audio-result] bytes=" << event.len
++                                      << " accepted=" << accepted << " consumed=" << consumed << "\n";
++                    }
++                }
                  runtime->guestFree(cbDataAddr);
              };
 -            runtime->eeScheduler().queueInvocation(std::move(invocation));
@@ -3801,7 +3870,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          {
              if (events.empty())
              {
-@@ -1634,7 +1809,7 @@ namespace ps2_stubs
+@@ -1634,7 +1857,7 @@ namespace ps2_stubs
              {
                  for (const MpegRegisteredCallback &callback : event.callbacks)
                  {
@@ -3810,7 +3879,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                  }
              }
          }
-@@ -1649,7 +1824,13 @@ namespace ps2_stubs
+@@ -1649,7 +1872,13 @@ namespace ps2_stubs
                  return;
              }
  
@@ -3825,7 +3894,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          }
  
          void writeBlankMpegFrame(uint8_t *rdram, uint32_t destAddr, uint32_t width, uint32_t height)
-@@ -1938,13 +2119,49 @@ namespace ps2_stubs
+@@ -1938,13 +2167,49 @@ namespace ps2_stubs
          const uint32_t callbackFunc = getRegU32(ctx, 7);
          const uint32_t callbackData = readAbiArg4(rdram, ctx);
  
@@ -3878,7 +3947,18 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
      }
  
      void sceMpegClearRefBuff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-@@ -2141,12 +2358,16 @@ namespace ps2_stubs
+@@ -2098,7 +2363,9 @@ namespace ps2_stubs
+             if (!backpressured)
+             {
+                 consumed = appendGuestBytes(mpegAddr, playback, rdram, dataAddr, byteCount, callbackEvents);
+-                recordCdStreamBytesDemuxedUnlocked(consumed, completedMpegIds, eofChanged);
++                consumed = demuxAppendedBytes(mpegAddr, playback, consumed, callbackEvents);
++                if (callbackEvents.empty() || callbackEvents.back().packetBytes == 0u)
++                    recordCdStreamBytesDemuxedUnlocked(consumed, completedMpegIds, eofChanged);
+             }
+             decodedCount = playback.decodedFrames.size();
+             traceIdx = g_mpeg_stub_state.demuxPssTraceCount++;
+@@ -2141,12 +2408,16 @@ namespace ps2_stubs
              });
          }
  
@@ -3896,7 +3976,18 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          static std::atomic<uint32_t> s_demuxRingEntryCount{0u};
          const uint32_t entryIdx = s_demuxRingEntryCount.fetch_add(1u, std::memory_order_relaxed);
          if (entryIdx < 4u)
-@@ -2235,8 +2456,18 @@ namespace ps2_stubs
+@@ -2189,7 +2460,9 @@ namespace ps2_stubs
+                     ringBaseAddr,
+                     ringSize,
+                     callbackEvents);
+-                recordCdStreamBytesDemuxedUnlocked(consumed, completedMpegIds, eofChanged);
++                consumed = demuxAppendedBytes(mpegAddr, playback, consumed, callbackEvents);
++                if (callbackEvents.empty() || callbackEvents.back().packetBytes == 0u)
++                    recordCdStreamBytesDemuxedUnlocked(consumed, completedMpegIds, eofChanged);
+             }
+             decodedCount = playback.decodedFrames.size();
+             traceIdx = g_mpeg_stub_state.demuxRingTraceCount++;
+@@ -2235,8 +2508,18 @@ namespace ps2_stubs
              });
          }
  
@@ -3916,7 +4007,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
      }
  
      void sceMpegDispCenterOffX(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-@@ -2280,8 +2511,52 @@ namespace ps2_stubs
+@@ -2280,8 +2563,52 @@ namespace ps2_stubs
          setReturnU32(ctx, getPlaybackState(mpegAddr).decodeMode);
      }
  
@@ -3969,7 +4060,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
          const uint32_t mpegAddr = getRegU32(ctx, 4);
          const uint32_t imageAddr = getRegU32(ctx, 5);
          uint32_t width = kStubMovieWidth;
-@@ -2292,6 +2567,57 @@ namespace ps2_stubs
+@@ -2292,6 +2619,57 @@ namespace ps2_stubs
          {
              std::unique_lock<std::mutex> lock(g_mpeg_stub_mutex);
              MpegPlaybackState &playback = getPlaybackState(mpegAddr);
@@ -4027,7 +4118,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
              if (playback.decodedFrames.empty() &&
                  !g_mpeg_stub_state.currentCdStreamEofSeen &&
                  !playback.streamEnded &&
-@@ -2329,6 +2655,15 @@ namespace ps2_stubs
+@@ -2329,6 +2707,15 @@ namespace ps2_stubs
                  const MpegDecodedFrame &nextFrame = playback.decodedFrames.front();
                  const uint64_t frameIntervalQ32 = decodedFrameIntervalQ32(playback, nextFrame);
                  uint64_t presentationTargetQ32 = presentationTickForFrame(playback, nextFrame, currentTickQ32);
@@ -4043,7 +4134,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
  
                  if (currentTickQ32 > presentationTargetQ32 && currentTickQ32 - presentationTargetQ32 >= frameIntervalQ32)
                  {
-@@ -2344,6 +2679,11 @@ namespace ps2_stubs
+@@ -2344,6 +2731,11 @@ namespace ps2_stubs
                  if (currentTickQ32 < presentationTargetQ32)
                  {
                      const uint64_t eligibleTick = (presentationTargetQ32 + kPictureClockOne - 1u) >> 32u;
@@ -4055,7 +4146,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                      lock.unlock();
                      runtime->eeScheduler().waitVSync(
                          eligibleTick - 1u,
-@@ -2360,6 +2700,7 @@ namespace ps2_stubs
+@@ -2360,6 +2752,7 @@ namespace ps2_stubs
  
                  frame = std::move(playback.decodedFrames.front());
                  playback.decodedFrames.pop_front();
@@ -4063,7 +4154,7 @@ index 44eaef4d9ccb39201587080b983be3fbb78992c0..2fccc22b92b5958e75ff21d796af5043
                  playback.width = static_cast<uint32_t>(frame.width);
                  playback.height = static_cast<uint32_t>(frame.height);
                  width = playback.width;
-@@ -2471,6 +2812,26 @@ namespace ps2_stubs
+@@ -2471,6 +2864,26 @@ namespace ps2_stubs
              presentationEnd == std::numeric_limits<uint64_t>::max() ||
              currentTickQ32 >= presentationEnd;
  
@@ -8746,7 +8837,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..aeee6bfadb2f187838c808554dba4448
              appendU64(packet, 0x0Eull);
              appendU64(packet, 0x8000008000ull); // TEXA, harmless setup preceding the IMAGE tag.
 diff --git a/ps2xTest/src/ps2_runtime_expansion_tests.cpp b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
-index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab6f8eee69 100644
+index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc3825974c34e 100644
 --- a/ps2xTest/src/ps2_runtime_expansion_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
 @@ -18,6 +18,9 @@
@@ -8759,7 +8850,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
  #include <cstdint>
  #include <cstring>
  #include <exception>
-@@ -180,6 +183,16 @@ namespace
+@@ -180,6 +183,58 @@ namespace
      std::atomic<uint32_t> gMpegStreamCallbackLen{0u};
      std::atomic<uint32_t> gMpegStreamCallbackUserData{0u};
      constexpr uint32_t kMpegCallbackStopPc = 0x00124FF0u;
@@ -8773,10 +8864,52 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
 +    std::array<std::atomic<uint32_t>, 2> gMpegDemuxOrderSp{};
 +    std::atomic<uint32_t> gMpegDemuxOrderResumeCount{0u};
 +    std::atomic<uint32_t> gMpegDemuxOrderResumeV0{0u};
++    constexpr uint32_t kMpegRetryMainPc = 0x00125200u;
++    constexpr uint32_t kMpegRetryResumePc = 0x00125204u;
++    constexpr uint32_t kMpegRetryDonePc = 0x00125208u;
++    constexpr uint32_t kMpegRetryCallbackPc = 0x0012520Cu;
++    constexpr uint32_t kMpegRetryHandle = 0x00125210u;
++    constexpr uint32_t kMpegRetryData = 0x00125220u;
++    std::atomic<uint32_t> gMpegRetryCallbackCount{0u};
++    std::atomic<uint32_t> gMpegRetryFirstReturn{UINT32_MAX};
++    std::atomic<uint32_t> gMpegRetryFinalV0{0u};
++
++    void testMpegRetryCallback(uint8_t *, R5900Context *ctx, PS2Runtime *)
++    {
++        const uint32_t call = gMpegRetryCallbackCount.fetch_add(1u, std::memory_order_acq_rel);
++        setRegU32(*ctx, 2, call == 0u ? 0u : 1u);
++        ctx->pc = 0u;
++    }
++
++    void testMpegRetryMain(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        ctx->pc = kMpegRetryResumePc;
++        setRegU32(*ctx, 4, kMpegRetryHandle); setRegU32(*ctx, 5, kMpegRetryData);
++        setRegU32(*ctx, 6, 14u); setRegU32(*ctx, 7, kMpegRetryData);
++        setRegU32(*ctx, 8, 14u);
++        ps2_stubs::sceMpegDemuxPssRing(rdram, ctx, runtime);
++    }
++
++    void testMpegRetryResume(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        gMpegRetryFirstReturn.store(::getRegU32(ctx, 2), std::memory_order_release);
++        ctx->pc = kMpegRetryDonePc;
++        setRegU32(*ctx, 4, kMpegRetryHandle); setRegU32(*ctx, 5, kMpegRetryData);
++        setRegU32(*ctx, 6, 14u); setRegU32(*ctx, 7, kMpegRetryData);
++        setRegU32(*ctx, 8, 14u);
++        ps2_stubs::sceMpegDemuxPssRing(rdram, ctx, runtime);
++    }
++
++    void testMpegRetryDone(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        gMpegRetryFinalV0.store(::getRegU32(ctx, 2), std::memory_order_release);
++        ctx->pc = 0u;
++        runtime->requestStop();
++    }
      std::atomic<int32_t> gMpegWaitResult{-999};
      std::atomic<uint32_t> gMpegWaitStage{0u};
      std::atomic<uint32_t> gMpegNoDuplicateStage{0u};
-@@ -245,6 +258,50 @@ namespace
+@@ -245,6 +300,50 @@ namespace
          runtime->requestStop();
      }
  
@@ -8827,7 +8960,16 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
      void testMpegWaitProducer(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
      {
          gMpegWaitStage.store(2u, std::memory_order_release);
-@@ -507,6 +564,48 @@ void register_ps2_runtime_expansion_tests()
+@@ -305,6 +404,8 @@ namespace
+         gMpegStreamCallbackLen.store(len, std::memory_order_release);
+         gMpegStreamCallbackUserData.store(::getRegU32(ctx, 6), std::memory_order_release);
+         gMpegStreamCallbackCount.fetch_add(1u, std::memory_order_acq_rel);
++        // Stream callback return value controls whether the PES is consumed.
++        setRegU32(*ctx, 2, 1u);
+         ctx->pc = 0u;
+         runtime->requestStop();
+     }
+@@ -507,6 +608,48 @@ void register_ps2_runtime_expansion_tests()
                        "ContinueToTarget should remain a non-stopping debug policy");
          });
  
@@ -8876,7 +9018,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
          tc.Run("MPEG init and callback stubs return success instead of TODO errors", [](TestCase &t)
          {
              std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
-@@ -558,6 +657,7 @@ void register_ps2_runtime_expansion_tests()
+@@ -558,6 +701,7 @@ void register_ps2_runtime_expansion_tests()
              constexpr uint32_t kCallbackEntry = 0x00124000u;
              constexpr uint32_t kVideoUserData = 0x11223344u;
              constexpr uint32_t kAudioUserData = 0x55667788u;
@@ -8884,7 +9026,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
              constexpr uint32_t kVideoPacketAddr = 0x00128000u;
              constexpr uint32_t kAudioPacketAddr = 0x00129000u;
  
-@@ -580,12 +680,12 @@ void register_ps2_runtime_expansion_tests()
+@@ -580,12 +724,12 @@ void register_ps2_runtime_expansion_tests()
                  ps2_stubs::sceMpegAddCallback(rdram.data(), &addCtx, &runtime);
              };
  
@@ -8899,7 +9041,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
                  setRegU32(addCtx, 7, kCallbackEntry);
                  setRegU32(addCtx, 8, userData);
                  ps2_stubs::sceMpegAddStrCallback(rdram.data(), &addCtx, &runtime);
-@@ -606,8 +706,10 @@ void register_ps2_runtime_expansion_tests()
+@@ -606,8 +750,10 @@ void register_ps2_runtime_expansion_tests()
  
              registerGenericCallback(0u, 0xDEAD0000u);
              registerGenericCallback(2u, 0xDEAD0002u);
@@ -8912,7 +9054,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
  
              const std::vector<uint8_t> videoPayload = {
                  0x00u, 0x00u, 0x01u, 0xB3u, 0x14u, 0x00u, 0xF0u, 0x13u};
-@@ -640,7 +742,38 @@ void register_ps2_runtime_expansion_tests()
+@@ -640,7 +786,38 @@ void register_ps2_runtime_expansion_tests()
              t.Equals(gMpegStreamCallbackUserData.load(std::memory_order_acquire), kVideoUserData,
                       "video callback should receive registered user data");
  
@@ -8952,7 +9094,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
              const uint32_t audioPacketSize = writePesPacket(kAudioPacketAddr, 0xBDu, audioPayload);
  
              gMpegStreamCallbackCount.store(0u, std::memory_order_release);
-@@ -666,7 +799,24 @@ void register_ps2_runtime_expansion_tests()
+@@ -666,7 +843,24 @@ void register_ps2_runtime_expansion_tests()
                       static_cast<uint32_t>(audioPayload.size()),
                       "audio callback data should report PES payload length");
              t.Equals(gMpegStreamCallbackUserData.load(std::memory_order_acquire), kAudioUserData,
@@ -8978,10 +9120,129 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..14ea25eb034f59a9dcf993a450c9b8ab
  
              ps2_stubs::notifyMpegCdStreamEof();
  
-@@ -746,6 +896,175 @@ void register_ps2_runtime_expansion_tests()
+@@ -746,6 +940,294 @@ void register_ps2_runtime_expansion_tests()
              runtime.requestStop();
          });
  
++        tc.Run("MPEG rejected audio PES is retried by the same guest thread", [](TestCase &t)
++        {
++            PS2Runtime runtime;
++            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
++            ps2_stubs::resetMpegStubState();
++            const uint8_t packet[14] = {0u, 0u, 1u, 0xBDu, 0u, 8u, 0x80u, 0u, 0u,
++                                         0xFFu, 0xA1u, 0u, 0u, 0x55u};
++            std::memcpy(rdram.data() + kMpegRetryData, packet, sizeof(packet));
++            runtime.registerFunction(kMpegRetryMainPc, &testMpegRetryMain);
++            runtime.registerFunction(kMpegRetryResumePc, &testMpegRetryResume);
++            runtime.registerFunction(kMpegRetryDonePc, &testMpegRetryDone);
++            runtime.registerFunction(kMpegRetryCallbackPc, &testMpegRetryCallback);
++            R5900Context main{}; main.pc = kMpegRetryMainPc;
++            runtime.eeScheduler().reset(rdram.data(), main);
++            R5900Context add{};
++            setRegU32(add, 4, kMpegRetryHandle); setRegU32(add, 5, 3u);
++            setRegU32(add, 6, 0u); setRegU32(add, 7, kMpegRetryCallbackPc);
++            setRegU32(add, 8, 0xABCDu);
++            ps2_stubs::sceMpegAddStrCallback(rdram.data(), &add, &runtime);
++            gMpegRetryCallbackCount.store(0u, std::memory_order_release);
++            gMpegRetryFirstReturn.store(UINT32_MAX, std::memory_order_release);
++            gMpegRetryFinalV0.store(UINT32_MAX, std::memory_order_release);
++            runtime.eeScheduler().run();
++            t.Equals(gMpegRetryCallbackCount.load(std::memory_order_acquire), 2u,
++                     "the registered guest callback should reject once and accept on retry");
++            t.Equals(gMpegRetryFinalV0.load(std::memory_order_acquire), sizeof(packet),
++                     "rejection should leave the PES available and acceptance should consume it");
++            t.Equals(gMpegRetryFirstReturn.load(std::memory_order_acquire), 0u,
++                     "the rejected callback must return zero consumed bytes to its guest caller");
++        });
++
++        tc.Run("MPEG audio PES transactions preserve partial, unaligned, and wrapped input", [](TestCase &t)
++        {
++            PS2Runtime runtime;
++            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
++            ps2_stubs::resetMpegStubState();
++            constexpr uint32_t kMpeg = 0x00123000u;
++            constexpr uint32_t kCallback = 0x00124000u;
++            constexpr uint32_t kIdlePc = 0x00124FF0u;
++            constexpr uint32_t kRing = 0x00128000u;
++            runtime.registerFunction(kCallback, &testRecordMpegStreamCallback);
++            runtime.registerFunction(kIdlePc, &testStopAfterMpegCallback);
++            R5900Context idle{}; idle.pc = kIdlePc;
++            runtime.eeScheduler().reset(rdram.data(), idle);
++            R5900Context add{};
++            setRegU32(add, 4, kMpeg); setRegU32(add, 5, 3u);
++            setRegU32(add, 6, 0u); setRegU32(add, 7, kCallback);
++            setRegU32(add, 8, 0x55667788u);
++            ps2_stubs::sceMpegAddStrCallback(rdram.data(), &add, &runtime);
++            auto registerAudio = [&]()
++            {
++                R5900Context registration{};
++                setRegU32(registration, 4, kMpeg); setRegU32(registration, 5, 3u);
++                setRegU32(registration, 6, 0u); setRegU32(registration, 7, kCallback);
++                setRegU32(registration, 8, 0x55667788u);
++                ps2_stubs::sceMpegAddStrCallback(rdram.data(), &registration, &runtime);
++            };
++
++            auto makePes = [](uint8_t *dst, const std::vector<uint8_t> &payload)
++            {
++                const uint16_t length = static_cast<uint16_t>(payload.size() + 3u);
++                const uint8_t header[] = {0u, 0u, 1u, 0xBDu,
++                    static_cast<uint8_t>(length >> 8u), static_cast<uint8_t>(length),
++                    0x80u, 0u, 0u};
++                std::memcpy(dst, header, sizeof(header));
++                std::memcpy(dst + sizeof(header), payload.data(), payload.size());
++                return static_cast<uint32_t>(sizeof(header) + payload.size());
++            };
++            auto demux = [&](uint32_t addr, uint32_t bytes, uint32_t ringBase, uint32_t ringSize)
++            {
++                R5900Context idleContext{}; idleContext.pc = kIdlePc;
++                runtime.eeScheduler().reset(rdram.data(), idleContext);
++                R5900Context ctx{};
++                setRegU32(ctx, 4, kMpeg); setRegU32(ctx, 5, addr);
++                setRegU32(ctx, 6, bytes); setRegU32(ctx, 7, ringBase);
++                setRegU32(ctx, 8, ringSize);
++                ps2_stubs::sceMpegDemuxPssRing(rdram.data(), &ctx, &runtime);
++                runtime.eeScheduler().run();
++                return ::getRegU32(&ctx, 2);
++            };
++            const std::vector<uint8_t> payloadA{0xFFu, 0xA1u, 0u, 0u, 0x11u};
++            const std::vector<uint8_t> payloadB{0xFFu, 0xA1u, 0u, 0u, 0x22u, 0x33u, 0x44u};
++            const uint32_t sizeA = makePes(rdram.data() + kRing, payloadA);
++            const uint32_t sizeB = makePes(rdram.data() + kRing + sizeA, payloadB);
++            gMpegStreamCallbackCount.store(0u, std::memory_order_release);
++            t.Equals(demux(kRing, sizeA + sizeB, kRing, sizeA + sizeB), sizeA,
++                     "the first callback transaction should stop after the first PES in a multi-PES input");
++            t.Equals(demux(kRing + sizeA, sizeB, kRing, sizeA + sizeB), sizeB,
++                     "the unconsumed tail should be available at the first PES's consumed-byte offset");
++            t.Equals(gMpegStreamCallbackCount.load(std::memory_order_acquire), 2u,
++                     "both non-16-byte-aligned PES payloads should invoke the registered callback");
++
++            ps2_stubs::resetMpegStubState();
++            registerAudio();
++            const uint32_t partialSize = makePes(rdram.data() + kRing, payloadA);
++            gMpegStreamCallbackCount.store(0u, std::memory_order_release);
++            t.Equals(demux(kRing, 10u, kRing, partialSize), 0u,
++                     "an incomplete PES must report zero so the caller retains the full input span");
++            t.Equals(gMpegStreamCallbackCount.load(std::memory_order_acquire), 0u,
++                     "an incomplete PES must not dispatch its callback");
++            t.Equals(demux(kRing, partialSize, kRing, partialSize), partialSize,
++                     "after zero progress, resubmitting the complete PES should consume it once");
++            t.Equals(gMpegStreamCallbackCount.load(std::memory_order_acquire), 1u,
++                     "completing the partial PES should dispatch exactly once");
++
++            ps2_stubs::resetMpegStubState();
++            registerAudio();
++            constexpr uint32_t kWrapBase = 0x0012A000u;
++            constexpr uint32_t kWrapSize = 32u;
++            const uint32_t wrapPacketSize = makePes(rdram.data() + kWrapBase + 24u, payloadA);
++            std::memcpy(rdram.data() + kWrapBase, rdram.data() + kWrapBase + kWrapSize,
++                        wrapPacketSize - 8u);
++            gMpegStreamCallbackCount.store(0u, std::memory_order_release);
++            t.Equals(demux(kWrapBase + 24u, wrapPacketSize, kWrapBase, kWrapSize), wrapPacketSize,
++                     "a PES crossing the ring boundary should remain fully consumable");
++            t.Equals(gMpegStreamCallbackCount.load(std::memory_order_acquire), 1u,
++                     "the wrapped PES should be retained intact for its callback");
++        });
++
 +        tc.Run("MPEG demux keeps interleaved audio flowing at the video lead limit", [](TestCase &t)
 +        {
 +            PS2Runtime runtime;

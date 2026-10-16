@@ -11,7 +11,7 @@ completed source decompilation or a verified complete game port.
 | Arithmetic | Scalar SQRT.S incorrectly read Fs instead of Ft; corrected compiler and active generated sites. DIV/RSQRT zero/denormal handling corrected at tested sites. |
 | VU1 | 13 captured microprogram images have native paths. 914 captured replay states matched; 213,759 live differential calls recorded no mismatch. Unknown later images can fall back. |
 | IOP / VU0 | Interpreter paths remain; these are explicit gaps toward fully native subsystem execution. |
-| Audio | Producer-side SoundTouch removed steady-state ring drops in measured story capture. Empty outside-thread event waits were fixed and regression-tested. Upstream SoundTouch window settings and bounded burst correction produce zero overrun across an actual 8-second startup capture; only initial buffer-fill silence remains. User reports severe distortion during the first ~5 seconds and the pre-mission cutscene despite those transport improvements. Audible movie quality is NOT fixed; SPU stream playback is under investigation. |
+| Audio | Found movie PES loss: MPEG ignored zero (buffer-full) callback results and discarded whole audio packets. Fixed packet-by-packet acceptance/retry, incomplete packets and ring wrapping. Startup: 19,986 non-silent blocks align with source; story onset: 51,428 blocks over 15 seconds align with the selected source stream, with no decoded clipping. Five focused MPEG tests pass. Build 3 installed; final listening confirmation remains pending. See `docs/audio.md`. |
 | Saves | Native host-directory card save/reload exercised for slot A at 0%; complete card semantics and all checkpoints unverified. Saves live outside the bundle. |
 | Input / UI | Mac keyboard remapping exists. Resize with 4:3 content and native fullscreen implemented; installed bundle resize/fullscreen and normal Quit checked. PS5 hardware validation pending. |
 | Performance | Prior native run ~24.2 DISPFB2 changes/s. Instrumented same-process 50-FPS-patch A/B remained ~22 changes/s. These are framebuffer swaps, not proof of simulation speed or unique frames. |
@@ -44,8 +44,8 @@ first-mission evidence must never be presented as whole-game completion.
 
 ## Next acceptance gates
 
-1. Fix and verify startup audio without hiding it with a mute/gain workaround.
-2. Signed build 2 is installed in Applications; retain resize/fullscreen and clean Quit behavior.
+1. Obtain listening confirmation for startup and pre-mission audio in build 3; investigate the separate ~93 ms initial stream pre-roll discrepancy against original playback.
+2. Signed build 3 is installed in Applications; retain resize/fullscreen and clean Quit behavior.
 3. Profile CPU hotspots, preserve original timing, then re-evaluate the published
    PAL 50 FPS patch with simulation/movement and audio synchronization checks.
 4. Audit title-used runtime bindings; validate each mission, cutscene, menu,

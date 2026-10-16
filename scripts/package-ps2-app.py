@@ -69,7 +69,8 @@ def rpaths(path):
 def ensure_app_dependency_closure(runner, bridge, runtime_dir, bundle_runner):
     image_rpaths = {
         Path(runner): rpaths(runner), Path(bridge): rpaths(bridge),
-        runtime_dir / "libc++.1.dylib": [], runtime_dir / "libc++abi.1.dylib": [],
+        runtime_dir / "libc++.1.dylib": rpaths(runtime_dir / "libc++.1.dylib"),
+        runtime_dir / "libc++abi.1.dylib": rpaths(runtime_dir / "libc++abi.1.dylib"),
     }
     app_paths = rpaths(bundle_runner)
     images = list(image_rpaths)
@@ -104,7 +105,7 @@ def write_info_plist(contents):
         "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": "org.rrv.tarzan-freeride-ps2",
         "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": "Tarzan Freeride PS2",
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "2", "LSMinimumSystemVersion": "11.0",
+        "CFBundleVersion": "3", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
         "NSPrincipalClass": "NSApplication",
     }
@@ -219,6 +220,9 @@ def main():
 
         remove_nonbundle_rpaths(bundled_runner)
         remove_nonbundle_rpaths(bundled_bridge)
+        for library in (runtime / "libc++.1.dylib", runtime / "libc++abi.1.dylib"):
+            remove_nonbundle_rpaths(library)
+            run(["install_name_tool", "-add_rpath", "@loader_path/", library])
         run(["install_name_tool", "-id", "@rpath/libc++.1.dylib", runtime / "libc++.1.dylib"])
         run(["install_name_tool", "-id", "@rpath/libc++abi.1.dylib", runtime / "libc++abi.1.dylib"])
         run(["install_name_tool", "-id", "@rpath/" + BRIDGE_NAME, bundled_bridge])

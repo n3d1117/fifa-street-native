@@ -159,7 +159,7 @@ void dump_dma_payload(int core, uint16_t* ram, uint32_t madr, uint32_t halfwords
     const uint16_t spdifOut = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + 0x7C0u);
     const uint16_t spdifMode = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + 0x7C6u);
     const uint16_t tsa = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base +
-                                         (core == 0 ? 0x1A8u : 0x5A8u));
+                                         (core == 0 ? 0x1AAu : 0x5AAu));
     const uint32_t fields32[] = {kRecordMagic, static_cast<uint32_t>(core), direction,
                                  madr, halfwords};
     const uint64_t cycle = iop_cycle;
@@ -368,8 +368,8 @@ void write16(uint32_t phys_addr, uint16_t value, uint64_t iop_cycle) {
                     const uint16_t pitch = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + paramBase + 4u);
                     const uint16_t adsr1 = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + paramBase + 6u);
                     const uint16_t adsr2 = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + paramBase + 8u);
-                    const uint16_t ssa = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + addrBase);
-                    const uint16_t nax = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + addrBase + 8u);
+                    const uint16_t ssa = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + addrBase + 2u);
+                    const uint16_t nax = rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base + addrBase + 10u);
                     std::fprintf(stderr, "%s%u:%04x/%04x/%04x/%04x/%04x",
                                  first ? "" : ",", voice, pitch, adsr1, adsr2, ssa, nax);
                     first = false;
@@ -431,7 +431,7 @@ void dma_start(int core, uint16_t* ram, uint32_t madr, uint32_t halfwords,
                      traceIndex, noisyFollowup ? 1u : 0u, core, to_spu2 ? "iop2spu" : "spu2iop",
                      static_cast<unsigned long long>(iop_cycle), madr, halfwords,
                      static_cast<unsigned>(rrv_spu2_read16(g_spu2, iop_cycle, kSpu2Base +
-                         (core == 0 ? 0x1A8u : 0x5A8u))), coreAttr, spdifOut, spdifMode);
+                         (core == 0 ? 0x1AAu : 0x5AAu))), coreAttr, spdifOut, spdifMode);
         const uint32_t sampleCount = std::min<uint32_t>(halfwords, 32u);
         for (uint32_t index = 0; index < sampleCount; ++index)
             std::fprintf(stderr, "%s%04x", index == 0 ? "" : ",", ram[index]);
@@ -453,7 +453,7 @@ void dma_start(int core, uint16_t* ram, uint32_t madr, uint32_t halfwords,
         std::fputc('\n', stderr);
     }
 
-    if (g_audio_noisy_window.load(std::memory_order_relaxed))
+    if (g_dma_dump_file)
         dump_dma_payload(core, ram, madr, halfwords, to_spu2, iop_cycle);
 
     g_dma[core] = {madr, madr + halfwords * 2u, true};
