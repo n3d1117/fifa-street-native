@@ -142,7 +142,7 @@ with (out / 'stdout.log').open('wb') as log:
         route.append((100,36))
     try:
         route_delay = 0.0
-        capture = Path('/tmp/tarzan-window-capture')
+        capture = ROOT / 'build/capture-window'
         for index, (second, key) in enumerate(route):
             target_second = second + route_delay
             while time.monotonic() - started < target_second and process.poll() is None:
@@ -187,16 +187,30 @@ with (out / 'stdout.log').open('wb') as log:
                     subprocess.run([str(capture), str(process.pid), str(out / 'story-audio-trigger'), '1'], check=False)
                     print('story audio capture armed', result['story_audio_capture'], flush=True)
             time.sleep(.2)
-        capture = Path('/tmp/tarzan-window-capture')
+        capture = ROOT / 'build/capture-window'
         if capture.is_file() and process.poll() is None:
             subprocess.run([str(capture), str(process.pid), str(out / 'window'), '3'], check=False)
     finally:
         if process.poll() is None:
-            process.terminate()
+            # Normal Quit services Metal teardown and writes deferred profiles.
+            # SIGTERM alone can be intercepted by the GS dependency's handlers.
+            quit_script = ('tell application "System Events" to tell (first process whose unix id is %d) '
+                           'to click menu item "Quit Tarzan PS2" of menu 1 of menu bar item 2 of menu bar 1') % process.pid
+            result['shutdown'] = 'app_menu'
+            try:
+                subprocess.run(['osascript', '-e', quit_script], capture_output=True, timeout=3, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
+                result['shutdown'] = 'signal_fallback'
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    result['shutdown'] = 'kill_fallback'
+                    process.kill()
+                    process.wait()
         result.update(exit_code=process.returncode, elapsed_seconds=round(time.monotonic() - started, 3))
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
