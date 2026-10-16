@@ -51,8 +51,10 @@ from vu1decode import (  # noqa: E402
     P_BRANCH, P_EFU, P_FDIV, P_XGKICK, VID, VIS, VIT, Pair, decode_pair, fnv1a64,
     lane_for_component, lower_name, lower_special, upper_name, upper_special)
 
-CODE_SIZE = 0x4000
-PC_MASK = 0x3FFF
+VU1_CODE_SIZE = 0x4000
+VU1_PC_MASK = 0x3FFF
+VU0_CODE_SIZE = 0x1000
+VU0_PC_MASK = 0x0FFF
 MAX_NODES = 60000
 
 
@@ -210,9 +212,16 @@ class Node:
 
 class Generator:
     def __init__(self, code: bytes, entries: List[int], name: str,
-                 dynamic_targets: Optional[Dict[int, List[int]]] = None):
-        if len(code) != CODE_SIZE:
-            raise GenError(f"image size {len(code)} != 16 KiB")
+                 dynamic_targets: Optional[Dict[int, List[int]]] = None,
+                 unit: str = 'vu1'):
+        if unit not in ('vu0', 'vu1'):
+            raise GenError(f"unknown VU unit {unit!r}")
+        self.unit = unit
+        self.code_size = VU0_CODE_SIZE if unit == 'vu0' else VU1_CODE_SIZE
+        self.pc_mask = VU0_PC_MASK if unit == 'vu0' else VU1_PC_MASK
+        self.data_mask = VU0_CODE_SIZE - 1 if unit == 'vu0' else 0x3FFF
+        if len(code) != self.code_size:
+            raise GenError(f"{unit.upper()} image size {len(code)} != {self.code_size // 1024} KiB")
         self.code = code
         self.entries = entries
         self.name = name
@@ -235,10 +244,10 @@ class Generator:
 
     def _find_link_labels(self) -> List[int]:
         labels = set()
-        for pc in range(0, CODE_SIZE, 8):
+        for pc in range(0, self.code_size, 8):
             p = decode_pair(self.code, pc)
             if not p.ibit and lower_name(p.lower) in ('BAL', 'JALR'):
-                labels.add((pc + 16) & PC_MASK)
+                labels.add((pc + 16) & self.pc_mask)
         return sorted(labels)
 
     def get_node(self, pc: int, state: AState, phase: str = 'pre') -> int:
@@ -284,7 +293,7 @@ class Generator:
     def build(self):
         for e in self.entries:
             try:
-                self.entry_nodes[e] = self.get_node(e & PC_MASK, AState())
+                self.entry_nodes[e] = self.get_node(e & self.pc_mask, AState())
             except GenError as ex:
                 self.failed_entries[e] = str(ex)
         while self.worklist:
@@ -315,6 +324,8 @@ class Generator:
         n.pair = p
         if p.reserved:
             raise GenError(f"reserved instruction reachable at pc 0x{n.pc:04x}: {p.text()}")
+        if self.unit == 'vu0':
+            self.validate_vu0_pair(p)
         if p.dbit or p.tbit:
             # With FBRST.DE/TE clear (the normal case) the interpreter ignores D/T bits, so the
             # native code does too. The image is flagged and the runtime dispatcher sends every
@@ -336,6 +347,33 @@ class Generator:
                 return
             m.advance(s0, n.stall_ops)
         self.exec_pair(n, p, m)
+
+    @staticmethod
+    def validate_vu0_pair(p: Pair):
+        """Keep VU0 output inside the audited arithmetic and LQI subset."""
+        if p.ibit:
+            raise GenError(f"VU0 immediate/I-bit pair is outside the supported subset at 0x{p.pc:04x}: {p.text()}")
+        if p.dbit or p.tbit:
+            raise GenError(f"VU0 D/T-bit behavior is outside the supported subset at 0x{p.pc:04x}: {p.text()}")
+
+        lower = lower_name(p.lower)
+        if lower not in ('NOP', 'LQI'):
+            raise GenError(f"VU0 lower op {lower} is outside the supported LQI/NOP subset at 0x{p.pc:04x}: {p.text()}")
+
+        upper = p.upper & 0x3F
+        name = upper_name(p.upper)
+        supported = name == 'NOP'
+        if upper <= 0x2F:
+            # Existing vector FMAC operations. MAX/MINI groups and opcodes use
+            # non-FMAC paths and are intentionally excluded from this subset.
+            non_fmac_ops = set(range(0x10, 0x18)) | {0x1D, 0x1F, 0x2B, 0x2F}
+            supported = supported or upper not in non_fmac_ops
+        else:
+            special = upper_special(p.upper)
+            supported = supported or special <= 0x0F or 0x18 <= special <= 0x1C or special == 0x1E or \
+                0x20 <= special <= 0x2A or 0x2C <= special <= 0x2E
+        if not supported:
+            raise GenError(f"VU0 upper op {name} is outside the supported FMAC/ACC/NOP subset at 0x{p.pc:04x}: {p.text()}")
 
     def exec_pair(self, n: Node, p: Pair, m: MState):
         ops = n.body_ops
@@ -429,7 +467,7 @@ class Generator:
         n.save_backup = m.backup_reg
 
         # branch / pc update
-        next_pc = (n.pc + 8) & PC_MASK
+        next_pc = (n.pc + 8) & self.pc_mask
         if ln in ('B', 'BAL', 'JR', 'JALR', 'IBEQ', 'IBNE', 'IBLTZ', 'IBGTZ', 'IBLEZ', 'IBGEZ'):
             if m.branch is not None:
                 raise GenError(f"branch in branch delay slot at 0x{n.pc:04x}")
@@ -438,7 +476,7 @@ class Generator:
             if ln in ('JR', 'JALR'):
                 kind, target = 'dyn', 0
             else:
-                target = (n.pc + 8 + IMM11(p.lower) * 8) & PC_MASK
+                target = (n.pc + 8 + IMM11(p.lower) * 8) & self.pc_mask
                 kind = 'static' if ln in ('B', 'BAL') else 'cond'
             new_branch = (kind, target, 1)
             n.branch_backup_in = backup_in
@@ -482,7 +520,7 @@ class Generator:
         else:
             # Dynamic branch resolution occurs in its delay slot. The actual
             # JR/JALR instruction is the preceding pair, where `brt` was set.
-            branch_pc = (n.pc - 8) & PC_MASK
+            branch_pc = (n.pc - 8) & self.pc_mask
             targets = sorted(set(self.link_labels) | set(self.dynamic_targets.get(branch_pc, [])))
             n.term = ('dyn', [(lab, self.get_node(lab, st)) for lab in targets])
 
@@ -864,10 +902,10 @@ class Emitter:
         return f"N{nid}"
 
     # -- main ------------------------------------------------------------------
-    def emit_function(self, fname: str):
+    def emit_function(self, fname: str, context_type: str):
         g = self.g
         w = self.w
-        w(f"static void {fname}(Vu1RecContext &ctx, uint32_t entryPc)")
+        w(f"static void {fname}({context_type} &ctx, uint32_t entryPc)")
         w("{")
         w("    Vu1RecRoundingGuard roundingGuard;")
         w("    VU1State &st = *ctx.state;")
@@ -970,11 +1008,12 @@ class Emitter:
             flush, kmax = t[1], t[2]
             c = self.emit_ops(flush, n.flag_need['flush'])
             w(f"    cyc += {c};")
-            w("    {")
-            w("        const uint64_t kickEnd = vu1rec_kick_drain(ctx);")
-            w("        if (kickEnd > cyc) cyc = kickEnd;")
-            w("    }")
-            w(f"    st.pc = 0x{(n.pc + 8) & PC_MASK:04x}u;")
+            if self.g.unit == 'vu1':
+                w("    {")
+                w("        const uint64_t kickEnd = vu1rec_kick_drain(ctx);")
+                w("        if (kickEnd > cyc) cyc = kickEnd;")
+                w("    }")
+            w(f"    st.pc = 0x{(n.pc + 8) & self.g.pc_mask:04x}u;")
             w(f"    ctx.backupReg = {n.save_backup}u;")
             w(f"    ctx.backupValue = {'vibk' if n.save_backup else '0'};")
             w("    goto EXIT;")
@@ -1194,10 +1233,14 @@ class Emitter:
         return f"vr_blend<0x{dest:x}>({new}, {old})"
 
     def addr_imm(self, base: int, imm: int) -> str:
-        return f"((uint32_t)({self.vi(base)} + ({imm})) * 16u & 0x3FFFu)"
+        return f"((uint32_t)({self.vi(base)} + ({imm})) * 16u & {self.mask_literal(self.g.data_mask)})"
 
     def addr_reg(self, base: int) -> str:
-        return f"((uint32_t)(uint16_t){self.vi(base)} * 16u & 0x3FFFu)"
+        return f"((uint32_t)(uint16_t){self.vi(base)} * 16u & {self.mask_literal(self.g.data_mask)})"
+
+    @staticmethod
+    def mask_literal(mask: int) -> str:
+        return f"0x{mask:04X}u"
 
     def set_vi(self, r: int, expr: str, save_backup: bool):
         if r == 0:
@@ -1319,7 +1362,7 @@ class Emitter:
                 self.set_vi(viT, f"{(n.pc + 16) // 8}", False)
             return
         if ln in ('JR', 'JALR'):
-            w(f"    brt = ((uint32_t)(uint16_t){self.branch_vi(n, viS)} * 8u) & 0x3FFFu;")
+            w(f"    brt = ((uint32_t)(uint16_t){self.branch_vi(n, viS)} * 8u) & {self.mask_literal(self.g.pc_mask)};")
             if ln == 'JALR':
                 self.set_vi(viT, f"{(n.pc + 16) // 8}", False)
             return
@@ -1421,6 +1464,13 @@ HEADER = """// GENERATED by game/tools/vu1recomp/vu1recomp.py -- do not edit, do
 namespace {
 """
 
+VU0_HEADER = """// GENERATED by tools/vu1recomp/vu1recomp.py -- do not edit, do not commit.
+// Derived from a locally captured VU0 micro memory image (disc data).
+#include "runtime/ps2_vu0_recomp_support.h"
+
+namespace {
+"""
+
 
 FLAG_REGS = ('mac', 'status', 'clip')
 
@@ -1450,22 +1500,24 @@ def entry_live_in(g: Generator, live_exit: set, pcs) -> Dict[int, set]:
 
 def end_continuations(g: Generator) -> List[int]:
     """PCs where an MSCNT after a completed program resumes (TPC = pc after the E-bit delay slot)."""
-    return sorted({(n.pc + 8) & PC_MASK for n in g.nodes if n.term and n.term[0] == 'end'})
+    return sorted({(n.pc + 8) & g.pc_mask for n in g.nodes if n.term and n.term[0] == 'end'})
 
 
 def analyze_image(code: bytes, entries: List[int], name: str,
-                  dynamic_targets: Optional[Dict[int, List[int]]] = None) -> dict:
+                  dynamic_targets: Optional[Dict[int, List[int]]] = None,
+                  unit: str = 'vu1') -> dict:
     """Liveness-only analysis of one image: what each program entry (and each MSCNT
     continuation point) may read from the flag state left by the previous program."""
-    g = Generator(code, entries, name, dynamic_targets)
+    g = Generator(code, entries, name, dynamic_targets, unit)
     g.build()
     if not g.entry_nodes:
         raise GenError("no entry could be generated")
-    info = {'g': g, 'conts': end_continuations(g), 'cont_g': None, 'cont_error': None}
+    continuations = end_continuations(g) if unit == 'vu1' else []
+    info = {'g': g, 'conts': continuations, 'cont_g': None, 'cont_error': None}
     conts = [c for c in info['conts'] if c not in g.entry_nodes]
-    if conts:
+    if conts and unit == 'vu1':
         try:
-            gc = Generator(code, sorted(set(entries) | set(conts)), name, dynamic_targets)
+            gc = Generator(code, sorted(set(entries) | set(conts)), name, dynamic_targets, unit)
             gc.build()
             missing = [c for c in conts if c not in gc.entry_nodes]
             if missing:
@@ -1515,8 +1567,9 @@ def compute_live_exit(images_info: List[Optional[dict]]) -> Tuple[set, list]:
 
 
 def generate_image(code: bytes, entries: List[int], name: str, live_exit: Optional[set] = None,
-                   dynamic_targets: Optional[Dict[int, List[int]]] = None) -> Tuple[str, dict]:
-    info = analyze_image(code, entries, name, dynamic_targets)
+                   dynamic_targets: Optional[Dict[int, List[int]]] = None,
+                   unit: str = 'vu1') -> Tuple[str, dict]:
+    info = analyze_image(code, entries, name, dynamic_targets, unit)
     g = info['cont_g'] if info['cont_g'] is not None else info['g']
     compute_norm(g)
     # Which flags are read anywhere in the (reachable) image?
@@ -1529,14 +1582,16 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     # iff a later program can read it before redefining it (compute_live_exit).
     fast_live = set(FLAG_REGS) if live_exit is None else set(live_exit)
     full_live = set(FLAG_REGS)
-    out = [HEADER]
+    out = [VU0_HEADER if g.unit == 'vu0' else HEADER]
     stats = {'nodes': len(g.nodes), 'pairs': len({n.pc for n in g.nodes}),
              'readers': sorted(readers), 'entries': sorted(g.entry_nodes),
              'failed': g.failed_entries, 'dt_pcs': sorted(g.dt_pcs), 'live_exit': sorted(fast_live)}
     for variant, live in (('fast', fast_live), ('full', full_live)):
         compute_flag_liveness(g, live)
         em = Emitter(g, variant, live)
-        em.emit_function(f"vu1rec_{name}_{variant}")
+        prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
+        context_type = 'Vu0RecContext' if g.unit == 'vu0' else 'Vu1RecContext'
+        em.emit_function(f"{prefix}_{name}_{variant}", context_type)
         out.extend(l + "\n" for l in em.lines)
         out.append("\n")
         if variant == 'fast':
@@ -1551,8 +1606,10 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
             stats['fast_commits'] = dict(sorted(em.commit_counts.items()))
     ent = ", ".join(f"0x{e:04x}u" for e in sorted(g.entry_nodes))
     out.append(f"const uint32_t kEntries[] = {{{ent}}};\n")
-    out.append(f"const Vu1RecRegistrar kRegistrar(0x{name}ull, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
-               f"                                 &vu1rec_{name}_fast, &vu1rec_{name}_full, {'true' if g.dt_pcs else 'false'});\n")
+    registrar = 'Vu0RecRegistrar' if g.unit == 'vu0' else 'Vu1RecRegistrar'
+    prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
+    out.append(f"const {registrar} kRegistrar(0x{name}ull, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
+               f"                                 &{prefix}_{name}_fast, &{prefix}_{name}_full, {'true' if g.dt_pcs else 'false'});\n")
     out.append("} // namespace\n")
     return "".join(out), stats
 
@@ -1603,7 +1660,8 @@ def jump_table_entries(code: bytes) -> List[int]:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--catalog", required=True, help="VU1 catalog dir (index.txt + <hash>.vu1)")
+    ap.add_argument("--unit", choices=('vu0', 'vu1'), default='vu1', help="VU unit (default: vu1)")
+    ap.add_argument("--catalog", required=True, help="catalog dir (index.txt + <hash>.<unit>)")
     ap.add_argument("--out", required=True, help="output directory for generated C++")
     ap.add_argument("--dump", action="store_true", help="print node graph statistics")
     ap.add_argument("--jr-targets", help="observed dynamic branch destinations file (hash pc target); defaults to catalog/jr_targets.txt")
@@ -1613,10 +1671,10 @@ def main():
     target_path = args.jr_targets or os.path.join(args.catalog, "jr_targets.txt")
     dynamic_targets = read_dynamic_targets(target_path)
     if dynamic_targets:
-        print(f"[vu1recomp] loading observed indirect branch destinations from {target_path}")
+        print(f"[vu{args.unit[-1]}recomp] loading observed indirect branch destinations from {target_path}")
     images = []
     for h, entries in sorted(cat.items()):
-        path = os.path.join(args.catalog, h + ".vu1")
+        path = os.path.join(args.catalog, h + f".{args.unit}")
         if not os.path.exists(path):
             print(f"[vu1recomp] {h}: image file missing, skipped", file=sys.stderr)
             continue
@@ -1624,39 +1682,44 @@ def main():
         if f"{fnv1a64(code):016x}" != h:
             print(f"[vu1recomp] {h}: hash mismatch, skipped", file=sys.stderr)
             continue
-        jt = jump_table_entries(code)
+        expected_size = VU0_CODE_SIZE if args.unit == 'vu0' else VU1_CODE_SIZE
+        if len(code) != expected_size:
+            print(f"[vu{args.unit[-1]}recomp] {h}: image size {len(code)} != {expected_size}; skipped", file=sys.stderr)
+            continue
+        jt = jump_table_entries(code) if args.unit == 'vu1' else []
         extra = sorted(set(jt) - set(entries))
         if extra:
-            print(f"[vu1recomp] {h}: adding uncatalogued jump-table entries {['0x%04x' % e for e in extra]}")
+            print(f"[vu{args.unit[-1]}recomp] {h}: adding uncatalogued jump-table entries {['0x%04x' % e for e in extra]}")
         images.append((h, code, sorted(set(entries) | set(jt)), dynamic_targets.get(h, {})))
     # pass 1: liveness-only analysis of every image, then the live-at-exit fixpoint
     infos = []
     for h, code, entries, targets in images:
         try:
-            infos.append(analyze_image(code, entries, h, targets))
+            infos.append(analyze_image(code, entries, h, targets, args.unit))
         except GenError as ex:
             # an image we cannot compile runs in the interpreter, which may read any flag
-            print(f"[vu1recomp] {h}: not compilable ({ex}); all flags live at exit", file=sys.stderr)
+            print(f"[vu{args.unit[-1]}recomp] {h}: not compilable ({ex}); all flags live at exit", file=sys.stderr)
             infos.append(None)
     live_exit, live_log = compute_live_exit(infos)
     fmt = lambda d: " ".join(f"0x{pc:04x}:{''.join(sorted(x[0] for x in v)) or '-'}" for pc, v in sorted(d.items()))
     for name, ent, cont, cerr in live_log:
-        print(f"[vu1recomp] {name}: entry flag live-in (m=mac s=status c=clip) {fmt(ent)}; "
+        print(f"[vu{args.unit[-1]}recomp] {name}: entry flag live-in (m=mac s=status c=clip) {fmt(ent)}; "
               f"MSCNT continuations {fmt(cont) if cerr is None else 'UNANALYSABLE: ' + cerr}")
     written = []
     for h, code, entries, targets in images:
         try:
-            src, stats = generate_image(code, entries, h, live_exit, targets)
+            src, stats = generate_image(code, entries, h, live_exit, targets, args.unit)
         except GenError as ex:
-            print(f"[vu1recomp] {h}: FAILED: {ex}", file=sys.stderr)
+            print(f"[vu{args.unit[-1]}recomp] {h}: FAILED: {ex}", file=sys.stderr)
             continue
-        dst = os.path.join(args.out, f"vu1rec_{h}.cpp")
+        prefix = 'vu0rec' if args.unit == 'vu0' else 'vu1rec'
+        dst = os.path.join(args.out, f"{prefix}_{h}.cpp")
         old = open(dst).read() if os.path.exists(dst) else None
         if old != src:
             with open(dst, "w") as f:
                 f.write(src)
         written.append(dst)
-        print(f"[vu1recomp] {h}: entries={['0x%04x' % e for e in stats['entries']]} nodes={stats['nodes']} "
+        print(f"[vu{args.unit[-1]}recomp] {h}: entries={['0x%04x' % e for e in stats['entries']]} nodes={stats['nodes']} "
               f"pairs={stats['pairs']} flag-readers={stats['readers']} live-at-exit={stats['live_exit']} "
               f"fmac-flag-producers={stats['fmac_flag_producers']} (dead in fast: {stats['fmac_flag_producers_dead']}) "
               f"clip-producers={stats['clip_producers']} (live: {stats['clip_producers_live']}) "
@@ -1665,7 +1728,8 @@ def main():
     # remove stale generated files
     for fn in os.listdir(args.out):
         p = os.path.join(args.out, fn)
-        if fn.startswith("vu1rec_") and fn.endswith(".cpp") and p not in written:
+        prefix = 'vu0rec_' if args.unit == 'vu0' else 'vu1rec_'
+        if fn.startswith(prefix) and fn.endswith(".cpp") and p not in written:
             os.remove(p)
     return 0
 

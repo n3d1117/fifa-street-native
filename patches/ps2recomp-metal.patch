@@ -2378,18 +2378,19 @@ index 509fd07b0a2f07788e9f62e961001f79fd649c23..8d86252dbdc62d8a3a7d9c579690f63b
                             (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0);
      }
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..c4781c6492214bb0fcc95ee642c353a2ec78558b 100644
+index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..1b03d177a970205cafa33fd87d26c359cfa08634 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
-@@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
+@@ -393,6 +393,8 @@ add_library(ps2_runtime STATIC
      src/lib/vu/ps2_vu1_core.cpp
      src/lib/vu/ps2_vu1_upper.cpp
      src/lib/vu/ps2_vu1_lower.cpp
 +    src/lib/vu/ps2_vu1_recomp.cpp
++    src/lib/vu/ps2_vu0_recomp.cpp
      src/lib/games_database.cpp
  )
  
-@@ -512,6 +513,36 @@ target_link_libraries(ps2EntryRunner
+@@ -512,6 +514,36 @@ target_link_libraries(ps2EntryRunner
      ps2_runtime
  )
  
@@ -2426,6 +2427,35 @@ index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..c4781c6492214bb0fcc95ee642c353a2
  if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
      target_sources(ps2EntryRunner PRIVATE
          src/lib/ps2_debug_panel.cpp
+@@ -608,3 +640,28 @@ endif()
+ install(DIRECTORY include/
+     DESTINATION include
+ )
++
++# Disc-derived VU0 programs are separate from the VU1 registry and memory space.
++set(PS2X_VU0GEN_DIR "" CACHE PATH "Generated native VU0 source directory")
++set(PS2X_VU0_CATALOG_DIR "" CACHE PATH "VU0 catalog directory (index.txt + <hash>.vu0)")
++set(PS2X_VU0_GENERATOR "" CACHE FILEPATH "VU static generator")
++if(PS2X_VU0GEN_DIR)
++    if(PS2X_VU0_CATALOG_DIR AND PS2X_VU0_GENERATOR AND EXISTS "${PS2X_VU0_CATALOG_DIR}/index.txt")
++        find_package(Python3 COMPONENTS Interpreter REQUIRED)
++        execute_process(COMMAND "${Python3_EXECUTABLE}" "${PS2X_VU0_GENERATOR}"
++            --unit vu0 --catalog "${PS2X_VU0_CATALOG_DIR}" --out "${PS2X_VU0GEN_DIR}"
++            RESULT_VARIABLE PS2X_VU0_GEN_RESULT)
++        if(NOT PS2X_VU0_GEN_RESULT EQUAL 0)
++            message(FATAL_ERROR "VU0 generation failed: ${PS2X_VU0_GEN_RESULT}")
++        endif()
++        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
++            "${PS2X_VU0_CATALOG_DIR}/index.txt" "${PS2X_VU0_GENERATOR}")
++    endif()
++    file(GLOB PS2X_VU0GEN_SOURCES CONFIGURE_DEPENDS "${PS2X_VU0GEN_DIR}/vu0rec_*.cpp")
++    if(PS2X_VU0GEN_SOURCES)
++        target_sources(ps2EntryRunner PRIVATE ${PS2X_VU0GEN_SOURCES})
++        set_source_files_properties(${PS2X_VU0GEN_SOURCES} PROPERTIES
++            SKIP_UNITY_BUILD_INCLUSION TRUE SKIP_PRECOMPILE_HEADERS TRUE
++            COMPILE_OPTIONS "-O2;-ffp-contract=off;-frounding-math")
++    endif()
++endif()
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
 index 4b9242cb4c18187756c61b32f84751e550bbf6e1..81bb23d028f816b8705d2ed92f89908756aeb20f 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
@@ -4290,10 +4320,10 @@ index c289ba0f2c0a286987ac0bafccf6a62e07f0594c..470631fb2c3bc577dac2c00dd4299013
      }
      m_queue.clear();
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96ed82c6396 100644
+index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..9ef74e463fa59d8b72b3c8f39a4b809f76c675d8 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
-@@ -9,6 +9,16 @@
+@@ -9,6 +9,34 @@
  #include <algorithm>
  #include <string>
  #include <vector>
@@ -4305,12 +4335,30 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +                                           int write_high_word);
 +#endif
 +
++namespace {
++struct MfifoTraceEvent { uint32_t address, value, tadr, producer, chcr; };
++thread_local MfifoTraceEvent mfifoEvents[64]{};
++thread_local uint64_t mfifoEventCount = 0;
++bool traceMfifoPollEnabled() {
++    static const bool enabled = [] {
++        const char* value = std::getenv("TARZAN_TRACE_MFIFO_POLL");
++        return value && std::strcmp(value, "1") == 0;
++    }();
++    return enabled;
++}
++void recordMfifoEvent(PS2Memory& memory, uint32_t address, uint32_t value) {
++    if (!traceMfifoPollEnabled()) return;
++    auto reg = [&](uint32_t a) { const auto it = memory.m_ioRegisters.find(a);
++        return it == memory.m_ioRegisters.end() ? 0u : it->second; };
++    mfifoEvents[mfifoEventCount++ % 64] = {address, value, reg(0x10009030u), reg(0x1000d010u), reg(0x10009000u)};
++}
++}
 +static bool tryProcessVif1Mfifo(PS2Memory &memory);
 +static bool tryProcessIpuToHleDma(PS2Memory &memory, uint32_t chcr);
  
  namespace
  {
-@@ -125,6 +135,14 @@ namespace
+@@ -125,6 +153,14 @@ namespace
                  desired = (expected & ~mask) | (static_cast<uint64_t>(value) << (off * 8u));
              }
          } while (!csr.compare_exchange_weak(expected, desired));
@@ -4325,7 +4373,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
      }
  
      // Same as writeCsrHalf but for a full 64-bit CSR write (bits 0..1 are still
-@@ -139,6 +157,13 @@ namespace
+@@ -139,6 +175,13 @@ namespace
              desired = (expected & kW1cMask) | (value & ~kW1cMask);
              desired &= ~(value & kW1cMask);
          } while (!csr.compare_exchange_weak(expected, desired));
@@ -4339,7 +4387,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
      }
  
      constexpr std::array<uint32_t, 4> kEeTimerBases = {
-@@ -326,11 +351,22 @@ bool PS2Memory::initialize(size_t ramSize)
+@@ -326,11 +369,22 @@ bool PS2Memory::initialize(size_t ramSize)
          std::lock_guard<std::mutex> lock(m_completedDmacMutex);
          m_completedDmacCauses.clear();
      }
@@ -4362,7 +4410,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
      resetEeTimers();
  
      try
-@@ -965,6 +1001,7 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
+@@ -965,6 +1019,7 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
          {
              uint64_t mask = 0xFFFFFFFFULL << (off * 8);
              uint64_t newVal = (*reg & ~mask) | ((uint64_t)value << (off * 8));
@@ -4370,7 +4418,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
              *reg = newVal;
          }
          return;
-@@ -1022,6 +1059,7 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
+@@ -1022,6 +1077,7 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
          }
          else if (uint64_t *reg = gsRegPtr(gs_regs, address))
          {
@@ -4378,7 +4426,17 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
              *reg = value;
          }
          return;
-@@ -1173,7 +1211,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1124,6 +1180,9 @@ void PS2Memory::write128(uint32_t address, __m128i value)
+ 
+ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+ {
++    if ((address >= 0x10009000u && address <= 0x10009050u) ||
++        (address >= 0x1000d000u && address <= 0x1000d080u) || address == 0x10003c10u)
++        recordMfifoEvent(*this, address, value);
+     size_t timerIndex = 0u;
+     uint32_t timerOffset = 0u;
+     if (decodeEeTimerRegister(address, timerIndex, timerOffset))
+@@ -1173,7 +1232,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
          else if (uint64_t *reg = gsRegPtr(gs_regs, address))
          {
              const uint64_t mask = 0xFFFFFFFFull << (off * 8u);
@@ -4389,7 +4447,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
          }
          m_gsWriteCount.fetch_add(1, std::memory_order_relaxed);
          return true;
-@@ -1231,6 +1271,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1231,6 +1292,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                  std::memset(&vif1_regs, 0, sizeof(vif1_regs));
                  m_vif1PendingPath2ImageQwc = 0u;
                  m_vif1PendingPath2DirectHl = false;
@@ -4403,7 +4461,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
                  m_path3Masked = false;
                  if (wasPath3Masked)
                      flushMaskedPath3Packets();
-@@ -1238,6 +1285,32 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1238,6 +1306,32 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
              if (value & 0x8u) // STC
              {
                  vif1_regs.stat &= ~((1u << 8) | (1u << 9) | (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13));
@@ -4436,7 +4494,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
              }
              break;
          case 0x10003C30u:
-@@ -1311,6 +1384,14 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1311,6 +1405,14 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                  return true;
              }
  
@@ -4451,7 +4509,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
              if ((channelBase == 0x1000A000u || channelBase == 0x10009000u || channelBase == 0x10008000u) && (m_gsVRAM || channelBase == 0x10008000u))
              {
                  auto enqueueTransfer = [&](uint32_t srcAddr, uint32_t qwCount)
-@@ -1592,54 +1673,586 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
+@@ -1592,54 +1694,595 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
          return false;
  
      const uint32_t mode = (chcr >> 2u) & 0x3u;
@@ -4605,8 +4663,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +        if (fromScratchpad && mfifoConfigured)
 +            (void)tryProcessVif1Mfifo(*this);
 +        return true;
-     }
--    catch (const std::exception &)
++    }
 +
 +    // SPRFROM chain tags are stored in scratchpad and describe writes into main
 +    // memory. Support the common CNT/CNTS/END tags; unsupported tag kinds fail
@@ -4754,7 +4811,8 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +        }
 +        if (!done)
 +            throw std::runtime_error("IPU_TO HLE source chain exceeded 4096 tags");
-+    }
+     }
+-    catch (const std::exception &)
 +    memory.completeDmacChannel(base, 4u);
 +    return true;
 +#else
@@ -4766,6 +4824,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +
 +static bool tryProcessVif1Mfifo(PS2Memory &memory)
 +{
++    recordMfifoEvent(memory, 0xfffffffeu, 0u);
 +    static constexpr uint32_t kVif1Channel = 0x10009000u;
 +    static constexpr uint32_t kSprFromChannel = 0x1000D000u;
 +    static constexpr uint32_t kDctrl = 0x1000E000u;
@@ -4778,12 +4837,12 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +    static std::atomic<uint32_t> traceCallCount{0u};
 +    const uint32_t traceCall = traceMfifo ? traceCallCount.fetch_add(1u, std::memory_order_relaxed) : UINT32_MAX;
 +    auto reg = [&](uint32_t address) -> uint32_t
-+    {
+     {
 +        const auto it = memory.m_ioRegisters.find(address);
 +        return it == memory.m_ioRegisters.end() ? 0u : it->second;
 +    };
 +    auto traceState = [&](const char *phase)
-     {
++    {
 +        if (traceCall >= 32u)
 +            return;
 +        std::cerr << "[tarzan-mfifo] VIF1 " << phase << " call=" << traceCall
@@ -4804,6 +4863,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +    const auto dctrlIt = memory.m_ioRegisters.find(kDctrl);
 +    if (dctrlIt == memory.m_ioRegisters.end() || ((dctrlIt->second >> 2u) & 0x3u) != 2u)
 +    {
++        recordMfifoEvent(memory, 0xfffffffdu, 1u);
 +        if (traceCall < 32u)
 +            std::cerr << "[tarzan-mfifo] VIF1 stop call=" << traceCall << " reason=not-MFD-VIF1" << std::endl;
 +        return false;
@@ -4811,12 +4871,14 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +    uint32_t chcr = memory.m_ioRegisters[kVif1Channel];
 +    if ((chcr & 0x100u) == 0u || ((chcr >> 2u) & 0x3u) != 1u)
 +    {
++        recordMfifoEvent(memory, 0xfffffffdu, 2u);
 +        if (traceCall < 32u)
 +            std::cerr << "[tarzan-mfifo] VIF1 stop call=" << traceCall << " reason=channel-not-active-MFIFO" << std::endl;
          return false;
      }
 +    if (memory.m_vif1Stalled || memory.m_vif1MfifoCompletionPending)
 +    {
++        recordMfifoEvent(memory, 0xfffffffdu, 3u);
 +        if (traceCall < 32u)
 +            std::cerr << "[tarzan-mfifo] VIF1 stop call=" << traceCall
 +                      << (memory.m_vif1Stalled ? " reason=vif-stalled" : " reason=terminal-completion-pending")
@@ -4831,6 +4893,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +    if (ringMask == 0u || ringSize64 > PS2_RAM_SIZE || ringBase > PS2_RAM_SIZE ||
 +        ringSize64 > PS2_RAM_SIZE - ringBase)
 +    {
++        recordMfifoEvent(memory, 0xfffffffdu, 4u);
 +        if (traceCall < 32u)
 +            std::cerr << "[tarzan-mfifo] VIF1 stop call=" << traceCall << " reason=invalid-ring base=0x"
 +                      << std::hex << ringBase << " mask=0x" << ringMask << std::dec << std::endl;
@@ -4850,7 +4913,10 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +    bool done = false;
 +
 +    auto inRing = [&](uint32_t address) -> bool
-+    {
+     {
+-        const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
+-        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
+-        if (fromScratchpad)
 +        return address >= ringBase && static_cast<uint64_t>(address) < static_cast<uint64_t>(ringBase) + ringSize64;
 +    };
 +    auto wrap = [&](uint32_t address) -> uint32_t
@@ -4858,10 +4924,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +        return ringBase + ((address - ringBase) & ringMask);
 +    };
 +    auto availableQwc = [&](uint32_t drain) -> uint32_t
-     {
--        const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
--        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
--        if (fromScratchpad)
++    {
 +        if (!inRing(drain) || !inRing(producer))
 +            return 0u;
 +        const uint32_t drainOffset = drain - ringBase;
@@ -4872,14 +4935,15 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +        return bytes >> 4u;
 +    };
 +
++    // A 512 KiB MFIFO can hold 32768 tags. A fixed 4096-tag
++    // limit rejects valid producer batches before publishing any DMA progress.
++    const uint32_t tagBudget = static_cast<uint32_t>(ringSize64 / 16u);
 +    uint32_t tagsProcessed = 0u;
 +    uint64_t bytesConsumed = 0u;
-+    while (!done && tagsProcessed < 4096u)
++    while (!done && tagsProcessed < tagBudget)
 +    {
 +        if (qwc != 0u)
-         {
--            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
--            markModified(mainOffset + copied, chunk);
++        {
 +            const uint32_t available = availableQwc(madr);
 +            if (available == 0u)
 +            {
@@ -4959,7 +5023,9 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +            break;
 +        }
 +        if ((chcr & 0x40u) != 0u)
-+        {
+         {
+-            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
+-            markModified(mainOffset + copied, chunk);
 +            const uint32_t tagPayloadOffset = (tadr + 8u) & (PS2_RAM_SIZE - 1u);
 +            if (traceCall < 32u)
 +                std::cerr << "[tarzan-mfifo] VIF1 TTE call=" << traceCall << " ringTag=0x" << std::hex << tadr
@@ -5050,8 +5116,8 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 -    m_ioRegisters[channelBase + 0x20u] = 0u;
 -    m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
 -    completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
-+    if (tagsProcessed >= 4096u && !done)
-+        throw std::runtime_error("VIF1 MFIFO chain exceeded 4096 tags without END/IRQ");
++    if (tagsProcessed >= tagBudget && !done)
++        throw std::runtime_error("VIF1 MFIFO chain exceeds the configured ring tag capacity without END/IRQ");
 +
 +    memory.m_ioRegisters[kVif1Channel + 0x10u] = madr;
 +    memory.m_ioRegisters[kVif1Channel + 0x20u] = qwc;
@@ -5062,10 +5128,11 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
 +                  << " finalTADR=0x" << tadr << " finalQWC=0x" << qwc << std::dec << std::endl;
 +    if (done && !memory.m_vif1Stalled)
 +        memory.completeDmacChannel(kVif1Channel, 1u);
++    recordMfifoEvent(memory, 0xffffffffu, tagsProcessed);
      return true;
  }
  
-@@ -1647,6 +2260,11 @@ void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
+@@ -1647,6 +2290,11 @@ void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
  {
      static constexpr uint32_t kDStat = 0x1000E010u;
      m_ioRegisters[channelBase] &= ~0x100u;
@@ -5077,7 +5144,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
  
      uint32_t dstat = m_ioRegisters.count(kDStat) ? m_ioRegisters[kDStat] : 0u;
      dstat |= 1u << cause;
-@@ -1802,8 +2420,13 @@ void PS2Memory::processPendingTransfers()
+@@ -1802,8 +2450,13 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -5092,7 +5159,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
          if (!p.chainData.empty())
          {
              processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
-@@ -1856,8 +2479,22 @@ void PS2Memory::processPendingTransfers()
+@@ -1856,8 +2509,22 @@ void PS2Memory::processPendingTransfers()
                  }
              }
          }
@@ -5116,7 +5183,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
  
      if (m_gifArbiter)
          m_gifArbiter->drain();
-@@ -1898,10 +2535,13 @@ void PS2Memory::processPendingTransfers()
+@@ -1898,10 +2565,13 @@ void PS2Memory::processPendingTransfers()
      }
      if (hadVif1)
      {
@@ -5134,7 +5201,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
      }
  }
  
-@@ -1919,6 +2559,22 @@ std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
+@@ -1919,6 +2589,22 @@ std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
      return causes;
  }
  
@@ -5157,10 +5224,46 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
  void PS2Memory::flushMaskedPath3Packets(bool drainImmediately)
  {
      if (m_path3Masked || m_path3MaskedFifo.empty())
-@@ -2280,6 +2936,41 @@ int PS2Memory::pollDmaRegisters()
+@@ -2280,6 +2966,77 @@ int PS2Memory::pollDmaRegisters()
  
  uint32_t PS2Memory::readIORegister(uint32_t address)
  {
++    // Bounded, opt-in snapshots of a producer waiting for MFIFO capacity.
++    // Observe only: polling must not manufacture DMA progress.
++    static const bool traceMfifoPoll = [] {
++        const char* value = std::getenv("TARZAN_TRACE_MFIFO_POLL");
++        return value && std::strcmp(value, "1") == 0;
++    }();
++    if (traceMfifoPoll && address == 0x10009030u) {
++        static thread_local uint64_t polls = 0;
++        ++polls;
++        if ((polls % 1000000u) == 0u && polls <= 16000000u) {
++            auto reg = [&](uint32_t addr) {
++                const auto it = m_ioRegisters.find(addr);
++                return it == m_ioRegisters.end() ? 0u : it->second;
++            };
++            std::fprintf(stderr, "[mfifo-poll] reads=%llu TADR=%08x MADR=%08x QWC=%x CHCR=%x SPR_MADR=%08x DCTRL=%x RBOR=%08x RBSR=%x STAT=%x stalled=%u completion=%u\n",
++                (unsigned long long)polls, reg(0x10009030u), reg(0x10009010u),
++                reg(0x10009020u), reg(0x10009000u), reg(0x1000d010u),
++                reg(0x1000e000u), reg(0x1000e050u), reg(0x1000e040u),
++                vif1_regs.stat, m_vif1Stalled, m_vif1MfifoCompletionPending);
++            if (polls == 1000000u) {
++                const uint64_t begin = mfifoEventCount > 64 ? mfifoEventCount - 64 : 0;
++                for (uint64_t i = begin; i < mfifoEventCount; ++i) {
++                    const auto& e = mfifoEvents[i % 64];
++                    std::fprintf(stderr, "[mfifo-event] addr=%08x value=%08x TADR=%08x producer=%08x CHCR=%x\n",
++                        e.address, e.value, e.tadr, e.producer, e.chcr);
++                }
++            }
++            const uint32_t cursor = reg(0x10009030u) & 0x1ffffffu;
++            if (cursor <= PS2_RAM_SIZE - 16u) {
++                uint64_t tag[2];
++                std::memcpy(tag, getRDRAM() + cursor, sizeof(tag));
++                std::fprintf(stderr, "[mfifo-poll] tag=%016llx %016llx\n",
++                    (unsigned long long)tag[0], (unsigned long long)tag[1]);
++            }
++        }
++    }
 +    // VIF1 register reads are backed by the live VIF state. In particular,
 +    // STAT and CODE must reflect the command that raised an interrupt so the
 +    // guest handler can identify it and release a VIS stall with FBRST.STC.
@@ -5199,7 +5302,7 @@ index 37b6a4decc5865c7e51fbe9209ce46eafa6ccb27..858439589dcdb794a1f656aebfd6d96e
      size_t timerIndex = 0u;
      uint32_t timerOffset = 0u;
      if (decodeEeTimerRegister(address, timerIndex, timerOffset))
-@@ -2361,8 +3052,17 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+@@ -2361,8 +3118,17 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
          {
              if ((address & 0xFF) == 0x00)
              {
@@ -5387,15 +5490,16 @@ index 8590f1424bd31e23feeb8cd04f6683766043ba8c..9e4c2e1d5ca2f7591a759c738c6c4cb4
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b89129578fa6 100644
+index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..af00f52d6bb027283d747fd7e031a1eaf772b630 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++#include "runtime/ps2_vu0_recomp.h"
 +#include "runtime/ps2_vu1_recomp.h"
  #include "ps2_runtime.h"
  #include "ps2_log.h"
  #include "ps2_stubs.h"
-@@ -6,6 +7,7 @@
+@@ -6,6 +8,7 @@
  #include "ps2_runtime_macros.h"
  #include "runtime/gs/gs_frontend.h"
  #include "runtime/ee_scheduler.h"
@@ -5403,7 +5507,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  #include "ThreadNaming.h"
  #include "Kernel/Stubs/Audio.h"
  #include "Kernel/Stubs/GS.h"
-@@ -13,6 +15,21 @@
+@@ -13,6 +16,21 @@
  #include "ps2_host_backend.h"
  #include "ps2_iop_host.h"
  #include "ps2x/iop/iop_subsystem.h"
@@ -5425,7 +5529,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  
  #include <iostream>
  #include <stdexcept>
-@@ -23,7 +40,14 @@
+@@ -23,7 +41,14 @@
  #include <limits>
  #include <chrono>
  #include <atomic>
@@ -5440,7 +5544,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  #include <unordered_map>
  #include <sstream>
  
-@@ -73,6 +97,47 @@ struct ElfHeader
+@@ -73,6 +98,47 @@ struct ElfHeader
      uint16_t shstrndx;
  };
  
@@ -5488,7 +5592,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  struct ProgramHeader
  {
      uint32_t type;
-@@ -87,6 +152,76 @@ struct ProgramHeader
+@@ -87,6 +153,76 @@ struct ProgramHeader
  
  namespace
  {
@@ -5565,7 +5669,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      constexpr uint32_t kGuestHeapDefaultBase = 0x00100000u;
      constexpr uint32_t kGuestHeapDefaultAlignment = 16u;
      constexpr uint32_t kGuestHeapSafetyPad = 0x1000u;
-@@ -108,6 +243,149 @@ namespace
+@@ -108,6 +244,149 @@ namespace
      };
  
      thread_local DispatchHistory g_dispatchHistory;
@@ -5715,7 +5819,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  
      bool computeFileCrc32(const std::string &path, uint32_t &crcOut)
      {
-@@ -373,6 +651,34 @@ namespace
+@@ -373,6 +652,34 @@ namespace
      }
  }
  
@@ -5750,7 +5854,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
  {
      static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
-@@ -502,6 +808,9 @@ PS2Runtime::PS2Runtime()
+@@ -502,6 +809,9 @@ PS2Runtime::PS2Runtime()
      m_guestHeapEnd = kGuestHeapDefaultBase;
      m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
      m_guestHeapSuggestedBase = kGuestHeapDefaultBase;
@@ -5760,7 +5864,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      m_guestHeapConfigured = false;
      m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
      m_asyncCallbackStackTop = PS2_RAM_SIZE;
-@@ -665,8 +974,38 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -665,8 +975,38 @@ bool PS2Runtime::syncCoreSubsystems()
      }
  
      m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
@@ -5800,7 +5904,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      m_memory.setGifArbiter(&m_gifArbiter);
      m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
                                   {
-@@ -679,9 +1018,18 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -679,9 +1019,18 @@ bool PS2Runtime::syncCoreSubsystems()
                                           (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                       m_vu1.state().tBitEnabled =
                                           (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
@@ -5822,7 +5926,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
                                       cpuContext->vu0_vpu_stat =
                                           (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                           (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
-@@ -697,9 +1045,18 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -697,9 +1046,18 @@ bool PS2Runtime::syncCoreSubsystems()
                                           (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                       m_vu1.state().tBitEnabled =
                                           (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
@@ -5844,7 +5948,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
                                       cpuContext->vu0_vpu_stat =
                                           (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                           (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
-@@ -728,7 +1085,10 @@ bool PS2Runtime::initialize(const char *title)
+@@ -728,7 +1086,10 @@ bool PS2Runtime::initialize(const char *title)
              std::cerr << "Failed to bind runtime core subsystems" << std::endl;
              return false;
          }
@@ -5856,7 +5960,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
  #else
          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-@@ -736,7 +1096,9 @@ bool PS2Runtime::initialize(const char *title)
+@@ -736,7 +1097,9 @@ bool PS2Runtime::initialize(const char *title)
          InitAudioDevice();
          m_audioBackend.setAudioReady(IsAudioDeviceReady());
  #endif
@@ -5866,7 +5970,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          if (m_debugUiInitCallback)
          {
              m_debugUiInitCallback(*this, m_debugUiUserData);
-@@ -960,7 +1322,14 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -960,7 +1323,14 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
      const uint32_t suggestedHeapBase = alignGuestHeapValue(paddedEnd, kGuestHeapDefaultAlignment);
      {
          std::lock_guard<std::mutex> lock(m_guestHeapMutex);
@@ -5882,7 +5986,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          {
              const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
              m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
-@@ -972,8 +1341,16 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -972,8 +1342,16 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
      {
          std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
          const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
@@ -5901,7 +6005,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      }
  
      LoadedModule module;
-@@ -1342,6 +1719,9 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1720,9 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -5911,7 +6015,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1350,6 +1730,334 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1350,6 +1731,334 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       GuestBranchKind kind,
                                       const char *debugName)
  {
@@ -6246,7 +6350,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      ctx->pc = targetPc;
      const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
  
-@@ -1358,6 +2066,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1358,6 +2067,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
      // this charge bounds straight-line call chains that have no local loop.
      if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
      {
@@ -6254,7 +6358,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          return false;
      }
  
-@@ -1369,6 +2078,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1369,6 +2079,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          }
  
          ctx->pc = targetPc;
@@ -6262,7 +6366,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          return false;
      }
  
-@@ -1394,11 +2104,63 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1394,11 +2105,63 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -6327,7 +6431,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      {
          return false;
      }
-@@ -1408,7 +2170,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1408,7 +2171,12 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          ctx->pc = fallthroughPc;
      }
  
@@ -6341,7 +6445,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  }
  
  void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
-@@ -1437,13 +2204,126 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +2205,127 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -6376,6 +6480,10 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
 +
      m_vu0.reset();
      copyVu0ContextToState(ctx, m_vu0.state());
+-    m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
+-                  vu0Data, PS2_VU0_DATA_SIZE,
+-                  m_gs, &m_memory,
+-                  startPC, 0u, ctx->vu0_itop, 4096);
 +    uint8_t vu0DataBeforeCall[PS2_VU0_DATA_SIZE];
 +    if (traceThisCall)
 +        std::memcpy(vu0DataBeforeCall, vu0Data, sizeof(vu0DataBeforeCall));
@@ -6424,10 +6532,11 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
 +            dumpState(".state.before.txt", m_vu0.state());
 +        }
 +    }
-     m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
-                   vu0Data, PS2_VU0_DATA_SIZE,
-                   m_gs, &m_memory,
-                   startPC, 0u, ctx->vu0_itop, 4096);
++    if (!vu0recExecute(m_vu0, vu0Code, vu0Data, m_gs, m_memory, startPC, ctx->vu0_itop))
++        m_vu0.execute(vu0Code, PS2_VU0_CODE_SIZE,
++                      vu0Data, PS2_VU0_DATA_SIZE,
++                      m_gs, &m_memory,
++                      startPC, 0u, ctx->vu0_itop, 4096);
 +    if (traceThisCall && deformationTraceCount == 1u)
 +    {
 +        std::ofstream data(std::string(deformationTracePath) + ".data.after.bin", std::ios::binary);
@@ -6468,7 +6577,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -1485,6 +2365,21 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
+@@ -1485,6 +2367,21 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
  
  void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
  {
@@ -6490,7 +6599,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
      {
          ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
-@@ -1638,6 +2533,17 @@ uint32_t PS2Runtime::clampGuestHeapLimit(uint32_t guestLimit) const
+@@ -1638,6 +2535,17 @@ uint32_t PS2Runtime::clampGuestHeapLimit(uint32_t guestLimit) const
  
  void PS2Runtime::resetGuestHeapLocked(uint32_t guestBase, uint32_t guestLimit)
  {
@@ -6508,7 +6617,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      uint32_t base = alignGuestHeapValue(clampGuestHeapBase(guestBase), kGuestHeapDefaultAlignment);
      uint32_t limit = clampGuestHeapLimit(guestLimit);
      if (base == 0u)
-@@ -1813,6 +2719,13 @@ void PS2Runtime::configureGuestHeap(uint32_t guestBase, uint32_t guestLimit)
+@@ -1813,6 +2721,13 @@ void PS2Runtime::configureGuestHeap(uint32_t guestBase, uint32_t guestLimit)
          normalizedBase = (m_guestHeapSuggestedBase != 0u) ? m_guestHeapSuggestedBase : kGuestHeapDefaultBase;
      }
      m_guestHeapSuggestedBase = normalizedBase;
@@ -6522,7 +6631,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      resetGuestHeapLocked(normalizedBase, guestLimit);
  }
  
-@@ -1957,6 +2870,22 @@ void PS2Runtime::guestFree(uint32_t guestAddr)
+@@ -1957,6 +2872,22 @@ void PS2Runtime::guestFree(uint32_t guestAddr)
      freeGuestBlockLocked(guestAddr);
  }
  
@@ -6545,7 +6654,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  uint32_t PS2Runtime::guestHeapBase() const
  {
      std::lock_guard<std::mutex> lock(m_guestHeapMutex);
-@@ -1990,6 +2919,13 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
+@@ -1990,6 +2921,13 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
      }
  
      std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
@@ -6559,7 +6668,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      uint32_t top = m_asyncCallbackStackTop;
      if (top > PS2_RAM_SIZE)
      {
-@@ -2013,14 +2949,35 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
+@@ -2013,14 +2951,35 @@ uint32_t PS2Runtime::reserveAsyncCallbackStack(uint32_t size, uint32_t alignment
      return top - 0x10u;
  }
  
@@ -6596,7 +6705,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_LOAD);
          return 0;
      }
-@@ -2032,8 +2989,9 @@ uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+@@ -2032,8 +2991,9 @@ uint16_t PS2Runtime::Load16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
      {
          return m_memory.read16(vaddr);
      }
@@ -6607,7 +6716,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_LOAD);
          return 0;
      }
-@@ -2045,8 +3003,9 @@ uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+@@ -2045,8 +3005,9 @@ uint32_t PS2Runtime::Load32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
      {
          return m_memory.read32(vaddr);
      }
@@ -6618,7 +6727,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_LOAD);
          return 0;
      }
-@@ -2058,8 +3017,9 @@ uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+@@ -2058,8 +3019,9 @@ uint64_t PS2Runtime::Load64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
      {
          return m_memory.read64(vaddr);
      }
@@ -6629,7 +6738,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_LOAD);
          return 0;
      }
-@@ -2071,8 +3031,9 @@ __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
+@@ -2071,8 +3033,9 @@ __m128i PS2Runtime::Load128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr)
      {
          return m_memory.read128(vaddr);
      }
@@ -6640,7 +6749,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_LOAD);
          return _mm_setzero_si128();
      }
-@@ -2085,8 +3046,9 @@ void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8
+@@ -2085,8 +3048,9 @@ void PS2Runtime::Store8(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint8
      {
          m_memory.write8(vaddr, value);
      }
@@ -6651,7 +6760,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_STORE);
      }
  }
-@@ -2098,8 +3060,9 @@ void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
+@@ -2098,8 +3062,9 @@ void PS2Runtime::Store16(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
      {
          m_memory.write16(vaddr, value);
      }
@@ -6662,7 +6771,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_STORE);
      }
  }
-@@ -2112,8 +3075,9 @@ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
+@@ -2112,8 +3077,9 @@ void PS2Runtime::Store32(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
          m_memory.write32(vaddr, value);
          drainCompletedDmacHandlers(rdram);
      }
@@ -6673,7 +6782,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_STORE);
      }
  }
-@@ -2125,8 +3089,9 @@ void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
+@@ -2125,8 +3091,9 @@ void PS2Runtime::Store64(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, uint
      {
          m_memory.write64(vaddr, value);
      }
@@ -6684,7 +6793,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_STORE);
      }
  }
-@@ -2140,8 +3105,9 @@ void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m
+@@ -2140,8 +3107,9 @@ void PS2Runtime::Store128(uint8_t *rdram, R5900Context *ctx, uint32_t vaddr, __m
      {
          m_memory.write128(vaddr, value);
      }
@@ -6695,7 +6804,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          SignalException(ctx, EXCEPTION_ADDRESS_ERROR_STORE);
      }
  }
-@@ -2165,6 +3131,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2165,6 +3133,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
      ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
      m_memory.writeIORegister(GIF_TADR, tadr);
      ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
@@ -6703,7 +6812,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
      {
          drainCompletedDmacHandlers(rdram);
-@@ -2175,6 +3142,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2175,6 +3144,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
          drainCompletedDmacHandlers(rdram);
          return;
      }
@@ -6711,7 +6820,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
      m_memory.writeIORegister(GIF_CHCR, chcr);
      m_memory.processPendingTransfers();
      drainCompletedDmacHandlers(rdram);
-@@ -2211,7 +3179,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +3181,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -6723,7 +6832,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2358,17 +3329,23 @@ void PS2Runtime::run()
+@@ -2358,17 +3331,23 @@ void PS2Runtime::run()
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
  
      // A blank image to use as a framebuffer
@@ -6748,7 +6857,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
              m_eeScheduler->reset(m_memory.getRDRAM(), m_cpuContext);
              m_eeScheduler->run();
              uint32_t pc = m_debugPc.load(std::memory_order_relaxed);
-@@ -2383,7 +3360,32 @@ void PS2Runtime::run()
+@@ -2383,7 +3362,32 @@ void PS2Runtime::run()
          {
              std::cerr << "Error during program execution: unknown exception" << std::endl;
          }
@@ -6782,7 +6891,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
  
      uint64_t tick = 0;
      while (!isStopRequested() && !gameThreadFinished.load(std::memory_order_acquire))
-@@ -2420,6 +3422,13 @@ void PS2Runtime::run()
+@@ -2420,6 +3424,13 @@ void PS2Runtime::run()
  
              }
          });
@@ -6796,7 +6905,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..5dfc4885573215da1c22be6336f0b891
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
          UploadFrame(frameTex, this, presentWidth, presentHeight);
-@@ -2452,21 +3461,36 @@ void PS2Runtime::run()
+@@ -2452,21 +3463,36 @@ void PS2Runtime::run()
              requestStop();
              break;
          }
@@ -8187,7 +8296,7 @@ index 0458a8cc8665efa376aa5764f5d08027c0e90533..1907bdc919f846aceb28485680b51bf3
                                      "sceGsResetGraph should free its temporary GIF packet");
          });
 diff --git a/ps2xTest/src/ps2_memory_tests.cpp b/ps2xTest/src/ps2_memory_tests.cpp
-index 0b22fe03c62df92895c96b752a15cacf12ac43da..aeee6bfadb2f187838c808554dba4448e56af869 100644
+index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f67380ab726f 100644
 --- a/ps2xTest/src/ps2_memory_tests.cpp
 +++ b/ps2xTest/src/ps2_memory_tests.cpp
 @@ -40,12 +40,12 @@ namespace
@@ -8744,7 +8853,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..aeee6bfadb2f187838c808554dba4448
          tc.Run("VIF1 DMA chain preserves compact tag high bytes for DIRECT packets", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1912,6 +2423,73 @@ void register_ps2_memory_tests()
+@@ -1912,6 +2423,116 @@ void register_ps2_memory_tests()
              }
          });
  
@@ -8815,10 +8924,53 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..aeee6bfadb2f187838c808554dba4448
 +                t.Equals(causes[0], 1u, "REFE should complete through VIF1 DMAC cause 1");
 +        });
 +
++        tc.Run("VIF1 MFIFO accepts chains longer than 4096 zero-length CNT tags", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            constexpr uint32_t kVif1 = 0x10009000u;
++            constexpr uint32_t kSprFrom = 0x1000D000u;
++            constexpr uint32_t kDctrl = 0x1000E000u;
++            constexpr uint32_t kRbor = 0x1000E050u;
++            constexpr uint32_t kRbsr = 0x1000E040u;
++            constexpr uint32_t kDstat = 0x1000E010u;
++            constexpr uint32_t kRing = 0x00050000u;
++            constexpr uint32_t kRingMask = 0x1FFF0u; // 128 KiB ring.
++            constexpr uint32_t kCntTags = 4097u;
++            constexpr uint32_t kEndOffset = kCntTags * 16u;
++            constexpr uint32_t kProducerOffset = kEndOffset + 16u;
++
++            t.IsTrue(mem.writeIORegister(kDctrl, 9u), "enable DMA and select VIF1 MFIFO");
++            t.IsTrue(mem.writeIORegister(kRbor, kRing), "set MFIFO ring base");
++            t.IsTrue(mem.writeIORegister(kRbsr, kRingMask), "set 128 KiB MFIFO ring mask");
++            for (uint32_t i = 0u; i < kCntTags; ++i)
++                writeDmaTag(mem.getRDRAM(), kRing + i * 16u, makeDmaTag(0u, 1u, 0u));
++            writeDmaTag(mem.getRDRAM(), kRing + kEndOffset, makeDmaTag(0u, 7u, 0u));
++
++            t.IsTrue(mem.writeIORegister(kSprFrom + 0x10u, kRing + kProducerOffset),
++                     "publish the full tag stream through the SPR_FROM cursor");
++            t.IsTrue(mem.writeIORegister(kVif1 + 0x10u, kRing), "set VIF1 MADR to the first tag");
++            t.IsTrue(mem.writeIORegister(kVif1 + 0x20u, 0u), "initialize VIF1 QWC");
++            t.IsTrue(mem.writeIORegister(kVif1 + 0x30u, kRing), "set VIF1 TADR to the first tag");
++            t.IsTrue(mem.writeIORegister(kVif1, 0x104u), "start VIF1 MFIFO chain");
++
++            t.Equals(mem.readIORegister(kVif1 + 0x30u), kRing + kProducerOffset,
++                     "consumer should advance through all CNT tags and the terminal END tag");
++            t.Equals(mem.readIORegister(kVif1 + 0x20u), 0u, "zero-length tags should leave no payload QWC");
++            t.IsTrue((mem.readIORegister(kVif1) & 0x100u) == 0u,
++                     "END after more than 4096 legal tags should complete VIF1");
++            t.IsTrue((mem.readIORegister(kDstat) & (1u << 1u)) != 0u,
++                     "long MFIFO chain should publish VIF1 D_STAT completion");
++            const auto causes = mem.consumeCompletedDmacCauses();
++            t.Equals(causes.size(), static_cast<size_t>(1u), "long MFIFO chain should queue one completion");
++            if (!causes.empty())
++                t.Equals(causes[0], 1u, "long MFIFO chain should use VIF1 DMAC cause 1");
++        });
++
          tc.Run("DMAC SPR_FROM copies scratchpad to RDRAM and completes channel 8", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -2138,7 +2716,7 @@ void register_ps2_memory_tests()
+@@ -2138,7 +2759,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -8827,7 +8979,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..aeee6bfadb2f187838c808554dba4448
              appendU64(packet, makeGifTag(1u, GIF_FMT_IMAGE, 0u, true));
              appendU64(packet, 0ull);
              for (uint32_t i = 0; i < 16u; ++i)
-@@ -2187,7 +2765,7 @@ void register_ps2_memory_tests()
+@@ -2187,7 +2808,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -8837,20 +8989,112 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..aeee6bfadb2f187838c808554dba4448
              appendU64(packet, 0x0Eull);
              appendU64(packet, 0x8000008000ull); // TEXA, harmless setup preceding the IMAGE tag.
 diff --git a/ps2xTest/src/ps2_runtime_expansion_tests.cpp b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
-index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc3825974c34e 100644
+index 4772f3fb772deec963ded9e93fc82d116f1ed441..fb076419152d621888fa13d10b9f4a977c2de915 100644
 --- a/ps2xTest/src/ps2_runtime_expansion_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
-@@ -18,6 +18,9 @@
+@@ -10,6 +10,7 @@
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/ee_scheduler.h"
+ #include "runtime/gs/ps2_gs_psmct32.h"
++#include "runtime/ps2_vu0_recomp.h"
+ #include "ps2_runtime_macros.h"
+ #include "Stubs/MPEG.h"
+ #include "Stubs/CD.h"
+@@ -18,6 +19,10 @@
  #include "Stubs/VU.h"
  
  #include <atomic>
++#include <array>
 +#include <chrono>
 +#include <filesystem>
 +#include <fstream>
  #include <cstdint>
  #include <cstring>
  #include <exception>
-@@ -180,6 +183,58 @@ namespace
+@@ -113,6 +118,82 @@ namespace
+                (static_cast<uint64_t>(upper) << 32);
+     }
+ 
++    uint64_t hashVu0CodeImage(const uint8_t *code)
++    {
++        uint64_t hash = 1469598103934665603ull;
++        for (uint32_t i = 0; i < PS2_VU0_CODE_SIZE; ++i)
++        {
++            hash ^= code[i];
++            hash *= 1099511628211ull;
++        }
++        return hash;
++    }
++
++    std::array<uint8_t, PS2_VU0_CODE_SIZE> makeVu0DispatchTestImage()
++    {
++        std::array<uint8_t, PS2_VU0_CODE_SIZE> code{};
++        constexpr uint32_t kVuUpperNop = 0x000002FFu;
++        constexpr uint32_t kVuUpperEndNop = 0x400002FFu;
++        writeVuInstructionPair(code.data(), 0u, makeVuIaddiu(1u, 0u, 7), kVuUpperEndNop);
++        writeVuInstructionPair(code.data(), 8u, 0u, kVuUpperNop);
++        writeVuInstructionPair(code.data(), 16u, makeVuIaddiu(3u, 0u, 13), kVuUpperEndNop);
++        writeVuInstructionPair(code.data(), 24u, 0u, kVuUpperNop);
++        return code;
++    }
++
++    std::array<uint8_t, PS2_VU0_CODE_SIZE> makeVu0FailingDispatchTestImage()
++    {
++        std::array<uint8_t, PS2_VU0_CODE_SIZE> code{};
++        constexpr uint32_t kVuUpperNop = 0x000002FFu;
++        constexpr uint32_t kVuUpperEndNop = 0x400002FFu;
++        writeVuInstructionPair(code.data(), 0u, makeVuIaddiu(2u, 0u, 11), kVuUpperEndNop);
++        writeVuInstructionPair(code.data(), 8u, 0u, kVuUpperNop);
++        return code;
++    }
++
++    const auto kVu0DispatchTestImage = makeVu0DispatchTestImage();
++    const auto kVu0FailingDispatchTestImage = makeVu0FailingDispatchTestImage();
++    constexpr uint32_t kVu0DispatchTestEntries[] = {0u};
++    std::atomic<uint32_t> g_vu0DispatchNativeCalls{0u};
++    std::atomic<uint32_t> g_vu0DispatchFailingNativeCalls{0u};
++
++    void vu0DispatchTestNative(Vu0RecContext &ctx, uint32_t pc)
++    {
++        ++g_vu0DispatchNativeCalls;
++        if (ctx.state && pc == 0u)
++        {
++            // IADDIU vi1, vi0, 7; E-bit NOP; one delay-slot instruction.
++            ctx.state->vi[1] = 7;
++            ctx.state->pc = 16u;
++            ctx.state->ebit = false;
++            ctx.state->haltAfterDelaySlot = false;
++            ctx.cycle = 2u;
++        }
++        else
++        {
++            ctx.failed = true;
++            ctx.failPc = pc;
++        }
++    }
++
++    void vu0DispatchTestFailAfterMutation(Vu0RecContext &ctx, uint32_t pc)
++    {
++        ++g_vu0DispatchFailingNativeCalls;
++        if (ctx.state)
++            ctx.state->vi[2] = 99;
++        if (ctx.data)
++            ctx.data[0] = 0xEEu;
++        ctx.failed = true;
++        ctx.failPc = pc;
++    }
++
++    const Vu0RecRegistrar kVu0DispatchTestRegistrar{
++        hashVu0CodeImage(kVu0DispatchTestImage.data()), kVu0DispatchTestEntries,
++        1u, nullptr, vu0DispatchTestNative};
++    const Vu0RecRegistrar kVu0FailingDispatchTestRegistrar{
++        hashVu0CodeImage(kVu0FailingDispatchTestImage.data()), kVu0DispatchTestEntries,
++        1u, nullptr, vu0DispatchTestFailAfterMutation};
++
+     bool hasSignedRdWrite(const std::string &generated, uint8_t rd)
+     {
+         if (rd == 0u)
+@@ -180,6 +261,58 @@ namespace
      std::atomic<uint32_t> gMpegStreamCallbackLen{0u};
      std::atomic<uint32_t> gMpegStreamCallbackUserData{0u};
      constexpr uint32_t kMpegCallbackStopPc = 0x00124FF0u;
@@ -8909,7 +9153,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
      std::atomic<int32_t> gMpegWaitResult{-999};
      std::atomic<uint32_t> gMpegWaitStage{0u};
      std::atomic<uint32_t> gMpegNoDuplicateStage{0u};
-@@ -245,6 +300,50 @@ namespace
+@@ -245,6 +378,50 @@ namespace
          runtime->requestStop();
      }
  
@@ -8960,7 +9204,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
      void testMpegWaitProducer(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
      {
          gMpegWaitStage.store(2u, std::memory_order_release);
-@@ -305,6 +404,8 @@ namespace
+@@ -305,6 +482,8 @@ namespace
          gMpegStreamCallbackLen.store(len, std::memory_order_release);
          gMpegStreamCallbackUserData.store(::getRegU32(ctx, 6), std::memory_order_release);
          gMpegStreamCallbackCount.fetch_add(1u, std::memory_order_acq_rel);
@@ -8969,7 +9213,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
          ctx->pc = 0u;
          runtime->requestStop();
      }
-@@ -507,6 +608,48 @@ void register_ps2_runtime_expansion_tests()
+@@ -507,6 +686,48 @@ void register_ps2_runtime_expansion_tests()
                        "ContinueToTarget should remain a non-stopping debug policy");
          });
  
@@ -9018,7 +9262,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
          tc.Run("MPEG init and callback stubs return success instead of TODO errors", [](TestCase &t)
          {
              std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
-@@ -558,6 +701,7 @@ void register_ps2_runtime_expansion_tests()
+@@ -558,6 +779,7 @@ void register_ps2_runtime_expansion_tests()
              constexpr uint32_t kCallbackEntry = 0x00124000u;
              constexpr uint32_t kVideoUserData = 0x11223344u;
              constexpr uint32_t kAudioUserData = 0x55667788u;
@@ -9026,7 +9270,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
              constexpr uint32_t kVideoPacketAddr = 0x00128000u;
              constexpr uint32_t kAudioPacketAddr = 0x00129000u;
  
-@@ -580,12 +724,12 @@ void register_ps2_runtime_expansion_tests()
+@@ -580,12 +802,12 @@ void register_ps2_runtime_expansion_tests()
                  ps2_stubs::sceMpegAddCallback(rdram.data(), &addCtx, &runtime);
              };
  
@@ -9041,7 +9285,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
                  setRegU32(addCtx, 7, kCallbackEntry);
                  setRegU32(addCtx, 8, userData);
                  ps2_stubs::sceMpegAddStrCallback(rdram.data(), &addCtx, &runtime);
-@@ -606,8 +750,10 @@ void register_ps2_runtime_expansion_tests()
+@@ -606,8 +828,10 @@ void register_ps2_runtime_expansion_tests()
  
              registerGenericCallback(0u, 0xDEAD0000u);
              registerGenericCallback(2u, 0xDEAD0002u);
@@ -9054,7 +9298,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
  
              const std::vector<uint8_t> videoPayload = {
                  0x00u, 0x00u, 0x01u, 0xB3u, 0x14u, 0x00u, 0xF0u, 0x13u};
-@@ -640,7 +786,38 @@ void register_ps2_runtime_expansion_tests()
+@@ -640,7 +864,38 @@ void register_ps2_runtime_expansion_tests()
              t.Equals(gMpegStreamCallbackUserData.load(std::memory_order_acquire), kVideoUserData,
                       "video callback should receive registered user data");
  
@@ -9094,7 +9338,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
              const uint32_t audioPacketSize = writePesPacket(kAudioPacketAddr, 0xBDu, audioPayload);
  
              gMpegStreamCallbackCount.store(0u, std::memory_order_release);
-@@ -666,7 +843,24 @@ void register_ps2_runtime_expansion_tests()
+@@ -666,7 +921,24 @@ void register_ps2_runtime_expansion_tests()
                       static_cast<uint32_t>(audioPayload.size()),
                       "audio callback data should report PES payload length");
              t.Equals(gMpegStreamCallbackUserData.load(std::memory_order_acquire), kAudioUserData,
@@ -9120,7 +9364,7 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
  
              ps2_stubs::notifyMpegCdStreamEof();
  
-@@ -746,6 +940,294 @@ void register_ps2_runtime_expansion_tests()
+@@ -746,6 +1018,294 @@ void register_ps2_runtime_expansion_tests()
              runtime.requestStop();
          });
  
@@ -9413,6 +9657,72 @@ index 4772f3fb772deec963ded9e93fc82d116f1ed441..4c79eb9d92032047d8939327269dc382
 +        });
 +
          tc.Run("sceMpegGetPicture blocks as a typed scheduler wait and resumes on EOF", [](TestCase &t)
+         {
+             PS2Runtime runtime;
+@@ -1233,6 +1793,65 @@ void register_ps2_runtime_expansion_tests()
+                      "VU0 cache should rebuild after a direct MicroMem write");
+         });
+ 
++        tc.Run("VU0 native dispatch requires an exact image and registered entry", [](TestCase &t)
++        {
++            PS2Runtime runtime;
++            t.IsTrue(runtime.memory().initialize(), "PS2Memory initialize should succeed");
++            t.IsTrue(runtime.syncCoreSubsystems(), "runtime core subsystems should bind");
++
++            uint8_t *const code = runtime.memory().getVU0Code();
++            std::memcpy(code, kVu0DispatchTestImage.data(), kVu0DispatchTestImage.size());
++            const uint32_t callsBefore = g_vu0DispatchNativeCalls.load();
++
++            R5900Context native{};
++            runtime.executeVU0Microprogram(runtime.memory().getRDRAM(), &native, 0u);
++            t.Equals(g_vu0DispatchNativeCalls.load(), callsBefore + 1u,
++                     "exact registered VU0 image and entry should call native handler");
++            t.Equals(static_cast<uint32_t>(native.vi[1]), 7u,
++                     "native IADDIU result should be visible in VU0 state");
++            t.Equals(native.vu0_pc, 16u,
++                     "native E-bit NOP should complete its delay slot");
++
++            writeVuInstructionPair(code, 0u, makeVuIaddiu(1u, 0u, 9), 0x400002FFu);
++            R5900Context changed{};
++            runtime.executeVU0Microprogram(runtime.memory().getRDRAM(), &changed, 0u);
++            t.Equals(g_vu0DispatchNativeCalls.load(), callsBefore + 1u,
++                     "mutated MicroMem image should bypass the registered native body");
++            t.Equals(static_cast<uint32_t>(changed.vi[1]), 9u,
++                     "changed image should execute through the interpreter");
++
++            std::memcpy(code, kVu0DispatchTestImage.data(), kVu0DispatchTestImage.size());
++            R5900Context unknownEntry{};
++            runtime.executeVU0Microprogram(runtime.memory().getRDRAM(), &unknownEntry, 16u);
++            t.Equals(g_vu0DispatchNativeCalls.load(), callsBefore + 1u,
++                     "unregistered entry should bypass the native body");
++            t.Equals(static_cast<uint32_t>(unknownEntry.vi[3]), 13u,
++                     "unregistered entry should execute through the interpreter");
++        });
++
++        tc.Run("VU0 failed native dispatch falls back without staged side effects", [](TestCase &t)
++        {
++            PS2Runtime runtime;
++            t.IsTrue(runtime.memory().initialize(), "PS2Memory initialize should succeed");
++            t.IsTrue(runtime.syncCoreSubsystems(), "runtime core subsystems should bind");
++
++            std::memcpy(runtime.memory().getVU0Code(), kVu0FailingDispatchTestImage.data(),
++                        kVu0FailingDispatchTestImage.size());
++            uint8_t *const data = runtime.memory().getVU0Data();
++            data[0] = 0x5Au;
++            const uint32_t callsBefore = g_vu0DispatchFailingNativeCalls.load();
++
++            R5900Context ctx{};
++            runtime.executeVU0Microprogram(runtime.memory().getRDRAM(), &ctx, 0u);
++
++            t.Equals(g_vu0DispatchFailingNativeCalls.load(), callsBefore + 1u,
++                     "registered failing native body should be attempted");
++            t.Equals(static_cast<uint32_t>(ctx.vi[2]), 11u,
++                     "interpreter fallback should start from pristine state and execute IADDIU");
++            t.Equals(data[0], 0x5Au,
++                     "failed native staged data mutation should not leak into fallback");
++        });
++
+         tc.Run("VU0 FBRST TE gates a T-bit microprogram stop", [](TestCase &t)
          {
              PS2Runtime runtime;
 diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp

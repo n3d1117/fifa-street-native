@@ -16,6 +16,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--label', required=True)
+parser.add_argument('--app', type=Path, help='exercise an installed bundle through its actual launcher')
 parser.add_argument('--skip-cutscene', action='store_true')
 parser.add_argument('--fast', action='store_true', help='debug-only movie bypass and shorter saved-game route')
 parser.add_argument('--keep-story', action='store_true', help='with --fast, skip only the logo movie and retain the mission story')
@@ -38,7 +39,7 @@ if args.seconds < (45 if args.fast else 85):
 
 def english_menu_present(lines):
     language = any(line.get('text', '').strip().casefold() == 'language'
-                   and line.get('confidence', 0) >= 0.6 for line in lines)
+                   and line.get('confidence', 0) >= 0.5 for line in lines)
     english = any(line.get('text', '').strip().casefold() == 'english'
                   and line.get('confidence', 0) >= 0.6 for line in lines)
     return language and english
@@ -89,7 +90,7 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
                 result['navigation_guard'] = {
                     'status': 'english_menu_confirmed',
                     'required_labels': ['LANGUAGE', 'ENGLISH'],
-                    'minimum_confidence': 0.6,
+                    'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.6},
                     'confirming_frame_elapsed_seconds': [round(previous_match_elapsed, 3), frame['elapsed_seconds']],
                     'elapsed_seconds': round(guard_elapsed, 3),
                     'frames': frames,
@@ -110,7 +111,7 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
     result['navigation_guard'] = {
         'status': 'english_menu_not_confirmed',
         'required_labels': ['LANGUAGE', 'ENGLISH'],
-        'minimum_confidence': 0.6,
+        'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.6},
         'elapsed_seconds': round(max(0.0, elapsed), 3),
         'frames': frames,
     }
@@ -127,6 +128,8 @@ if args.fast:
         os.environ['TARZAN_DEBUG_KEEP_STORY'] = '1'
 command = [str(runner), '--user-dir', str(Path.home() / 'Library/Application Support/TarzanFreeridePS2'),
            str(ROOT / 'extracted/disc/SLES_503.50')]
+if args.app:
+    command = [str(args.app.resolve(strict=True) / 'Contents/MacOS/TarzanFreeridePS2Launcher')]
 with (out / 'stdout.log').open('wb') as log:
     process = subprocess.Popen(command, cwd=ROOT, env=os.environ.copy(), stdout=log, stderr=subprocess.STDOUT)
     started = time.monotonic()

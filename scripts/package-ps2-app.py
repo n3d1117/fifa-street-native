@@ -105,7 +105,7 @@ def write_info_plist(contents):
         "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": "org.rrv.tarzan-freeride-ps2",
         "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": "Tarzan Freeride PS2",
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "3", "LSMinimumSystemVersion": "11.0",
+        "CFBundleVersion": "4", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
         "NSPrincipalClass": "NSApplication",
     }
@@ -238,17 +238,23 @@ def main():
             "game_asset_files": sum(1 for path in (resources / "game").rglob("*") if path.is_file()),
             "runtime_capabilities_verified": False, "gameplay_verified": False,
         })
-    with (resources / "package-manifest.json").open("w", encoding="utf-8") as stream:
-        json.dump(manifest, stream, indent=2)
-        stream.write("\n")
-
     # Sign inside out only after all Mach-O edits and assets are final.
     for image in (frameworks / "Runtime/libc++abi.1.dylib", frameworks / "Runtime/libc++.1.dylib",
                   frameworks / "PCSX2GSBridge" / BRIDGE_NAME,
                   frameworks / "PS2Recomp/ps2EntryRunner"):
         if image.exists():
             run(["codesign", "--force", "--sign", "-", image])
+    # GS resources live under Frameworks and need the recursive signing pass.
+    # Seal the final manifest afterward without re-signing nested binaries.
     run(["codesign", "--force", "--deep", "--strict", "--sign", "-", app])
+    # Record hashes of the signed binaries; signing changes their bytes.
+    if not args.prepare_only:
+        manifest["runner_sha256"] = sha256(bundled_runner)
+        manifest["bridge_sha256"] = sha256(bundled_bridge)
+    with (resources / "package-manifest.json").open("w", encoding="utf-8") as stream:
+        json.dump(manifest, stream, indent=2)
+        stream.write("\n")
+    run(["codesign", "--force", "--strict", "--sign", "-", app])
     run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", app])
     print("Prepared scaffold (incomplete)" if args.prepare_only else "Built Metal-linked app bundle; runtime qualification remains pending")
     print(output)

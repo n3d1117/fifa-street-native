@@ -31,6 +31,9 @@ set(PS2X_ENABLE_IOP_RPC_TRACE OFF CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_RUNNER_UNITY_BUILD ON CACHE BOOL "" FORCE)
 set(PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE 32 CACHE STRING "" FORCE)
 
+set(PS2X_VU0_CATALOG_DIR "${TARZAN_ROOT}/runtime/vu0-catalog" CACHE PATH "Captured VU0 catalogs")
+set(PS2X_VU0_GENERATOR "${TARZAN_ROOT}/tools/vu1recomp/vu1recomp.py" CACHE FILEPATH "VU static generator")
+set(PS2X_VU0GEN_DIR "${TARZAN_ROOT}/generated/vu0-native" CACHE PATH "Native VU0 source directory")
 add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
 
 # CMake's option de-duplication collapses repeated `-framework` tokens from
