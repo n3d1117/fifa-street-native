@@ -17,7 +17,7 @@ completed source decompilation or a verified complete game port.
 | Loading | Measured host reads through first-mission assets: ~9 MB in ~14 ms; disk reads are not the dominant delay in that run. Mission-transition samples show guest texture conversion/initialization. Three integer conversion handlers compile at O2 with original checkpoints retained; speedup not yet established by controlled A/B. |
 | Performance | Native VU0 run sustained ~25 DISPFB2 changes/s in first-mission gameplay, versus earlier interpreter/differential runs ~22–23/s. Separate runs, not a controlled speedup measurement. A fixed 4096-tag MFIFO limit caused the faster path to stall; corrected to configured ring capacity and covered by a 4098-tag regression. These are framebuffer swaps, not proof of simulation speed or unique frames. |
 | Metal | Measured steady section: 50-Hz field service, p95 interval 20.50 ms; aggregate asynchronous GPU work ~3.52 ms/field; no GPU framebuffer readbacks. CPU work/timing is the next target. |
-| Image quality | Upscaled world-menu tile grid traced to ST triangle strips. A guarded half-pixel UI coverage correction removed the black grid in 4×/16:9 capture. Optional Sharper image uses upstream Metal CAS 50% and sharp bilinear presentation; original texture detail remains unchanged. |
+| Image quality | Upscaled world-menu tile grid traced to ST triangle strips. A guarded half-pixel UI coverage correction removed the black grid in 4×/16:9 capture. The 16:9 title backdrop camera is scoped by its dialog ID, removing the angled black edges in the main-menu capture. Optional Sharper image uses upstream Metal CAS 50% and sharp bilinear presentation; original texture detail remains unchanged. |
 | Experiments | Off by default: 60/120 FPS targets and 16:9 mode. Independent internal resolution selector defaults to Native, with 2×/3×/4× options. First-mission high-FPS runs measured ~26–29 framebuffer swaps/s; menus approach the requested cadence. 2×/16:9 held ~25/s. First-mission 4×/4:3 and 3×/16:9 runs also reached ~25/s after loading; screenshots showed sharper geometry with no obvious new artifacts. Movie pacing now converts authored PTS and PTS-less frame intervals using the effective VBlank period; regression coverage includes 50/60/120 Hz. See `docs/experiments.md`. |
 | Runtime bindings | Audit found 33 active configured names mapped to unimplemented handlers; execution on later title paths is unknown. Other shims also need behavioral validation. |
 | Mobile / tvOS | Feasibility only. AppKit host, deployment/toolchain support, audio/session lifecycle and device performance need separate work. |
@@ -50,9 +50,10 @@ first-mission evidence must never be presented as whole-game completion.
 1. Confirm audible lip-sync in the installed build 8, including startup and the
    complete first-mission movie. Timing traces qualify clock rates, not perceptual
    synchronization; the ~93 ms initial pre-roll remains to compare with original.
-2. Resolve the 16:9 main-menu backdrop edge exposure. Engine/level flags also
-   remain active in menus, so they cannot safely select a menu-only camera fix.
-   Preserve the working gameplay camera while identifying the backdrop instance.
+2. Build 9 restores the authored camera only for the title backdrop dialog;
+   4×/16:9 captures fill the main-menu edges while first-mission gameplay keeps
+   its widescreen camera. Other menus, progression and later scenes remain to
+   qualify. Engine/level flags alone could not safely distinguish this backdrop.
 3. Optimize measured guest render/culling and character-update CPU hotspots.
    Upstream presentation throttling removed the sampled Metal drawable wait;
    high-FPS first-mission movement works but 60/120 FPS targets remain unmet.

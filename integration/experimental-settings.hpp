@@ -4,6 +4,12 @@
 
 extern "C" {
 void tarzan_experiments_trace_clock(uint64_t total, uint64_t delta);
+void tarzan_experiments_trace_camera_context(uint32_t return_address,
+                                             uint32_t camera,
+                                             uint32_t world_dialog,
+                                             uint32_t dialog_id,
+                                             uint32_t world_object);
+int tarzan_experiments_widescreen_camera(const uint8_t* rdram, uint32_t guest_sp);
 // Loads <user_directory>/experimental-settings.plist once. Missing or invalid
 // options remain disabled. The active values are read by the game thread.
 void tarzan_experiments_configure(const char* user_directory);

@@ -93,3 +93,12 @@ process-local FIFO input path. It uses copied saves when supplied `--user-dir`,
 does not depend on desktop keyboard focus, and is disabled during normal play.
 Movie audio and video now share real-time hardware pacing; synchronous IOP RPC
 work consumes the accumulated IOP budget instead of double-counting cycles.
+
+Menu camera scoping: the title backdrop is a C3DWorldDlg with serialized ID
+`0x107003b9`; first-mission gameplay uses a different dialog ID (`0x3e9`).
+The widescreen camera adjustment preserves the backdrop's authored camera while
+other dialog/camera paths retain widescreen. The generated-code hook checks the
+CAM frame's saved caller and dialog pointer, so guest yields do not lose its
+context. Prologue, caller and SetId instructions are verified against the ELF.
+`TARZAN_TRACE_CAMERA_CONTEXT=1` logs up to 64 distinct camera/dialog tuples for
+future scene diagnosis; it never selects cameras by transient heap addresses.

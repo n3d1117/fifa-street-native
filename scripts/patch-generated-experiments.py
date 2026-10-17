@@ -29,6 +29,7 @@ FOV_MARK = "// TARZAN_EXPERIMENT_HD_FOV"
 INIT_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_INIT"
 SYNC_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_SYNC"
 CLOCK_MARK = "// TARZAN_EXPERIMENT_CLOCK_TRACE"
+CAMERA_TRACE_MARK = "// TARZAN_EXPERIMENT_CAMERA_CONTEXT_TRACE"
 
 
 class PatchError(Exception):
@@ -66,6 +67,10 @@ def verify_elf(path: Path) -> None:
     expected = {
         0x369A3C: 0x3C023F00,
         0x369A7C: 0x4614A843,
+        0x3699C4: 0x7FBF0030,
+        0x3699C8: 0x7FB10020,
+        0x338BD8: 0x0C0DA670,
+        0x33B324: 0xAC850004,
         0x360388: 0xFC241A10,
     }
     for address, word in expected.items():
@@ -135,6 +140,64 @@ def patch_camera(text: str) -> str:
         text = replace_once(text, old, new, "camera FOV at PC 0x369a7c")
     elif text.count(FOV_MARK) != 1:
         raise PatchError("camera FOV: multiple experiment markers")
+
+    trace = """    // TARZAN_EXPERIMENT_CAMERA_CONTEXT_TRACE: bounded, opt-in instance sampling.
+    if (GPR_U32(ctx, 31) == 0x338BE0u) {
+        const uint32_t worldDialog = GPR_U32(ctx, 17);
+        uint32_t dialogId = 0, worldObject = 0;
+        if (worldDialog <= 0x01FFFF08u) {
+            dialogId = READ32(worldDialog + 4u);
+            worldObject = READ32(worldDialog + 0xF4u);
+        }
+        tarzan_experiments_trace_camera_context(GPR_U32(ctx, 31), GPR_U32(ctx, 4),
+                                                worldDialog, dialogId, worldObject);
+    } else {
+        tarzan_experiments_trace_camera_context(GPR_U32(ctx, 31), GPR_U32(ctx, 4),
+                                                0, 0, 0);
+    }
+"""
+    if text.count(CAMERA_TRACE_MARK):
+        if text.count(CAMERA_TRACE_MARK) != 1:
+            raise PatchError("camera trace: multiple experiment markers")
+    else:
+        old_trace = """    // Diagnostic-only: compare the active camera/dialog instances in menu and gameplay.
+    // Only the known C3DWorldDlg caller has a meaningful $s1 dialog pointer here.
+    if (GPR_U32(ctx, 31) == 0x338BE0u) {
+        const uint32_t worldDialog = GPR_U32(ctx, 17);
+        uint32_t dialogId = 0, worldObject = 0;
+        if (worldDialog <= 0x01FFFF08u) {
+            dialogId = READ32(worldDialog + 4u);
+            worldObject = READ32(worldDialog + 0xF4u);
+        }
+        tarzan_experiments_trace_camera_context(GPR_U32(ctx, 31), GPR_U32(ctx, 4),
+                                                worldDialog, dialogId, worldObject);
+    } else {
+        tarzan_experiments_trace_camera_context(GPR_U32(ctx, 31), GPR_U32(ctx, 4),
+                                                0, 0, 0);
+    }
+"""
+        anchor = """    ctx->pc = 0x3699c0u;
+
+    // 0x3699c0: 0x27bdffb0  addiu       $sp, $sp, -0x50"""
+        if text.count(anchor) == 1:
+            text = text.replace(anchor, """    ctx->pc = 0x3699c0u;
+
+""" + trace + """    // 0x3699c0: 0x27bdffb0  addiu       $sp, $sp, -0x50""", 1)
+        elif text.count(old_trace) == 1:
+            text = text.replace(old_trace, trace, 1)
+        else:
+            raise PatchError("camera trace: expected one CAM entry anchor or known diagnostic block")
+        if text.count(CAMERA_TRACE_MARK) != 1:
+            raise PatchError("camera trace: failed to install marker")
+
+    old_getter = "tarzan_experiments_hd_widescreen()"
+    new_getter = "tarzan_experiments_widescreen_camera(rdram, GPR_U32(ctx, 29))"
+    if text.count(new_getter) == 0:
+        if text.count(old_getter) != 2:
+            raise PatchError(f"camera scope gate: expected two legacy getter calls, found {text.count(old_getter)}")
+        text = text.replace(old_getter, new_getter)
+    elif text.count(new_getter) != 2 or old_getter in text:
+        raise PatchError("camera scope gate: mixed or duplicate getter forms")
     return ensure_include(text, "camera")
 
 

@@ -105,7 +105,7 @@ def write_info_plist(contents):
         "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": "org.rrv.tarzan-freeride-ps2",
         "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": "Tarzan Freeride PS2",
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "8", "LSMinimumSystemVersion": "11.0",
+        "CFBundleVersion": "9", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
         "NSPrincipalClass": "NSApplication",
     }
