@@ -8106,10 +8106,28 @@ index b02c7ca693a627d6a2d0a24ddd3d8fd5a4087298..dcf968294dc844058e4d9628aa17f056
 +                  << " pendingImageQWC=" << m_vif1PendingPath2ImageQwc << std::endl;
  }
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-index bd75bba318bbaec0e635c5aeddb61be0a7123095..478fce1ebaa7f07c0c1c1e2438466121f6bc0c37 100644
+index bd75bba318bbaec0e635c5aeddb61be0a7123095..6639cd3fcea3a1cfbdf9e378daa7ecbf7f11ee8e 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 +++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-@@ -919,7 +919,9 @@ void VU1Interpreter::finishXgkick()
+@@ -73,7 +73,16 @@ void VU1Interpreter::resetScheduler()
+     m_vfWritePipeline = {};
+     m_viWritePipeline = {};
+     m_accWritePipeline = {};
+-    m_xgkick = {};
++    // Every transmitted qword is overwritten before it is parsed or submitted.
++    // Keep the private packet storage; only transfer metadata needs resetting.
++    m_xgkick.sourceAddress = 0u;
++    m_xgkick.totalBytes = 0u;
++    m_xgkick.copiedBytes = 0u;
++    m_xgkick.currentTagEnd = 0u;
++    m_xgkick.cycleCredit = 0u;
++    m_xgkick.issueCycle = 0u;
++    m_xgkick.active = false;
++    m_xgkick.currentTagEop = false;
+     m_vfReady = {};
+     m_viReady = {};
+     m_accReady = {};
+@@ -919,7 +928,9 @@ void VU1Interpreter::finishXgkick()
      if (!m_xgkick.active)
          return;
  
@@ -8120,7 +8138,19 @@ index bd75bba318bbaec0e635c5aeddb61be0a7123095..478fce1ebaa7f07c0c1c1e2438466121
          m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
      else if (m_activeGs)
          m_activeGs->processGIFPacket(m_xgkick.packet.data(), m_xgkick.totalBytes);
-@@ -1608,6 +1610,17 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
+@@ -932,7 +943,10 @@ void VU1Interpreter::startXgkick(uint32_t qwordAddress)
+         return;
+ 
+     const uint32_t sourceAddress = (qwordAddress * 16u) % m_activeVuDataSize;
+-    m_xgkick = {};
++    m_xgkick.totalBytes = 0u;
++    m_xgkick.copiedBytes = 0u;
++    m_xgkick.currentTagEnd = 0u;
++    m_xgkick.currentTagEop = false;
+     m_xgkick.active = true;
+     m_xgkick.sourceAddress = sourceAddress;
+     m_xgkick.cycleCredit = 1u; // XGKICK's issue cycle counts toward PATH1.
+@@ -1608,6 +1622,17 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
      run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
  }
  
@@ -8138,7 +8168,7 @@ index bd75bba318bbaec0e635c5aeddb61be0a7123095..478fce1ebaa7f07c0c1c1e2438466121
  void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
                              uint8_t *vuData, uint32_t dataSize,
                              GS &gs, PS2Memory *memory,
-@@ -1833,6 +1846,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+@@ -1833,6 +1858,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
          m_pendingHaltT = false;
      }
      m_state.cycles = m_cycle;
