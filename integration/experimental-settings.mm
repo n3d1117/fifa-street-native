@@ -23,6 +23,8 @@ std::atomic<bool> s_sharperImage{false};
 std::atomic<bool> s_pendingSharperImage{false};
 std::atomic<bool> s_rememberLanguage{false};
 std::atomic<bool> s_pendingRememberLanguage{false};
+std::atomic<bool> s_skipLogos{false};
+std::atomic<bool> s_pendingSkipLogos{false};
 std::atomic<int> s_savedLanguage{-1};
 std::atomic<int> s_targetFPS{60};
 std::atomic<int> s_pendingTargetFPS{60};
@@ -36,6 +38,7 @@ NSButton* s_highFPSButton;
 NSButton* s_hdWidescreenButton;
 NSButton* s_sharperImageButton;
 NSButton* s_rememberLanguageButton;
+NSButton* s_skipLogosButton;
 NSPopUpButton* s_targetFPSPopup;
 NSPopUpButton* s_renderScalePopup;
 NSTextField* s_status;
@@ -45,6 +48,7 @@ constexpr NSInteger kHighFPSTag = 1;
 constexpr NSInteger kHDWidescreenTag = 2;
 constexpr NSInteger kSharperImageTag = 3;
 constexpr NSInteger kRememberLanguageTag = 4;
+constexpr NSInteger kSkipLogosTag = 5;
 
 bool isIntegerNumber(id value) {
     return [value isKindOfClass:[NSNumber class]] &&
@@ -90,6 +94,8 @@ void refreshControls() {
         [s_sharperImageButton setState:s_pendingSharperImage.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_rememberLanguageButton)
         [s_rememberLanguageButton setState:s_pendingRememberLanguage.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
+    if (s_skipLogosButton)
+        [s_skipLogosButton setState:s_pendingSkipLogos.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_targetFPSPopup)
         [s_targetFPSPopup selectItemWithTag:s_pendingTargetFPS.load(std::memory_order_relaxed)];
     if (s_renderScalePopup)
@@ -106,6 +112,8 @@ void updatePendingFromControl(NSButton* sender) {
         s_pendingSharperImage.store(enabled, std::memory_order_relaxed);
     else if ([sender tag] == kRememberLanguageTag)
         s_pendingRememberLanguage.store(enabled, std::memory_order_relaxed);
+    else if ([sender tag] == kSkipLogosTag)
+        s_pendingSkipLogos.store(enabled, std::memory_order_relaxed);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 
@@ -154,6 +162,7 @@ bool saveSettings() {
     plist[@"targetFPS"] = @(s_pendingTargetFPS.load(std::memory_order_relaxed));
     plist[@"renderScale"] = @(s_pendingRenderScale.load(std::memory_order_relaxed));
     plist[@"sharperImage"] = @(s_pendingSharperImage.load(std::memory_order_relaxed));
+    plist[@"skipLogos"] = @(s_pendingSkipLogos.load(std::memory_order_relaxed));
     const bool remember = s_pendingRememberLanguage.load(std::memory_order_relaxed);
     plist[@"rememberLanguage"] = @(remember);
     const int language = s_savedLanguage.load(std::memory_order_relaxed);
@@ -174,7 +183,7 @@ void showWindowOnMain() {
     }
 
     const CGFloat width = 590;
-    const CGFloat height = 568;
+    const CGFloat height = 644;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -271,6 +280,25 @@ void showWindowOnMain() {
     [languageDetail setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:languageDetail];
 
+    // Move all earlier controls up one more row; leave status and Save anchored below.
+    for (NSView* subview in [content subviews]) {
+        NSRect frame = [subview frame];
+        frame.origin.y += 76;
+        [subview setFrame:frame];
+    }
+
+    s_skipLogosButton = [NSButton checkboxWithTitle:@"Skip Disney / Ubisoft logos" target:s_actions action:@selector(settingChanged:)];
+    [s_skipLogosButton setTag:kSkipLogosTag];
+    [s_skipLogosButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [content addSubview:s_skipLogosButton];
+    NSTextField* logosDetail = [NSTextField labelWithString:@"Boot without branding movies. Story movies still play."];
+    [logosDetail setFrame:NSMakeRect(46, 116, 510, 30)];
+    [logosDetail setMaximumNumberOfLines:2];
+    [[logosDetail cell] setWraps:YES];
+    [[logosDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [logosDetail setTextColor:[NSColor secondaryLabelColor]];
+    [content addSubview:logosDetail];
+
     s_status = [NSTextField labelWithString:@"Changes apply after restarting the game."];
     [s_status setFrame:NSMakeRect(22, 70, 420, 20)];
     [s_status setTextColor:[NSColor secondaryLabelColor]];
@@ -314,6 +342,7 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         const bool hdWidescreen = isBoolean(plist[@"hdWidescreen"]) && [plist[@"hdWidescreen"] boolValue];
         const bool sharperImage = isBoolean(plist[@"sharperImage"]) && [plist[@"sharperImage"] boolValue];
         const bool rememberLanguage = isBoolean(plist[@"rememberLanguage"]) && [plist[@"rememberLanguage"] boolValue];
+        const bool skipLogos = isBoolean(plist[@"skipLogos"]) && [plist[@"skipLogos"] boolValue];
         const int savedLanguage = rememberLanguage ? validLanguage(plist[@"lastLanguage"]) : -1;
         int targetFPS = 60;
         id targetValue = plist[@"targetFPS"];
@@ -331,6 +360,8 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         s_sharperImage.store(sharperImage, std::memory_order_relaxed);
         s_rememberLanguage.store(rememberLanguage, std::memory_order_relaxed);
         s_pendingRememberLanguage.store(rememberLanguage, std::memory_order_relaxed);
+        s_skipLogos.store(skipLogos, std::memory_order_relaxed);
+        s_pendingSkipLogos.store(skipLogos, std::memory_order_relaxed);
         s_savedLanguage.store(savedLanguage, std::memory_order_relaxed);
         s_targetFPS.store(targetFPS, std::memory_order_relaxed);
         s_renderScale.store(renderScale, std::memory_order_relaxed);
@@ -358,6 +389,7 @@ extern "C" int tarzan_experiments_saved_language() {
     const int language = s_savedLanguage.load(std::memory_order_relaxed);
     return language >= 0 && language <= 4 ? language : -1;
 }
+extern "C" int tarzan_experiments_skip_logos() { return s_skipLogos.load(std::memory_order_relaxed) ? 1 : 0; }
 
 extern "C" void tarzan_experiments_accept_language(uint32_t languageID) {
     if (languageID > 4u) return;

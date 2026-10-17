@@ -18,6 +18,7 @@ GENERATED = ROOT / "generated/SLES-50350-symbolmap-entry"
 DEFAULT_ELF = ROOT / "extracted/disc/SLES_503.50"
 
 FILES = {
+    "logo": "GAM_InitEngineState_StartProgram__Fv_0x35dff0.cpp",
     "camera": "CAM_vAdjustCameraToViewport_0x3699c0.cpp",
     "init": "GAM_InitEngineState_Playing__Fv_0x35ec20.cpp",
     "sync": "osrSyncCallback__Fi_0x3f8cf0.cpp",
@@ -34,6 +35,7 @@ INIT_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_INIT"
 SYNC_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_SYNC"
 CLOCK_MARK = "// TARZAN_EXPERIMENT_CLOCK_TRACE"
 CAMERA_TRACE_MARK = "// TARZAN_EXPERIMENT_CAMERA_CONTEXT_TRACE"
+LOGO_MARK = "// TARZAN_EXPERIMENT_SKIP_STARTUP_LOGO"
 LANGUAGE_START_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_START"
 LANGUAGE_MENU_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_MENU"
 LANGUAGE_REQUESTED_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_REQUESTED"
@@ -80,6 +82,11 @@ def verify_elf(path: Path) -> None:
         0x338BD8: 0x0C0DA670,
         0x33B324: 0xAC850004,
         0x360388: 0xFC241A10,
+        0x35E2B0: 0x3C02004B,
+        0x35E2B4: 0x24446460,
+        0x35E2C4: 0x0C0D8EAC,
+        0x35E2C8: 0x70004628,
+        0x4B6460: 0x6F676F4C,
         0x34FCE0: 0x0C0D5B88,
         0x350350: 0x27BDFFB0,
         0x2CD48C: 0x7BBF0010,
@@ -375,6 +382,26 @@ def patch_language_accepted(text: str) -> str:
     return ensure_include(text, "language acceptance")
 
 
+def patch_logo(text: str) -> str:
+    old = """    if (!runtime->dispatchGuestBranch(rdram, ctx, 0x363AB0u, 0x35E2C4u, 0x35E2CCu, PS2Runtime::GuestBranchKind::DirectCall, "JAL")) {
+        return;
+    }
+"""
+    new = """    // TARZAN_EXPERIMENT_SKIP_STARTUP_LOGO: exact startup call, after its delay slot.
+    if (!tarzan_experiments_skip_startup_logo(rdram, GPR_U32(ctx, 4))) {
+        if (!runtime->dispatchGuestBranch(rdram, ctx, 0x363AB0u, 0x35E2C4u, 0x35E2CCu, PS2Runtime::GuestBranchKind::DirectCall, "JAL")) {
+            return;
+        }
+    }
+"""
+    if text.count(LOGO_MARK):
+        if text.count(LOGO_MARK) != 1:
+            raise PatchError("startup logo: multiple experiment markers")
+    else:
+        text = replace_once(text, old, new, "startup logo at PC 0x35e2c4")
+    return ensure_include(text, "startup logo")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generated-dir", type=Path, default=GENERATED)
@@ -385,6 +412,7 @@ def main() -> int:
         paths = {key: args.generated_dir / name for key, name in FILES.items()}
         contents = {key: path.read_text() for key, path in paths.items()}
         updated = {
+            "logo": patch_logo(contents["logo"]),
             "camera": patch_camera(contents["camera"]),
             "init": patch_init(contents["init"]),
             "sync": patch_sync(contents["sync"]),

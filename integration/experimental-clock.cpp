@@ -43,6 +43,15 @@ void clearLanguageCross() {
 }
 } // namespace
 
+extern "C" int tarzan_experiments_skip_startup_logo(const uint8_t* ram, uint32_t name) {
+    if (!tarzan_experiments_skip_logos() || name != 0x4B6460u) return 0;
+    uint32_t word = 0, tail = 0;
+    if (!readGuestLanguage32(ram, name, 0, word) || word != 0x6F676F4Cu ||
+        !readGuestLanguage32(ram, name, 4, tail) || (tail & 0xFFu)) return 0;
+    std::fprintf(stderr, "[tarzan-boot] skipped startup LOGO.PSS\n");
+    return 1;
+}
+
 extern "C" uint32_t tarzan_experiments_boot_language_item(const uint8_t* ram,
                                                             uint32_t menu,
                                                             uint32_t originalItem) {

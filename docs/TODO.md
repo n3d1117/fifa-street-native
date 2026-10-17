@@ -64,14 +64,12 @@ Reference: [Fukami](https://github.com/danisandoval/fukami), reviewed at
 
 ## P4 — Optional logo skip
 
-- Investigate an off-by-default “Skip Disney / Ubisoft logos” option that lands
-  at the guest Press Start screen or language selector. Identify and validate
-  the exact logo state/asset and transition first; skip only those logos, never
-  the language flow or story movies. Fall back to the normal boot path on any
-  mismatch.
-- Do not reuse the generic `readMpeg` debug bypass at 0x444080: it skips MPEG
-  playback without distinguishing branding from story content. It is currently
-  gated by `TARZAN_DEBUG_SKIP_MOVIES` for probes only.
+- Implemented in Build 18, off by default: “Skip Disney / Ubisoft logos”.
+  Only the verified startup `Logo` call is bypassed, before movie setup.
+  Default boot retains `LOGO.PSS`; enabled boot reaches the selector or the
+  remembered-language title screen without opening that asset. Story and
+  attract-mode call sites remain unchanged; unknown names use normal playback.
+- Keep the generic `TARZAN_DEBUG_SKIP_MOVIES` bypass limited to diagnostics.
 
 ## P5 — Apple mobile platforms, later
 
