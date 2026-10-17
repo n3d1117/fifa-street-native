@@ -67,6 +67,7 @@ struct Vu1RecContext
     uint8_t backupReg = 0;
     int32_t backupValue = 0;
     Vu1RecKick kick;
+    const uint8_t *code = nullptr; // read-only microcode for guarded AOT variants
 };
 
 using Vu1RecFn = void (*)(Vu1RecContext &ctx, uint32_t entryPc);
@@ -79,6 +80,7 @@ struct Vu1RecImage
     Vu1RecFn fast = nullptr;
     Vu1RecFn full = nullptr;
     bool hasDebugBits = false; // a reachable D or T bit; native code treats it as FBRST.DE/TE = 0
+    bool guarded = false; // validates each instruction pair instead of a whole-bank hash
 
     bool hasEntry(uint32_t pc) const
     {
@@ -91,12 +93,13 @@ struct Vu1RecImage
 
 void vu1recRegister(const Vu1RecImage &image);
 const Vu1RecImage *vu1recFind(uint64_t hash);
+const Vu1RecImage *vu1recFindGuarded();
 size_t vu1recImageCount();
 
 struct Vu1RecRegistrar
 {
     Vu1RecRegistrar(uint64_t hash, const uint32_t *entries, size_t count, Vu1RecFn fast, Vu1RecFn full,
-                    bool hasDebugBits = false)
+                    bool hasDebugBits = false, bool guarded = false)
     {
         Vu1RecImage image;
         image.hash = hash;
@@ -105,6 +108,7 @@ struct Vu1RecRegistrar
         image.fast = fast;
         image.full = full;
         image.hasDebugBits = hasDebugBits;
+        image.guarded = guarded;
         vu1recRegister(image);
     }
 };

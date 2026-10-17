@@ -196,7 +196,15 @@ void vu1recRegister(const Vu1RecImage &image)
 const Vu1RecImage *vu1recFind(uint64_t hash)
 {
     for (const Vu1RecImage &image : registry())
-        if (image.hash == hash)
+        if (!image.guarded && image.hash == hash)
+            return &image;
+    return nullptr;
+}
+
+const Vu1RecImage *vu1recFindGuarded()
+{
+    for (const Vu1RecImage &image : registry())
+        if (image.guarded)
             return &image;
     return nullptr;
 }
@@ -303,6 +311,8 @@ const Vu1RecImage *Vu1NativeDispatcher::currentImage(const uint8_t *code, uint64
             if (hit->registryGeneration != currentRegistryGeneration)
             {
                 hit->image = vu1recFind(hit->hash);
+                if (!hit->image)
+                    hit->image = vu1recFindGuarded();
                 hit->registryGeneration = currentRegistryGeneration;
             }
             m_cachedImage = hit->image;
@@ -312,6 +322,8 @@ const Vu1RecImage *Vu1NativeDispatcher::currentImage(const uint8_t *code, uint64
             ++cache.misses;
             m_cachedHash = fnv1a64(code, PS2_VU1_CODE_SIZE);
             m_cachedImage = vu1recFind(m_cachedHash);
+            if (!m_cachedImage)
+                m_cachedImage = vu1recFindGuarded();
 
             CodeImageCacheEntry *victim = nullptr;
             for (CodeImageCacheEntry &entry : cache.entries)
@@ -434,6 +446,12 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
     maybePrintPeriodic();
     const Vu1RecImage *image = currentImage(memory);
     const uint32_t pc = startPC & 0x3FFFu;
+    if (image && !image->hasEntry(pc))
+    {
+        const Vu1RecImage *guarded = vu1recFindGuarded();
+        if (guarded && guarded->hasEntry(pc))
+            image = guarded;
+    }
     // Capture interpreter-only images too: these snapshots bootstrap native
     // generation and allow offline equivalence checks before enabling it.
     if (m_captureDir)
@@ -486,10 +504,13 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
     Vu1RecContext &ctx = *m_ctx;
     const uint64_t startCycle = vu1.cycleCount();
     resetContext(ctx, &stagedState, stagedData.data(), startCycle, maxCycles, top, itop, nullptr, nullptr);
+    ctx.code = memory.getVU1Code();
     ctx.sink = &PacketCapture::sink;
     ctx.sinkUser = &stagedPackets;
     const double t0 = nowSeconds();
-    image->fast(ctx, pc);
+    // A guarded pool admits code combinations beyond the closed image catalog.
+    // Such programs may observe flags the catalog's fast variant omitted.
+    (vu1recFindGuarded() ? image->full : image->fast)(ctx, pc);
     m_vu1Seconds += nowSeconds() - t0;
     if (ctx.failed)
     {
@@ -497,7 +518,7 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
         ++m_stats.fallbackFailed;
         if (m_stats.nativeFailures <= 16u)
             std::fprintf(stderr, "[vu1rec] native program failed, using unchanged interpreter input: image=%016llx entry=0x%04x failPc=0x%04x kickErrors=%u\n",
-                         static_cast<unsigned long long>(image->hash), pc, ctx.failPc, ctx.kickErrors);
+                         static_cast<unsigned long long>(m_cachedHash), pc, ctx.failPc, ctx.kickErrors);
         return false;
     }
     vu1.state() = stagedState;
@@ -565,6 +586,7 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1,
     VU1State sFull = s0;
     PacketCapture pFull;
     resetContext(*m_ctx, &sFull, dFull.data(), c0, maxCycles, top, itop, nullptr, nullptr);
+    m_ctx->code = memory.getVU1Code();
     m_ctx->sink = &PacketCapture::sink;
     m_ctx->sinkUser = &pFull;
     image.full(*m_ctx, pc);
@@ -575,6 +597,7 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1,
     VU1State sFast = s0;
     PacketCapture pFast;
     resetContext(*m_ctx2, &sFast, dFast.data(), c0, maxCycles, top, itop, nullptr, nullptr);
+    m_ctx2->code = memory.getVU1Code();
     m_ctx2->sink = &PacketCapture::sink;
     m_ctx2->sinkUser = &pFast;
     image.fast(*m_ctx2, pc);

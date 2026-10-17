@@ -4,7 +4,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-tests",
       "patch": "patches/ps2recomp-tests.patch",
-      "patch_sha256": "181ba675f757d45cf0f1bd43e9625be8e17e0f10535489a677ffb639cad8f00a",
+      "patch_sha256": "23db823492008a85bc8e607547a5571c03316cef85c3ee0c7228a9d71dfe6c90",
       "path": "source/PS2Recomp",
       "untracked": [
         {
@@ -40,7 +40,7 @@
         {
           "mode": "0644",
           "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp.h",
-          "sha256": "c6c69b52e8f2bf48e64e75f619788c55982ee1bc42d411fd9defaef3552d5417",
+          "sha256": "acd9ebcef20d886b3c9bb1a1269c3b18ff24b80faead1c54409f0c30efb70269",
           "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/include/runtime/ps2_vu1_recomp.h"
         },
         {
@@ -58,7 +58,7 @@
         {
           "mode": "0644",
           "path": "ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp",
-          "sha256": "1dd5f6844010bbd331ced8992ed722297ad49b1ab6950268f059ef3ffce52d1d",
+          "sha256": "a9bd946c48ae9c9b7f58d278bf9716eb293895dc6ac32905a70bc92c5d2a7045",
           "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp"
         },
         {
@@ -110,7 +110,7 @@
         {
           "mode": "0644",
           "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp.h",
-          "sha256": "c6c69b52e8f2bf48e64e75f619788c55982ee1bc42d411fd9defaef3552d5417",
+          "sha256": "acd9ebcef20d886b3c9bb1a1269c3b18ff24b80faead1c54409f0c30efb70269",
           "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/include/runtime/ps2_vu1_recomp.h"
         },
         {
@@ -128,7 +128,7 @@
         {
           "mode": "0644",
           "path": "ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp",
-          "sha256": "1dd5f6844010bbd331ced8992ed722297ad49b1ab6950268f059ef3ffce52d1d",
+          "sha256": "a9bd946c48ae9c9b7f58d278bf9716eb293895dc6ac32905a70bc92c5d2a7045",
           "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp"
         },
         {

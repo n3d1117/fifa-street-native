@@ -56,10 +56,12 @@ def english_menu_present(lines):
     english = any(line.get('text', '').strip().casefold() == 'english'
                   and line.get('confidence', 0) >= 0.5 for line in lines)
     # Sharpened outlined fonts can score 0.5 in Vision even when text matches.
-    # Require another exact menu label at high confidence, on two frames.
-    other_language = any(line.get('text', '').strip().casefold() in ('français', 'español', 'italiano', 'deutsch')
-                         and line.get('confidence', 0) >= 0.9 for line in lines)
-    return language and english and other_language
+    # Corroborate with two distinct exact labels, on two frames.
+    other_languages = {line.get('text', '').strip().casefold() for line in lines
+                       if line.get('text', '').strip().casefold() in
+                       ('français', 'francais', 'español', 'italiano', 'deutsch')
+                       and line.get('confidence', 0) >= 0.5}
+    return language and english and len(other_languages) >= 2
 
 
 def wait_for_english_menu(process, started, out, capture, result, first_second):
@@ -107,7 +109,8 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
                 result['navigation_guard'] = {
                     'status': 'english_menu_confirmed',
                     'required_labels': ['LANGUAGE', 'ENGLISH'],
-                    'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.5, 'other_language': 0.9},
+                    'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.5, 'other_language': 0.5},
+                    'minimum_other_languages': 2,
                     'confirming_frame_elapsed_seconds': [round(previous_match_elapsed, 3), frame['elapsed_seconds']],
                     'elapsed_seconds': round(guard_elapsed, 3),
                     'frames': frames,
@@ -128,7 +131,8 @@ def wait_for_english_menu(process, started, out, capture, result, first_second):
     result['navigation_guard'] = {
         'status': 'english_menu_not_confirmed',
         'required_labels': ['LANGUAGE', 'ENGLISH'],
-        'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.5, 'other_language': 0.9},
+        'minimum_confidence': {'LANGUAGE': 0.5, 'ENGLISH': 0.5, 'other_language': 0.5},
+        'minimum_other_languages': 2,
         'elapsed_seconds': round(max(0.0, elapsed), 3),
         'frames': frames,
     }

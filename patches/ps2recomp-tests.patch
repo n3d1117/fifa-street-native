@@ -9244,7 +9244,7 @@ index 63b12d9278c4e35e6d6b16c36de204cda48e3c2a..6064569c61d6da07e22f859a7e5c3cf5
          {
              TestEnv env;
 diff --git a/ps2xTest/src/ps2_vu1_tests.cpp b/ps2xTest/src/ps2_vu1_tests.cpp
-index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5d241c35c 100644
+index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..19e076d948d41a8005b5a7474e481d5596e6674c 100644
 --- a/ps2xTest/src/ps2_vu1_tests.cpp
 +++ b/ps2xTest/src/ps2_vu1_tests.cpp
 @@ -4,6 +4,7 @@
@@ -9255,7 +9255,58 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5
  
  #include <cmath>
  #include <cstdint>
-@@ -1690,6 +1691,85 @@ void register_ps2_vu1_tests()
+@@ -211,6 +212,50 @@ namespace
+     {
+         std::memcpy(values, data + qwordIndex * 16u, sizeof(float) * 4u);
+     }
++
++    constexpr uint32_t kGuardedVu1Entry = 0x3F00u;
++    constexpr uint64_t kGuardedVu1ExpectedWord = 0x1122334455667788ull;
++    const uint8_t *gGuardedVu1ExpectedCode = nullptr;
++    uint32_t gGuardedVu1FastCalls = 0u;
++    uint32_t gGuardedVu1FullCalls = 0u;
++
++    void runGuardedVu1TestImage(Vu1RecContext &ctx, uint32_t entryPc)
++    {
++        uint64_t currentWord = 0u;
++        const bool codePointerMatches = ctx.code != nullptr && ctx.code == gGuardedVu1ExpectedCode;
++        if (codePointerMatches)
++            std::memcpy(&currentWord, ctx.code + entryPc, sizeof(currentWord));
++
++        if (codePointerMatches && entryPc == kGuardedVu1Entry &&
++            currentWord == kGuardedVu1ExpectedWord)
++        {
++            ctx.state->vi[3] = 77;
++            ctx.state->pc = entryPc + 8u;
++            ctx.cycle += 2u;
++            return;
++        }
++
++        ctx.state->vi[3] = 1234;
++        ctx.data[7] = 0xCCu;
++        ctx.cycle += 100u;
++        const uint8_t packet[16] = {0u, 0x80u};
++        if (ctx.sink)
++            ctx.sink(ctx.sinkUser, packet, sizeof(packet));
++        ctx.failed = true;
++        ctx.failPc = entryPc;
++    }
++
++    void guardedVu1FastForTest(Vu1RecContext &ctx, uint32_t entryPc)
++    {
++        ++gGuardedVu1FastCalls;
++        runGuardedVu1TestImage(ctx, entryPc);
++    }
++
++    void guardedVu1FullForTest(Vu1RecContext &ctx, uint32_t entryPc)
++    {
++        ++gGuardedVu1FullCalls;
++        runGuardedVu1TestImage(ctx, entryPc);
++    }
+ }
+ 
+ void register_ps2_vu1_tests()
+@@ -1690,6 +1735,85 @@ void register_ps2_vu1_tests()
                       "the underflowing product should set sticky Z and U");
          });
  
@@ -9341,3 +9392,82 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5
          tc.Run("reserved opcodes stop before executing or corrupting state", [](TestCase &t)
          {
              Vu1Fixture fx;
+@@ -1712,5 +1836,78 @@ void register_ps2_vu1_tests()
+             t.Equals(vu1.state().vi[1], 0,
+                      "instruction following a reserved opcode must not execute");
+         });
++
++        tc.Run("guarded VU image validates only executed code and stages failures", [](TestCase &t)
++        {
++            Vu1Fixture fx;
++            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
++            std::memcpy(fx.code + kGuardedVu1Entry, &kGuardedVu1ExpectedWord,
++                        sizeof(kGuardedVu1ExpectedWord));
++
++            uint64_t codeHash = 1469598103934665603ull;
++            for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
++                codeHash = (codeHash ^ fx.code[i]) * 1099511628211ull;
++            t.IsTrue(vu1recFind(codeHash) == nullptr,
++                     "the test bank must not have an exact whole-bank image");
++
++            static const uint32_t entries[] = {kGuardedVu1Entry};
++            Vu1RecImage image;
++            image.hash = codeHash;
++            image.entries = entries;
++            image.entryCount = 1u;
++            image.fast = &guardedVu1FastForTest;
++            image.full = &guardedVu1FullForTest;
++            image.guarded = true;
++            vu1recRegister(image);
++
++            gGuardedVu1ExpectedCode = fx.code;
++            gGuardedVu1FastCalls = 0u;
++            gGuardedVu1FullCalls = 0u;
++
++            VU1Interpreter vu1;
++            Vu1NativeDispatcher native;
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
++                     "unknown whole-bank hashes should dispatch through the guarded image");
++            t.Equals(gGuardedVu1FullCalls, 1u,
++                     "guarded images must use the full-flag native variant");
++            t.Equals(gGuardedVu1FastCalls, 0u,
++                     "guarded images must not use the fast native variant");
++            t.Equals(vu1.state().vi[3], 77,
++                     "the guarded callback should execute when its current word matches");
++
++            fx.code[0x2F00u] = 0xA5u; // Not reached by this test image.
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
++                     "mutating an unexecuted code word must not reject the guarded image");
++            t.Equals(gGuardedVu1FullCalls, 2u,
++                     "the guarded full variant should receive the second dispatch");
++            t.Equals(gGuardedVu1FastCalls, 0u,
++                     "the guarded fast variant should remain unused");
++
++            vu1.state().vi[3] = 42;
++            vu1.state().pc = 0x2580u;
++            vu1.setCycleCount(17u);
++            fx.data[7] = 0x55u;
++            const uint64_t gifBefore = fx.mem.gifCopyCount();
++            const uint64_t changedWord = kGuardedVu1ExpectedWord ^ 1u;
++            std::memcpy(fx.code + kGuardedVu1Entry, &changedWord, sizeof(changedWord));
++
++            t.IsTrue(!native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
++                     "changing an executed code word must fail the guarded image");
++            t.Equals(gGuardedVu1FullCalls, 3u,
++                     "the changed executed word should reach the full guard");
++            t.Equals(gGuardedVu1FastCalls, 0u,
++                     "failed guarded dispatch must not use the fast variant");
++            t.Equals(vu1.state().vi[3], 42,
++                     "a guarded failure must preserve the input registers");
++            t.Equals(vu1.state().pc, 0x2580u,
++                     "a guarded failure must preserve the input PC");
++            t.Equals(vu1.cycleCount(), uint64_t(17u),
++                     "a guarded failure must preserve guest cycles");
++            t.Equals(fx.data[7], uint8_t(0x55u),
++                     "a guarded failure must discard staged data writes");
++            t.Equals(fx.mem.gifCopyCount(), gifBefore,
++                     "a guarded failure must discard staged GIF packets");
++            gGuardedVu1ExpectedCode = nullptr;
++        });
+     });
+ }

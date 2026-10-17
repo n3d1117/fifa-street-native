@@ -32,6 +32,43 @@ def mpg(count: int, destination: int) -> bytes:
 
 
 class ExtractVuMicrocodeTests(unittest.TestCase):
+    def test_vu_bal_encoding_matches_known_tarzan_patch_words(self):
+        self.assertEqual(EXTRACTOR.encode_bal(0x3158, 0x3670, 14), 0x420E00A2)
+        self.assertEqual(EXTRACTOR.encode_bal(0x3158, 0x39F8, 14), 0x420E0113)
+        self.assertEqual(EXTRACTOR.encode_bal(0x3168, 0x39F8, 14), 0x420E0111)
+        self.assertEqual(EXTRACTOR.encode_bal(0x168, 0x2228, 15), 0x420F0417)
+        self.assertEqual(EXTRACTOR.encode_bal(0x3138, 0x31A8, 14), 0x420E000D)
+        self.assertEqual(EXTRACTOR.encode_bal(0x3188, 0x3308, 14), 0x420E002F)
+        self.assertEqual(EXTRACTOR.encode_bal(0x128, 0x3138, 15), 0x420F0601)
+        self.assertEqual(EXTRACTOR.encode_bal(0x1B8, 0x0830, 15), 0x420F00CE)
+        self.assertEqual(EXTRACTOR.encode_bal(0x1C8, 0x22B8, 15), 0x420F041D)
+        self.assertEqual(EXTRACTOR.encode_bal(0x1F8, 0x0F80, 15), 0x420F01B0)
+        self.assertEqual(EXTRACTOR.encode_bal(0x1A8, 0x2AE0, 15), 0x420F0526)
+        with self.assertRaises(ValueError):
+            EXTRACTOR.encode_bal(0x3159, 0x3670, 14)
+        with self.assertRaises(ValueError):
+            EXTRACTOR.encode_bal(0x3158, 0x4000, 14)
+
+    def test_patch_slot_guard_accepts_only_upper_nop_and_lower_nop_or_branch(self):
+        nop = struct.pack("<II", 0x8000033C, 0x000002FF)
+        branch = struct.pack("<II", 0x420E00A2, 0x000002FF)
+        bad_lower = struct.pack("<II", 0x00000000, 0x000002FF)
+        bad_upper = struct.pack("<II", 0x8000033C, 0x000002FE)
+        self.assertTrue(EXTRACTOR.patchable_vu_slot(nop, 0))
+        self.assertTrue(EXTRACTOR.patchable_vu_slot(branch, 0))
+        self.assertFalse(EXTRACTOR.patchable_vu_slot(bad_lower, 0))
+        self.assertFalse(EXTRACTOR.patchable_vu_slot(bad_upper, 0))
+        self.assertFalse(EXTRACTOR.patchable_vu_slot(nop, 1))
+
+    def test_tarzan_recipe_refuses_nonmatching_elf_before_writing_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "other.elf"
+            source.write_bytes(make_elf(b"\0" * 8))
+            output = Path(tmp) / "out"
+            with self.assertRaisesRegex(ValueError, "validated Tarzan ELF SHA-256"):
+                EXTRACTOR.extract(source, output, [], tarzan_patches=True)
+            self.assertFalse(output.exists())
+
     def test_contiguous_packets_join_and_record_exact_source_metadata(self):
         # PT_LOAD begins at file offset 84 (4 mod 8), so the first aligned NOP
         # is at 88. Each instruction is a VU NOP with E set in its upper word.

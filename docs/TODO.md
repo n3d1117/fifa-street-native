@@ -12,19 +12,13 @@
 
 ## P1 — Performance without correctness regressions
 
-- Eliminate scene-dependent VU1 interpreter fallback: cover disc microprograms
-  and legal indirect branch targets, validate against captured execution, and
-  qualify each mission rather than relying on first-level coverage.
-- Follow Fukami's static block-AOT architecture: extract shipped MPG uploads,
-  compile every instruction-slot entry into relocatable, deduplicated blocks,
-  and select by exact executable bytes instead of whole-bank identity. Preserve
-  Tarzan's scheduler/pipeline state at block boundaries and arbitrary indirect
-  jumps. Include runtime-patched variants; no JIT or mission-by-mission manual
-  discovery as the primary coverage strategy. Static ELF extraction is ready;
-  block translation and runtime integration remain open.
-- Audit cross-program flag liveness before enabling block-level elision:
-  unknown later programs must receive complete observable flag/pipeline state;
-  a captured-program corpus alone cannot establish whole-game dead flags.
+- Disc-derived guarded VU1 AOT is implemented: 2,048 instruction slots,
+  validated light/material variants, exact executed-word guards and transactional
+  fallback. Shipping replay: 1,106 captured calls plus 80 edge/fuzz runs pass.
+  First mission holds ~25 framebuffer swaps/s with zero fallbacks/failures.
+  Qualify later missions; unknown pairs or unsupported entries may still fall back.
+- Preserve full cross-program flag/pipeline state. Enable flag elision only with
+  an open-program liveness proof, never a captured-program corpus alone.
 - Profile frame pacing, CPU/GPU cost, loading stalls, and thermal behavior by
   scene. Treat 60/120 FPS as targets, not guarantees; retain a native-scale
   baseline and compare visual/audio checkpoints after every optimization.

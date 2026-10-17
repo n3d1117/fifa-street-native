@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cfenv>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -255,7 +256,7 @@ namespace
         }
     }
 
-    Result runNative(Vu1RecFn fn, const Snapshot &s)
+    Result runNative(Vu1RecFn fn, const Snapshot &s, const uint8_t *code)
     {
         static Vu1RecContext ctx;
         Result r;
@@ -268,6 +269,7 @@ namespace
         ctx.maxCycles = s.maxCycles;
         ctx.top = s.top;
         ctx.itop = s.itop;
+        ctx.code = code;
         ctx.sink = &Capture::sink;
         ctx.sinkUser = &r.pk;
         fn(ctx, s.pc);
@@ -339,7 +341,8 @@ namespace
 
         Vu1NativeDispatcher dispatcher;
         constexpr uint64_t codeGeneration = 77u;
-        if (Vu1NativeDispatcherTestAccess::lookup(dispatcher, code.data(), codeGeneration))
+        const auto *initial = Vu1NativeDispatcherTestAccess::lookup(dispatcher, code.data(), codeGeneration);
+        if (initial && !initial->guarded)
         {
             std::fprintf(stderr, "[vu1-replay-test] expected initial native-image cache miss\n");
             return false;
@@ -396,7 +399,8 @@ int main(int argc, char **argv)
     {
         std::fprintf(stderr,
                      "usage: %s <catalog-dir> <snapshot-dir>[,<dir>...] [--fuzz N] [--no-ftz] [--live-exit mcs] "
-                     "[--poison N]\n"
+                     "[--poison N] [--guarded]\n"
+                     "  --guarded: use the disc-derived guarded image and compare all flags.\n"
                      "  --live-exit: flags the FAST variant stores at exit (generator's live-at-exit line; "
                      "m=mac s=status c=clip; default c). Those are compared bit-exactly.\n"
                      "  --poison N: per snapshot, N extra runs with random input MAC/status. Fast and the\n"
@@ -407,7 +411,7 @@ int main(int argc, char **argv)
     }
     const std::string catalog = argv[1];
     int fuzz = 0, poison = 0;
-    bool ftz = true;
+    bool ftz = true, guarded = false;
     std::string dumpJrTargets;
     unsigned liveExit = kClip;
     for (int i = 3; i < argc; ++i)
@@ -420,6 +424,11 @@ int main(int argc, char **argv)
             liveExit = parseFlagMask(argv[++i]);
         else if (!std::strcmp(argv[i], "--no-ftz"))
             ftz = false;
+        else if (!std::strcmp(argv[i], "--guarded"))
+        {
+            guarded = true;
+            liveExit = kAllFlags;
+        }
         else if (!std::strcmp(argv[i], "--dump-jr-targets") && i + 1 < argc)
             dumpJrTargets = argv[++i];
     }
@@ -468,6 +477,8 @@ int main(int argc, char **argv)
     std::vector<uint8_t> code(PS2_VU1_CODE_SIZE);
     uint64_t loadedHash = 0;
     uint64_t runs = 0, mismatchFull = 0, mismatchFast = 0, skipped = 0, interpBudget = 0, packets = 0;
+    uint64_t rejected = 0, completedMismatch = 0;
+    double interpreterSeconds = 0, nativeSeconds = 0;
     uint64_t poisonRuns = 0, poisonFast = 0, poisonInterp = 0, poisonFull = 0;
     uint64_t entryHist[8] = {};
     alignas(16) static uint8_t gsDummy[64];
@@ -504,7 +515,7 @@ int main(int argc, char **argv)
             traceIndirectTargets(code, base, gs, jrTargets);
             continue;
         }
-        const Vu1RecImage *image = vu1recFind(base.hash);
+        const Vu1RecImage *image = guarded ? vu1recFindGuarded() : vu1recFind(base.hash);
         if (!image || !image->hasEntry(base.pc))
         {
             ++skipped;
@@ -518,18 +529,26 @@ int main(int argc, char **argv)
             if (variantIdx > 0)
                 perturb(s, rng);
 
+            const auto refStart = std::chrono::steady_clock::now();
             const Result ref = runInterp(code, s, gs);
+            interpreterSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - refStart).count();
             if (!ref.ended)
             {
                 ++interpBudget;
                 continue;
             }
-            const Result full = runNative(image->full, s);
-            const Result fast = runNative(image->fast, s);
+            const auto nativeStart = std::chrono::steady_clock::now();
+            const Result full = runNative(image->full, s, code.data());
+            nativeSeconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - nativeStart).count();
+            const Result fast = runNative(image->fast, s, code.data());
             ++runs;
             packets += ref.pk.packets.size();
             const bool verbose = verboseBudget > 0;
             const int nf = compare("full", full, ref, kAllFlags, verbose);
+            if (full.failed || fast.failed)
+                ++rejected;
+            else if (nf || compare("fast", fast, ref, liveExit, false))
+                ++completedMismatch;
             const int nq = compare("fast", fast, ref, liveExit, verbose);
             if (nf || nq)
             {
@@ -548,8 +567,8 @@ int main(int argc, char **argv)
                 sp.state.mac = rng() & 0xFFFFu;
                 sp.state.status = rng() & 0xFFFu;
                 const Result ip = runInterp(code, sp, gs);
-                const Result fp = runNative(image->fast, sp);
-                const Result up = runNative(image->full, sp);
+                const Result fp = runNative(image->fast, sp, code.data());
+                const Result up = runNative(image->full, sp, code.data());
                 ++poisonRuns;
                 const unsigned observed = liveExit;
                 const int a = compare("poison-interp", ip, ref, observed, verbose);
@@ -598,5 +617,9 @@ int main(int argc, char **argv)
                     "mismatch(full-vs-poisoned-interp)=%llu\n",
                     (unsigned long long)poisonRuns, (unsigned long long)poisonInterp, (unsigned long long)poisonFast,
                     (unsigned long long)poisonFull);
+    std::printf("vu1_replay: native-rejected=%llu completed-native-mismatches=%llu\n",
+                (unsigned long long)rejected, (unsigned long long)completedMismatch);
+    std::printf("vu1_replay: offline interpreter=%.3f ms native-full=%.3f ms (includes state/packet copies)\n",
+                interpreterSeconds * 1000, nativeSeconds * 1000);
     return (mismatchFull || mismatchFast || poisonInterp || poisonFast || poisonFull) ? 1 : 0;
 }

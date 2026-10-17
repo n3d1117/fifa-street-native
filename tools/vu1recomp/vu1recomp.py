@@ -251,12 +251,15 @@ class Node:
     term: Optional[tuple] = None   # ('goto', nid) | ('cond', taken_nid, fall_nid) | ('dyn', [(pc,nid)]) | ('end', flush_ops, kmax)
     new_slots: Dict[str, int] = field(default_factory=dict)
     backward_target: bool = False
+    # Guarded-pool selector nodes dispatch on the exact code pair at this PC.
+    alternatives: List[int] = field(default_factory=list)
+    rejected: bool = False
 
 
 class Generator:
     def __init__(self, code: bytes, entries: List[int], name: str,
                  dynamic_targets: Optional[Dict[int, List[int]]] = None,
-                 unit: str = 'vu1'):
+                 unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None):
         if unit not in ('vu0', 'vu1'):
             raise GenError(f"unknown VU unit {unit!r}")
         self.unit = unit
@@ -266,15 +269,30 @@ class Generator:
         if len(code) != self.code_size:
             raise GenError(f"{unit.upper()} image size {len(code)} != {self.code_size // 1024} KiB")
         self.code = code
+        self.pool_codes = pool_codes or [code]
+        if any(len(c) != self.code_size for c in self.pool_codes):
+            raise GenError(f"guarded {unit.upper()} code pool contains an image with the wrong size")
+        self.guarded = pool_codes is not None
+        self.pool_pairs: Dict[int, List[Pair]] = {}
+        if self.guarded:
+            for pc in range(0, self.code_size, 8):
+                unique = {}
+                for image in self.pool_codes:
+                    lo, up = struct.unpack_from('<II', image, pc)
+                    unique[(lo, up)] = decode_pair(image, pc)
+                self.pool_pairs[pc] = list(unique.values())
         self.entries = entries
         self.name = name
         self.pairs: Dict[int, Pair] = {}
         self.nodes: List[Node] = []
         self.node_index: Dict[Tuple[int, AState, str], int] = {}
         self.worklist: List[int] = []
-        self.link_labels = self._find_link_labels()
-        self.static_branch_targets = (find_static_branch_table_targets(code, unit)
+        self.link_labels = sorted(set().union(*(set(self._find_link_labels(c)) for c in self.pool_codes)))
+        self.static_branch_targets = (sorted(set().union(*(set(find_static_branch_table_targets(c, unit))
+                                                           for c in self.pool_codes)))
                                       if unit == 'vu1' else [])
+        self.static_indirect_entries = (self._find_static_jr_fallthroughs()
+                                        if self.guarded and unit == 'vu1' else [])
         self.dynamic_targets = dynamic_targets or {}
         self.entry_nodes: Dict[int, int] = {}
         self.failed_entries: Dict[int, str] = {}
@@ -287,13 +305,23 @@ class Generator:
             self.pairs[pc] = p
         return p
 
-    def _find_link_labels(self) -> List[int]:
+    def _find_link_labels(self, code: Optional[bytes] = None) -> List[int]:
         labels = set()
         for pc in range(0, self.code_size, 8):
-            p = decode_pair(self.code, pc)
+            p = decode_pair(code or self.code, pc)
             if not p.ibit and lower_name(p.lower) in ('BAL', 'JALR'):
                 labels.add((pc + 16) & self.pc_mask)
         return sorted(labels)
+
+    def _find_static_jr_fallthroughs(self) -> List[int]:
+        """Potential next-module starts after an unconditional JR and its delay pair."""
+        entries = set()
+        for code in self.pool_codes:
+            for pc in range(0, self.code_size, 8):
+                pair = decode_pair(code, pc)
+                if not pair.ibit and lower_name(pair.lower) == 'JR':
+                    entries.add((pc + 16) & self.pc_mask)
+        return sorted(entries)
 
     def get_node(self, pc: int, state: AState, phase: str = 'pre') -> int:
         key = (pc, state, phase)
@@ -336,7 +364,10 @@ class Generator:
         return ready
 
     def build(self):
-        for e in self.entries:
+        entries = set(self.entries)
+        if self.guarded:
+            entries.update(self.static_indirect_entries)
+        for e in sorted(entries):
             try:
                 self.entry_nodes[e] = self.get_node(e & self.pc_mask, AState())
             except GenError as ex:
@@ -351,6 +382,8 @@ class Generator:
                     self.nodes[t].backward_target = True
 
     def node_targets(self, n: Node) -> List[int]:
+        if self.guarded and n.pair is None:
+            return list(n.alternatives)
         out = []
         if n.dyn_stall:
             out.extend(t for _, t in n.dyn_stall['cases'].values())
@@ -362,11 +395,45 @@ class Generator:
                 out.extend([n.term[1], n.term[2]])
             elif k == 'dyn':
                 out.extend(t for _, t in n.term[1])
+        if self.guarded:
+            expanded = []
+            for target in out:
+                tn = self.nodes[target]
+                expanded.extend(tn.alternatives if tn.pair is None else [target])
+            return expanded
         return out
 
     def step(self, n: Node):
+        if self.guarded:
+            # A selector represents (PC, scheduler state, phase). Expand it
+            # into one concrete node per code pair in the pool; transitions
+            # from each concrete node continue to selectors at their target.
+            for p in self.pool_pairs[n.pc]:
+                nid = len(self.nodes)
+                if nid >= MAX_NODES:
+                    raise GenError("node limit exceeded (guarded pipeline state explosion)")
+                concrete = Node(nid=nid, pc=n.pc, state=n.state, phase=n.phase, pair=p)
+                self.nodes.append(concrete)
+                n.alternatives.append(nid)
+                base_nodes = len(self.nodes)
+                base_work = len(self.worklist)
+                try:
+                    self._step_pair(concrete, p)
+                except GenError as ex:
+                    if "node limit exceeded" in str(ex):
+                        raise
+                    del self.nodes[base_nodes:]
+                    del self.worklist[base_work:]
+                    self.node_index = {key: value for key, value in self.node_index.items()
+                                       if value < base_nodes}
+                    self.nodes[nid] = Node(nid=nid, pc=n.pc, state=n.state,
+                                           phase=n.phase, pair=p, rejected=True)
+            return
         p = self.pair(n.pc)
         n.pair = p
+        self._step_pair(n, p)
+
+    def _step_pair(self, n: Node, p: Pair):
         if p.reserved:
             raise GenError(f"reserved instruction reachable at pc 0x{n.pc:04x}: {p.text()}")
         if self.unit == 'vu0':
@@ -653,6 +720,8 @@ def compute_norm(g: Generator):
         cur = list(nin[nid])
         if n.phase == 'pre' and n.dyn_stall is not None:
             out = cur
+        elif g.guarded and (n.pair is None or n.rejected):
+            out = cur
         else:
             out = list(cur)
             p = n.pair
@@ -684,6 +753,10 @@ def compute_norm(g: Generator):
 def node_flag_ops(n: Node) -> List[tuple]:
     """Ordered flag-relevant ops of a node (for liveness)."""
     seq = []
+    if n.pair is None:
+        return seq
+    if n.rejected:
+        return seq
     seq.extend(n.stall_ops)
     if n.dyn_stall is not None:
         return seq   # cases are attached to edges; handled separately
@@ -1005,6 +1078,27 @@ class Emitter:
     def emit_node(self, n: Node):
         w = self.w
         p = n.pair
+        if self.g.guarded and p is None:
+            w(f"{self.label(n.nid)}: // guarded selector pc 0x{n.pc:04x} {n.phase}")
+            w("    {")
+            w("    if (!ctx.code) { ctx.failPc = "
+              f"0x{n.pc:04x}u; goto FAIL; }}")
+            w("    uint64_t codePair; std::memcpy(&codePair, ctx.code + "
+              f"0x{n.pc:04x}u, sizeof(codePair));")
+            w("    switch (codePair)")
+            w("    {")
+            for nid in n.alternatives:
+                pair = self.g.nodes[nid].pair
+                value = (pair.lower & 0xFFFFFFFF) | ((pair.upper & 0xFFFFFFFF) << 32)
+                w(f"    case 0x{value:016x}ull: goto {self.label(nid)};")
+            w(f"    default: ctx.failPc = 0x{n.pc:04x}u; goto FAIL;")
+            w("    }")
+            w("    }")
+            return
+        if n.rejected:
+            w(f"{self.label(n.nid)}: // unsupported guarded pair at pc 0x{n.pc:04x}")
+            w(f"    ctx.failPc = 0x{n.pc:04x}u; goto FAIL;")
+            return
         w(f"{self.label(n.nid)}: // pc 0x{n.pc:04x} {n.phase} :: {p.text()}")
         if n.backward_target:
             w(f"    if (cyc >= budgetEnd) {{ ctx.failPc = 0x{n.pc:04x}u; goto FAIL; }}")
@@ -1551,10 +1645,10 @@ def end_continuations(g: Generator) -> List[int]:
 
 def analyze_image(code: bytes, entries: List[int], name: str,
                   dynamic_targets: Optional[Dict[int, List[int]]] = None,
-                  unit: str = 'vu1') -> dict:
+                  unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None) -> dict:
     """Liveness-only analysis of one image: what each program entry (and each MSCNT
     continuation point) may read from the flag state left by the previous program."""
-    g = Generator(code, entries, name, dynamic_targets, unit)
+    g = Generator(code, entries, name, dynamic_targets, unit, pool_codes)
     g.build()
     if not g.entry_nodes:
         raise GenError("no entry could be generated")
@@ -1563,7 +1657,7 @@ def analyze_image(code: bytes, entries: List[int], name: str,
     conts = [c for c in info['conts'] if c not in g.entry_nodes]
     if conts and unit == 'vu1':
         try:
-            gc = Generator(code, sorted(set(entries) | set(conts)), name, dynamic_targets, unit)
+            gc = Generator(code, sorted(set(entries) | set(conts)), name, dynamic_targets, unit, pool_codes)
             gc.build()
             missing = [c for c in conts if c not in gc.entry_nodes]
             if missing:
@@ -1614,8 +1708,8 @@ def compute_live_exit(images_info: List[Optional[dict]]) -> Tuple[set, list]:
 
 def generate_image(code: bytes, entries: List[int], name: str, live_exit: Optional[set] = None,
                    dynamic_targets: Optional[Dict[int, List[int]]] = None,
-                   unit: str = 'vu1') -> Tuple[str, dict]:
-    info = analyze_image(code, entries, name, dynamic_targets, unit)
+                   unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None) -> Tuple[str, dict]:
+    info = analyze_image(code, entries, name, dynamic_targets, unit, pool_codes)
     g = info['cont_g'] if info['cont_g'] is not None else info['g']
     compute_norm(g)
     # Which flags are read anywhere in the (reachable) image?
@@ -1629,10 +1723,13 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     fast_live = set(FLAG_REGS) if live_exit is None else set(live_exit)
     full_live = set(FLAG_REGS)
     out = [VU0_HEADER if g.unit == 'vu0' else HEADER]
+    if g.guarded:
+        out.insert(0, '#include <cstring>\n')
     stats = {'nodes': len(g.nodes), 'pairs': len({n.pc for n in g.nodes}),
              'readers': sorted(readers), 'entries': sorted(g.entry_nodes),
              'failed': g.failed_entries, 'dt_pcs': sorted(g.dt_pcs), 'live_exit': sorted(fast_live)}
-    for variant, live in (('fast', fast_live), ('full', full_live)):
+    variants = (('full', full_live),) if g.guarded else (('fast', fast_live), ('full', full_live))
+    for variant, live in variants:
         compute_flag_liveness(g, live)
         em = Emitter(g, variant, live)
         prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
@@ -1654,8 +1751,11 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     out.append(f"const uint32_t kEntries[] = {{{ent}}};\n")
     registrar = 'Vu0RecRegistrar' if g.unit == 'vu0' else 'Vu1RecRegistrar'
     prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
-    out.append(f"const {registrar} kRegistrar(0x{name}ull, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
-               f"                                 &{prefix}_{name}_fast, &{prefix}_{name}_full, {'true' if g.dt_pcs else 'false'});\n")
+    hash_literal = '0ull' if g.guarded else f'0x{name}ull'
+    guarded_arg = ', true' if g.guarded else ''
+    fast_name = 'full' if g.guarded else 'fast'
+    out.append(f"const {registrar} kRegistrar({hash_literal}, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
+               f"                                 &{prefix}_{name}_{fast_name}, &{prefix}_{name}_full, {'true' if g.dt_pcs else 'false'}{guarded_arg});\n")
     out.append("} // namespace\n")
     return "".join(out), stats
 
@@ -1704,14 +1804,37 @@ def jump_table_entries(code: bytes) -> List[int]:
     return out if len(out) >= 2 else []
 
 
+def parse_vu1_entry(value: str) -> int:
+    """Parse an explicit guarded-pool entry PC (decimal or 0x-prefixed hex)."""
+    try:
+        pc = int(value, 0)
+    except ValueError as ex:
+        raise argparse.ArgumentTypeError(f"invalid VU1 PC {value!r}") from ex
+    if pc < 0 or pc > VU1_PC_MASK or pc & 7:
+        raise argparse.ArgumentTypeError(f"VU1 entry PC must be pair-aligned in 0..0x{VU1_PC_MASK:04x}")
+    return pc
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--unit", choices=('vu0', 'vu1'), default='vu1', help="VU unit (default: vu1)")
     ap.add_argument("--catalog", required=True, help="catalog dir (index.txt + <hash>.<unit>)")
     ap.add_argument("--out", required=True, help="output directory for generated C++")
+    ap.add_argument("--guarded", action="store_true",
+                    help="emit one fail-closed VU1 implementation selected by exact executed instruction pairs")
+    ap.add_argument("--pool-code", action="append", default=[], metavar="FILE",
+                    help="additional raw code image for --guarded (exactly 16 KiB; repeatable)")
+    ap.add_argument("--entry", action="append", default=[], type=parse_vu1_entry, metavar="PC",
+                    help="additional guarded VU1 entry PC (decimal or 0x-prefixed hex; repeatable)")
+    ap.add_argument("--indirect-entry", action="append", default=[], type=parse_vu1_entry, metavar="PC",
+                    help="additional guarded indirect-table arm entry (repeatable)")
     ap.add_argument("--dump", action="store_true", help="print node graph statistics")
     ap.add_argument("--jr-targets", help="observed dynamic branch destinations file (hash pc target); defaults to catalog/jr_targets.txt")
     args = ap.parse_args()
+    if args.guarded and args.unit != 'vu1':
+        ap.error("--guarded is currently supported only for VU1")
+    if (args.entry or args.indirect_entry) and not args.guarded:
+        ap.error("--entry and --indirect-entry are currently supported only with --guarded")
     os.makedirs(args.out, exist_ok=True)
     cat = read_catalog(args.catalog)
     target_path = args.jr_targets or os.path.join(args.catalog, "jr_targets.txt")
@@ -1737,6 +1860,49 @@ def main():
         if extra:
             print(f"[vu{args.unit[-1]}recomp] {h}: adding uncatalogued jump-table entries {['0x%04x' % e for e in extra]}")
         images.append((h, code, sorted(set(entries) | set(jt)), dynamic_targets.get(h, {})))
+    if args.guarded:
+        pool_codes = [image[1] for image in images]
+        pool_entries = set(pc for image in images for pc in image[2])
+        pool_entries.update(args.entry)
+        pooled_targets: Dict[int, set] = defaultdict(set)
+        for by_pc in dynamic_targets.values():
+            for pc, targets in by_pc.items():
+                pooled_targets[pc].update(targets)
+        for path in args.pool_code:
+            with open(path, 'rb') as f:
+                code = f.read()
+            if len(code) != VU1_CODE_SIZE:
+                ap.error(f"--pool-code {path}: image size {len(code)} != 16 KiB")
+            pool_codes.append(code)
+            pool_entries.update(jump_table_entries(code))
+        if not pool_codes:
+            ap.error("--guarded needs at least one valid catalog image or --pool-code")
+        if args.indirect_entry:
+            for code in pool_codes:
+                for pc in range(0, VU1_CODE_SIZE, 8):
+                    pair = decode_pair(code, pc)
+                    if not pair.ibit and lower_name(pair.lower) in ('JR', 'JALR'):
+                        pooled_targets[pc].update(args.indirect_entry)
+        try:
+            src, stats = generate_image(pool_codes[0], sorted(pool_entries), 'guarded',
+                                        set(FLAG_REGS),
+                                        {pc: sorted(ts) for pc, ts in pooled_targets.items()},
+                                        'vu1', pool_codes)
+        except GenError as ex:
+            print(f"[vu1recomp] guarded pool FAILED: {ex}", file=sys.stderr)
+            return 1
+        dst = os.path.join(args.out, "vu1rec_guarded.cpp")
+        old = open(dst).read() if os.path.exists(dst) else None
+        if old != src:
+            with open(dst, "w") as f:
+                f.write(src)
+        print(f"[vu1recomp] guarded: images={len(pool_codes)} entries={['0x%04x' % e for e in stats['entries']]} "
+              f"nodes={stats['nodes']} pairs={stats['pairs']} full-flags=yes")
+        for fn in os.listdir(args.out):
+            p = os.path.join(args.out, fn)
+            if fn.startswith("vu1rec_guarded") and fn.endswith(".cpp") and p != dst:
+                os.remove(p)
+        return 0
     # pass 1: liveness-only analysis of every image, then the live-at-exit fixpoint
     infos = []
     for h, code, entries, targets in images:
