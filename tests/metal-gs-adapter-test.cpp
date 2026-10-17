@@ -20,6 +20,7 @@ uint64_t g_field = 0;
 uint32_t g_parity = 0;
 bool g_fail_vsync = false;
 bool g_fail_local_read = false;
+bool g_language_hidden = false;
 uint64_t g_read_bitbltbuf = 0, g_read_trxpos = 0, g_read_trxreg = 0;
 uint32_t g_read_bytes = 0;
 uint64_t g_written_csr = 0;
@@ -31,6 +32,7 @@ void reset_fake() {
     g_path = g_submits = g_vsyncs = g_readbacks = g_destroys = g_owner_inits = 0;
     g_fail_vsync = false;
     g_fail_local_read = false;
+    g_language_hidden = false;
     g_read_bitbltbuf = g_read_trxpos = g_read_trxreg = 0;
     g_read_bytes = 0;
     g_written_csr = 0;
@@ -40,6 +42,7 @@ void reset_fake() {
 
 extern "C" {
 void rrv_pcsx2_gs_bridge_owner_thread_init(void) { ++g_owner_inits; }
+int tarzan_experiments_boot_language_hidden(void) { return g_language_hidden ? 1 : 0; }
 RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(const RrvPcsx2GsBridgeConfig* c,
     RrvPcsx2GsBridgeCapabilities* caps, char*, uint32_t) {
     g_config = *c;
@@ -79,6 +82,8 @@ int rrv_pcsx2_gs_bridge_resize(RrvPcsx2GsBridge*, uint32_t, uint32_t, float, cha
 int rrv_pcsx2_gs_bridge_get_stats(RrvPcsx2GsBridge*, RrvPcsx2GsBridgeStats* s, char*, uint32_t) {
     s->direct_gpu_presents = 9; s->synchronous_cpu_readbacks = 0; s->unexpected_readbacks = 0; return 1;
 }
+int rrv_pcsx2_gs_bridge_capture(RrvPcsx2GsBridge*, const RrvPcsx2GsBridgeCaptureRequest*,
+                                RrvPcsx2GsBridgeCaptureResult*, char*, uint32_t) { return 1; }
 }
 
 int main() {
@@ -101,6 +106,25 @@ int main() {
         regs[0] = 0xabc;
         adapter.vsync(regs, 123, 1);
         assert(g_vsyncs == 1 && g_field == 123 && g_parity == 1 && g_regs[0] == 0xabc);
+        // The boot-language scanout guard masks PMODE enable and BGCOLOR only
+        // in the renderer snapshot; guest registers and other GS registers stay intact.
+        regs[0] = 0x123456789abcdef3ull;
+        regs[14] = 0xfedcba9876543210ull;
+        regs[5] = 0x1122334455667788ull;
+        const auto guest_regs = regs;
+        g_language_hidden = true;
+        adapter.vsync(regs, 124, 0);
+        assert(g_vsyncs == 2 && g_field == 124 && g_parity == 0);
+        assert(g_regs[0] == (guest_regs[0] & ~uint64_t{3}));
+        assert(g_regs[14] == 0 && g_regs[5] == guest_regs[5]);
+        assert(regs == guest_regs);
+        assert(g_readbacks == 0);
+        g_language_hidden = false;
+        adapter.vsync(regs, 125, 1);
+        assert(g_vsyncs == 3 && g_field == 125 && g_parity == 1);
+        assert(g_regs[0] == guest_regs[0] && g_regs[14] == guest_regs[14] &&
+               g_regs[5] == guest_regs[5] && regs == guest_regs);
+        assert(g_readbacks == 0);
         assert(g_readbacks == 0); // presenting a field does not request CPU readback
         const auto stat = adapter.stats();
         assert(stat.direct_gpu_presents == 9 && stat.synchronous_cpu_readbacks == 0 && stat.unexpected_readbacks == 0);

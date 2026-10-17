@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Apply the guarded Tarzan generated-code experiments to four functions.
+"""Apply the guarded Tarzan generated-code experiments to generated functions.
 
 This is a BYOD post-generation step. It verifies the supplied SLES-50350 ELF
-before editing and only writes the four named generated functions.
+before editing and only writes its named generated functions.
 """
 
 from __future__ import annotations
@@ -22,6 +22,10 @@ FILES = {
     "init": "GAM_InitEngineState_Playing__Fv_0x35ec20.cpp",
     "sync": "osrSyncCallback__Fi_0x3f8cf0.cpp",
     "clock": "fn_vActualizeEngineClock_0x360140.cpp",
+    "language_start": "Start__5CMenuFPP5CMenub25MNU_eActionOnPreviousMenu_0x34fbc0.cpp",
+    "language_menu": "Process__5CMenuFv_0x350350.cpp",
+    "language_requested": "ProcessMenuMessage_SetRequestedLanguage__14CAIMenuManagerFP77ubiList_P21CMenuMessagePar_0x2cd410.cpp",
+    "language_accepted": "ProcessMenuMessage_SetLanguage__14CAIMenuManagerFP77ubiList_P21CMenuMessageParameter_41_0x2c0d60.cpp",
 }
 INCLUDE = '#include "experimental-settings.hpp"'
 ZOOM_MARK = "// TARZAN_EXPERIMENT_HD_ZOOM"
@@ -30,6 +34,10 @@ INIT_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_INIT"
 SYNC_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_SYNC"
 CLOCK_MARK = "// TARZAN_EXPERIMENT_CLOCK_TRACE"
 CAMERA_TRACE_MARK = "// TARZAN_EXPERIMENT_CAMERA_CONTEXT_TRACE"
+LANGUAGE_START_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_START"
+LANGUAGE_MENU_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_MENU"
+LANGUAGE_REQUESTED_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_REQUESTED"
+LANGUAGE_ACCEPTED_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_ACCEPTED"
 
 
 class PatchError(Exception):
@@ -72,6 +80,10 @@ def verify_elf(path: Path) -> None:
         0x338BD8: 0x0C0DA670,
         0x33B324: 0xAC850004,
         0x360388: 0xFC241A10,
+        0x34FCE0: 0x0C0D5B88,
+        0x350350: 0x27BDFFB0,
+        0x2CD48C: 0x7BBF0010,
+        0x2C0E40: 0x24020001,
     }
     for address, word in expected.items():
         actual = elf_word_at(data, address)
@@ -294,6 +306,75 @@ def patch_clock(text: str) -> str:
     return ensure_include(text, "clock")
 
 
+def patch_language_start(text: str) -> str:
+    code = """    // TARZAN_EXPERIMENT_LANGUAGE_START: select before the guest focuses its startup item.
+    {
+        const uint32_t original = READ32(ADD32(GPR_U32(ctx, 16), 0xA4u));
+        const uint32_t chosen = tarzan_experiments_boot_language_item(
+            rdram, GPR_U32(ctx, 16), original);
+        if (chosen != original) WRITE32(ADD32(GPR_U32(ctx, 16), 0xA4u), chosen);
+    }
+"""
+    anchor = """label_34fce0:
+    // 0x34fce0: 0xc0d5b88  jal         func_356E20
+"""
+    if text.count(LANGUAGE_START_MARK):
+        if text.count(LANGUAGE_START_MARK) != 1:
+            raise PatchError("language startup item: multiple experiment markers")
+    else:
+        text = replace_once(text, anchor, "label_34fce0:\n" + code + anchor.split("\n", 1)[1],
+                            "language startup item before PC 0x34fce0")
+    return ensure_include(text, "language startup item")
+
+
+def patch_language_menu(text: str) -> str:
+    code = """    // TARZAN_EXPERIMENT_LANGUAGE_MENU: advance saved-language startup state once per menu entry.
+    tarzan_experiments_boot_language_menu(rdram, GPR_U32(ctx, 4));
+"""
+    anchor = """label_350350:
+    // 0x350350: 0x27bdffb0  addiu       $sp, $sp, -0x50
+"""
+    if text.count(LANGUAGE_MENU_MARK):
+        if text.count(LANGUAGE_MENU_MARK) != 1:
+            raise PatchError("language menu entry: multiple experiment markers")
+    else:
+        text = replace_once(text, anchor, "label_350350:\n" + code + anchor.split("\n", 1)[1],
+                            "language menu entry at PC 0x350350")
+    return ensure_include(text, "language menu entry")
+
+
+def patch_language_requested(text: str) -> str:
+    code = """    // TARZAN_EXPERIMENT_LANGUAGE_REQUESTED: the request handler returned success.
+    tarzan_experiments_language_accepted(GPR_U32(ctx, 16));
+"""
+    anchor = """label_2cd48c:
+    // 0x2cd48c: 0x7bbf0010  lq          $ra, 0x10($sp)
+"""
+    if text.count(LANGUAGE_REQUESTED_MARK):
+        if text.count(LANGUAGE_REQUESTED_MARK) != 1:
+            raise PatchError("language request acceptance: multiple experiment markers")
+    else:
+        text = replace_once(text, anchor, "label_2cd48c:\n" + code + anchor.split("\n", 1)[1],
+                            "language request acceptance at PC 0x2cd48c")
+    return ensure_include(text, "language request acceptance")
+
+
+def patch_language_accepted(text: str) -> str:
+    code = """    // TARZAN_EXPERIMENT_LANGUAGE_ACCEPTED: successful language change only.
+    tarzan_experiments_language_accepted(GPR_U32(ctx, 16));
+"""
+    anchor = """label_2c0e40:
+    // 0x2c0e40: 0x24020001  addiu       $v0, $zero, 0x1
+"""
+    if text.count(LANGUAGE_ACCEPTED_MARK):
+        if text.count(LANGUAGE_ACCEPTED_MARK) != 1:
+            raise PatchError("language acceptance: multiple experiment markers")
+    else:
+        text = replace_once(text, anchor, "label_2c0e40:\n" + code + anchor.split("\n", 1)[1],
+                            "successful language change at PC 0x2c0e40")
+    return ensure_include(text, "language acceptance")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generated-dir", type=Path, default=GENERATED)
@@ -308,6 +389,10 @@ def main() -> int:
             "init": patch_init(contents["init"]),
             "sync": patch_sync(contents["sync"]),
             "clock": patch_clock(contents["clock"]),
+            "language_start": patch_language_start(contents["language_start"]),
+            "language_menu": patch_language_menu(contents["language_menu"]),
+            "language_requested": patch_language_requested(contents["language_requested"]),
+            "language_accepted": patch_language_accepted(contents["language_accepted"]),
         }
     except (OSError, PatchError) as exc:
         parser.error(str(exc))

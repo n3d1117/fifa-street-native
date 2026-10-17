@@ -5,6 +5,7 @@
 #include "experimental-settings.hpp"
 
 #include <atomic>
+#include <mutex>
 
 @interface TarzanExperimentalSettingsActions : NSObject <NSWindowDelegate>
 - (void)settingChanged:(NSButton*)sender;
@@ -20,16 +21,21 @@ std::atomic<bool> s_pendingHighFPS{false};
 std::atomic<bool> s_pendingHDWidescreen{false};
 std::atomic<bool> s_sharperImage{false};
 std::atomic<bool> s_pendingSharperImage{false};
+std::atomic<bool> s_rememberLanguage{false};
+std::atomic<bool> s_pendingRememberLanguage{false};
+std::atomic<int> s_savedLanguage{-1};
 std::atomic<int> s_targetFPS{60};
 std::atomic<int> s_pendingTargetFPS{60};
 std::atomic<int> s_renderScale{1};
 std::atomic<int> s_pendingRenderScale{1};
 std::atomic<bool> s_configured{false};
+std::mutex s_settingsMutex;
 NSString* s_userDirectory;
 NSWindow* s_window;
 NSButton* s_highFPSButton;
 NSButton* s_hdWidescreenButton;
 NSButton* s_sharperImageButton;
+NSButton* s_rememberLanguageButton;
 NSPopUpButton* s_targetFPSPopup;
 NSPopUpButton* s_renderScalePopup;
 NSTextField* s_status;
@@ -38,6 +44,7 @@ TarzanExperimentalSettingsActions* s_actions;
 constexpr NSInteger kHighFPSTag = 1;
 constexpr NSInteger kHDWidescreenTag = 2;
 constexpr NSInteger kSharperImageTag = 3;
+constexpr NSInteger kRememberLanguageTag = 4;
 
 bool isIntegerNumber(id value) {
     return [value isKindOfClass:[NSNumber class]] &&
@@ -50,6 +57,12 @@ int validRenderScale(id value) {
     for (int scale = 1; scale <= 4; ++scale)
         if ([value compare:@(scale)] == NSOrderedSame) return scale;
     return 0;
+}
+
+int validLanguage(id value) {
+    if (!isIntegerNumber(value) || [value compare:@0] == NSOrderedAscending ||
+        [value compare:@4] == NSOrderedDescending) return -1;
+    return [value intValue];
 }
 
 bool isBoolean(id value) {
@@ -75,6 +88,8 @@ void refreshControls() {
         [s_hdWidescreenButton setState:s_pendingHDWidescreen.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_sharperImageButton)
         [s_sharperImageButton setState:s_pendingSharperImage.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
+    if (s_rememberLanguageButton)
+        [s_rememberLanguageButton setState:s_pendingRememberLanguage.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_targetFPSPopup)
         [s_targetFPSPopup selectItemWithTag:s_pendingTargetFPS.load(std::memory_order_relaxed)];
     if (s_renderScalePopup)
@@ -89,6 +104,8 @@ void updatePendingFromControl(NSButton* sender) {
         s_pendingHDWidescreen.store(enabled, std::memory_order_relaxed);
     else if ([sender tag] == kSharperImageTag)
         s_pendingSharperImage.store(enabled, std::memory_order_relaxed);
+    else if ([sender tag] == kRememberLanguageTag)
+        s_pendingRememberLanguage.store(enabled, std::memory_order_relaxed);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 
@@ -106,15 +123,8 @@ void updatePendingRenderScaleFromControl(NSPopUpButton* sender) {
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 
-bool saveSettings() {
+bool writeSettingsDictionary(NSDictionary* plist) {
     if (!s_userDirectory || s_userDirectory.length == 0) return false;
-    NSDictionary* plist = @{
-        @"highFPS": @(s_pendingHighFPS.load(std::memory_order_relaxed)),
-        @"hdWidescreen": @(s_pendingHDWidescreen.load(std::memory_order_relaxed)),
-        @"targetFPS": @(s_pendingTargetFPS.load(std::memory_order_relaxed)),
-        @"renderScale": @(s_pendingRenderScale.load(std::memory_order_relaxed)),
-        @"sharperImage": @(s_pendingSharperImage.load(std::memory_order_relaxed))
-    };
     NSError* error = nil;
     NSData* data = [NSPropertyListSerialization dataWithPropertyList:plist
         format:NSPropertyListXMLFormat_v1_0 options:0 error:&error];
@@ -135,6 +145,25 @@ bool saveSettings() {
     return true;
 }
 
+bool saveSettings() {
+    std::lock_guard<std::mutex> lock(s_settingsMutex);
+    if (!s_userDirectory || s_userDirectory.length == 0) return false;
+    NSMutableDictionary* plist = [NSMutableDictionary dictionaryWithDictionary:(loadSettings(s_userDirectory) ?: @{})];
+    plist[@"highFPS"] = @(s_pendingHighFPS.load(std::memory_order_relaxed));
+    plist[@"hdWidescreen"] = @(s_pendingHDWidescreen.load(std::memory_order_relaxed));
+    plist[@"targetFPS"] = @(s_pendingTargetFPS.load(std::memory_order_relaxed));
+    plist[@"renderScale"] = @(s_pendingRenderScale.load(std::memory_order_relaxed));
+    plist[@"sharperImage"] = @(s_pendingSharperImage.load(std::memory_order_relaxed));
+    const bool remember = s_pendingRememberLanguage.load(std::memory_order_relaxed);
+    plist[@"rememberLanguage"] = @(remember);
+    const int language = s_savedLanguage.load(std::memory_order_relaxed);
+    if (remember && language >= 0 && language <= 4)
+        plist[@"lastLanguage"] = @(language);
+    else
+        [plist removeObjectForKey:@"lastLanguage"];
+    return writeSettingsDictionary(plist);
+}
+
 void showWindowOnMain() {
     if (!s_actions) s_actions = [TarzanExperimentalSettingsActions new];
     if (s_window) {
@@ -145,7 +174,7 @@ void showWindowOnMain() {
     }
 
     const CGFloat width = 590;
-    const CGFloat height = 492;
+    const CGFloat height = 568;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -224,6 +253,24 @@ void showWindowOnMain() {
     [sharperImageDetail setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:sharperImageDetail];
 
+    for (NSView* subview in [content subviews]) {
+        NSRect frame = [subview frame];
+        frame.origin.y += 76;
+        [subview setFrame:frame];
+    }
+
+    s_rememberLanguageButton = [NSButton checkboxWithTitle:@"Remember last language" target:s_actions action:@selector(settingChanged:)];
+    [s_rememberLanguageButton setTag:kRememberLanguageTag];
+    [s_rememberLanguageButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [content addSubview:s_rememberLanguageButton];
+    NSTextField* languageDetail = [NSTextField labelWithString:@"On the next launch, skip language selection and use the last language you accepted."];
+    [languageDetail setFrame:NSMakeRect(46, 116, 510, 30)];
+    [languageDetail setMaximumNumberOfLines:2];
+    [[languageDetail cell] setWraps:YES];
+    [[languageDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [languageDetail setTextColor:[NSColor secondaryLabelColor]];
+    [content addSubview:languageDetail];
+
     s_status = [NSTextField labelWithString:@"Changes apply after restarting the game."];
     [s_status setFrame:NSMakeRect(22, 70, 420, 20)];
     [s_status setTextColor:[NSColor secondaryLabelColor]];
@@ -266,6 +313,8 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         const bool highFPS = isBoolean(plist[@"highFPS"]) && [plist[@"highFPS"] boolValue];
         const bool hdWidescreen = isBoolean(plist[@"hdWidescreen"]) && [plist[@"hdWidescreen"] boolValue];
         const bool sharperImage = isBoolean(plist[@"sharperImage"]) && [plist[@"sharperImage"] boolValue];
+        const bool rememberLanguage = isBoolean(plist[@"rememberLanguage"]) && [plist[@"rememberLanguage"] boolValue];
+        const int savedLanguage = rememberLanguage ? validLanguage(plist[@"lastLanguage"]) : -1;
         int targetFPS = 60;
         id targetValue = plist[@"targetFPS"];
         if ([targetValue isKindOfClass:[NSNumber class]] &&
@@ -280,6 +329,9 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         s_highFPS.store(highFPS, std::memory_order_relaxed);
         s_hdWidescreen.store(hdWidescreen, std::memory_order_relaxed);
         s_sharperImage.store(sharperImage, std::memory_order_relaxed);
+        s_rememberLanguage.store(rememberLanguage, std::memory_order_relaxed);
+        s_pendingRememberLanguage.store(rememberLanguage, std::memory_order_relaxed);
+        s_savedLanguage.store(savedLanguage, std::memory_order_relaxed);
         s_targetFPS.store(targetFPS, std::memory_order_relaxed);
         s_renderScale.store(renderScale, std::memory_order_relaxed);
         s_pendingHighFPS.store(highFPS, std::memory_order_relaxed);
@@ -300,6 +352,27 @@ extern "C" int tarzan_experiments_target_fps() { return s_targetFPS.load(std::me
 extern "C" int tarzan_experiments_hd_widescreen() { return s_hdWidescreen.load(std::memory_order_relaxed) ? 1 : 0; }
 extern "C" int tarzan_experiments_render_scale() { return s_renderScale.load(std::memory_order_relaxed); }
 extern "C" int tarzan_experiments_sharper_image() { return s_sharperImage.load(std::memory_order_relaxed) ? 1 : 0; }
+extern "C" int tarzan_experiments_remember_language() { return s_rememberLanguage.load(std::memory_order_relaxed) ? 1 : 0; }
+extern "C" int tarzan_experiments_saved_language() {
+    if (!s_rememberLanguage.load(std::memory_order_relaxed)) return -1;
+    const int language = s_savedLanguage.load(std::memory_order_relaxed);
+    return language >= 0 && language <= 4 ? language : -1;
+}
+
+extern "C" void tarzan_experiments_accept_language(uint32_t languageID) {
+    if (languageID > 4u) return;
+    s_savedLanguage.store(static_cast<int>(languageID), std::memory_order_relaxed);
+    if (!s_rememberLanguage.load(std::memory_order_relaxed) || !s_userDirectory) return;
+    @autoreleasepool {
+        std::lock_guard<std::mutex> lock(s_settingsMutex);
+        if (!s_userDirectory || s_userDirectory.length == 0) return;
+        NSMutableDictionary* plist = [NSMutableDictionary dictionaryWithDictionary:(loadSettings(s_userDirectory) ?: @{})];
+        id option = plist[@"rememberLanguage"];
+        if (!isBoolean(option) || ![option boolValue]) return;
+        plist[@"lastLanguage"] = @(languageID);
+        (void)writeSettingsDictionary(plist);
+    }
+}
 
 extern "C" void tarzan_experiments_set_high_fps(int enabled) {
     const bool value = enabled != 0;

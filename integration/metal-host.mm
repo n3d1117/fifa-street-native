@@ -425,4 +425,4 @@ extern "C" int tarzan_metal_gs_capabilities(uint32_t* renderer, uint32_t* flags)
     *flags = s_gs->capabilities().capability_flags;
     return 1;
 }
-extern "C" int tarzan_metal_key_down(uint32_t key) { return key<19 && (s_keys[key].load(std::memory_order_relaxed) || tarzan_diagnostic_input_key_down(key)); }
+extern "C" int tarzan_metal_key_down(uint32_t key) { return key<19 && (s_keys[key].load(std::memory_order_relaxed) || tarzan_diagnostic_input_key_down(key) || (key == TARZAN_KEY_X && tarzan_experiments_boot_language_confirm())); }

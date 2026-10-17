@@ -55,19 +55,12 @@ Reference: [Fukami](https://github.com/danisandoval/fukami), reviewed at
 
 ## P3 — Remember the language and optionally bypass its selector
 
-- Add an opt-in “Remember last language” preference, off by default. Store only
-  a validated game language ID after the guest accepts it; on the next cold
-  start, feed it through the guest language-selection path and verify menus,
-  subtitles, movie audio, and saves in every supported language.
-- When enabled, reuse that saved choice and bypass the selector on the next
-  boot. With no valid saved choice, show the selector. Never infer a language
-  from the host locale silently.
-- Implementation leads: guest `SetActiveLanguageID` at 0x47D040 receives the
-  language ID in `$a1`, stores it at manager offset `+0x20`, and notifies
-  registered callbacks. `ProcessMenuMessage_SetRequestedLanguage` at 0x2CD410
-  checks menu-manager field `+0x130` against sentinel `-1` and enters a guest
-  callback path; trace where a concrete selected ID reaches the setter before
-  adding a hook. Confirm boot-time object lifetime and valid ID mapping too.
+- Implemented in Build 17, off by default. Validated IDs are persisted only
+  after the guest accepts them; restoration uses the original menu actions and
+  language callbacks. Missing/invalid choices retain the selector.
+- Startup restoration is checked for English, French, Spanish, Italian and
+  German. Full localized subtitles, movie audio and save progression remain
+  part of whole-game qualification.
 
 ## P4 — Optional logo skip
 

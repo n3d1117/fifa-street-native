@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "metal-gs-adapter.hpp"
+#include "experimental-settings.hpp"
 
 #include <cmath>
 #include <charconv>
@@ -298,6 +299,11 @@ void MetalGsAdapter::vsync(const std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_R
         scanout_regs[6] = UINT64_C(0x00a9000502101401);
         if (field_index == pal_syncv_start)
             std::clog << "Metal PAL SYNCV diagnostic begins at field=" << field_index << '\n';
+    }
+    if (tarzan_experiments_boot_language_hidden()) {
+        // Keep GS work/VSync intact, but do not display the bypassed selector.
+        scanout_regs[0] &= ~UINT64_C(3);
+        scanout_regs[14] = 0;
     }
     char error[1024]{};
     check(rrv_pcsx2_gs_bridge_vsync(handle_, scanout_regs.data(), field_index, parity, error, sizeof(error)),
