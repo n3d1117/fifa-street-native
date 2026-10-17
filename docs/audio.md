@@ -23,9 +23,11 @@ Filter by the selected private substream before concatenating PSS audio.
 
 Signed build 3 is installed and launch-checked under Applications. The bundled
 C++ runtime libraries now use bundle-relative search paths; leftover Downloads
-toolchain paths had blocked launch before main. Listening confirmation remains
-pending. A separate startup pre-roll discrepancy of roughly 93 ms remains to
-compare with original PS2 playback. This is not whole-game audio qualification.
+toolchain paths had blocked launch before main. On 2026-10-16/17, the user
+confirmed by listening that startup and the first story segment sound fixed.
+That confirmation covers those heard sections only. A separate startup pre-roll
+discrepancy of roughly 93 ms remains to compare with original PS2 playback; this
+is not whole-game audio qualification.
 Three ring overruns in the debug-skip navigation run occurred during silence;
 there were no clipping windows across the 314-second run. Temporary per-block
 mixer instrumentation was removed before packaging; local captures are ignored.
@@ -48,8 +50,9 @@ the EE clock correction still produced about 51k mixed frames/s: that change alo
 was insufficient. With IOP budget accounting corrected, the real W1_1_GM movie
 trace returns to approximately 48k frames/s with a fixed video PTS epoch. This
 removes measured cumulative clock drift; it does not certify lip-sync or all
-movies. Listening confirmation and the earlier initial pre-roll comparison remain
-separate acceptance gates.
+movies. User listening confirmation covers startup and the first story segment;
+later movies and the earlier initial pre-roll comparison remain separate
+acceptance gates.
 
 Build 8 story-to-gameplay qualification: 42 health intervals averaged
 48.00024k mixed frames/s (47.98–48.02k range), with no accumulating video

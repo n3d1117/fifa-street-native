@@ -1,5 +1,5 @@
 diff --git a/tools/pcsx2-gs-bridge/bridge.cpp b/tools/pcsx2-gs-bridge/bridge.cpp
-index e2ced31d2c7750dac9509596dbe3013631e57238..02350381555179b922b44445802c01cb554a3bbf 100644
+index e2ced31d2c7750dac9509596dbe3013631e57238..b6478fcac33ccd8d24d2f3fd1eb653a5bcb4eb44 100644
 --- a/tools/pcsx2-gs-bridge/bridge.cpp
 +++ b/tools/pcsx2-gs-bridge/bridge.cpp
 @@ -755,6 +755,7 @@ struct RrvPcsx2GsBridge {
@@ -106,7 +106,34 @@ index e2ced31d2c7750dac9509596dbe3013631e57238..02350381555179b922b44445802c01cb
      // Optional presentation post-processing, both off by default (owner
      // decision 2026-09-29). RRV_PCSX2_GS_FXAA=1 runs PCSX2's FXAA pass on the
      // merged frame (GSRenderer::Merge -> GSDevice::FXAA). RRV_PCSX2_GS_CAS=
-@@ -1458,7 +1534,8 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+@@ -1398,7 +1474,7 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+         std::fprintf(stderr, "[pcsx2-gs-bridge] anisotropic filtering=%ux\n",
+                      static_cast<unsigned>(options.MaxAnisotropy));
+     }
+-    // RRV_PCSX2_GS_TEXTURE_FILTER=ps2|bilinear: ps2 (default) filters each draw as
++    // RRV_PCSX2_GS_TEXTURE_FILTER=ps2|bilinear|nearest: ps2 (default) filters each draw as
+     // its TEX1 asks. bilinear is PCSX2's "Bilinear (Forced excluding sprite)"
+     // (GSVertexTrace: every non-sprite draw samples linearly, sprites keep
+     // TEX1). RR5 draws its cars with MMAG=NEAREST and MXL=0, so stock cars
+@@ -1419,13 +1495,15 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+     if (const char* filter = std::getenv("RRV_PCSX2_GS_TEXTURE_FILTER"); filter && filter[0] != '\0')
+     {
+         const std::string_view value(filter);
+-        if (value != "ps2" && value != "bilinear")
++        if (value != "ps2" && value != "bilinear" && value != "nearest")
+         {
+-            SetError(error, error_capacity, "RRV_PCSX2_GS_TEXTURE_FILTER must be ps2 or bilinear, got %s", filter);
++            SetError(error, error_capacity, "RRV_PCSX2_GS_TEXTURE_FILTER must be ps2, bilinear or nearest, got %s", filter);
+             return nullptr;
+         }
+         if (value == "bilinear")
+             options.TextureFiltering = BiFiltering::Forced_But_Sprite;
++        else if (value == "nearest")
++            options.TextureFiltering = BiFiltering::Nearest;
+         std::fprintf(stderr, "[pcsx2-gs-bridge] texture filter=%s\n", filter);
+     }
+     if (direct_requested)
+@@ -1458,7 +1536,8 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
                       static_cast<double>(custom_aspect), options.IntegerScaling ? 1u : 0u);
      const ScopedBridgeGsFpcr fpcr_guard(bridge->fp_isolated);
      if (!GSopen(options, renderer, bridge->pcsx2_regs.data(),
@@ -116,7 +143,7 @@ index e2ced31d2c7750dac9509596dbe3013631e57238..02350381555179b922b44445802c01cb
      {
          if (direct_requested)
              rrv_pcsx2_gs_bridge_clear_native_surface();
-@@ -2788,7 +2865,7 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
+@@ -2788,7 +2867,7 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
      }
      if (bridge->vsync_from_field && field_index >= bridge->vsync_from_field)
      {
@@ -331,10 +358,111 @@ index aac411ec6e9d5d9bb07ede973a75f227029b9eee..a43306f5a107bb3d01518a0f6ddc892e
  
  /* Pass as spu_addr16 to keep the core's current TSA instead of writing it. */
 diff --git a/tools/pcsx2-spu2/test/spu2_selftest.cpp b/tools/pcsx2-spu2/test/spu2_selftest.cpp
-index c179067d772af61b7c19275ad465890b2848e71f..d2ba1014a7d6eae20903c53942d39817d9523092 100644
+index c179067d772af61b7c19275ad465890b2848e71f..f4488c3665be5b8a5a8e6c315cacf1cb553795ef 100644
 --- a/tools/pcsx2-spu2/test/spu2_selftest.cpp
 +++ b/tools/pcsx2-spu2/test/spu2_selftest.cpp
-@@ -410,7 +410,7 @@ bool test_threading()
+@@ -2,12 +2,13 @@
+ // Self-test for rrv_pcsx2_spu2: tone, inline-vs-threaded determinism,
+ // threading cost, and a CPU-cost benchmark.
+ //
+-//   spu2_selftest tone | determinism | threading | bench | all
++//   spu2_selftest tone | determinism | sync-equivalence | threading | bench | all
+ //
+ // Exit code 0 = pass.
+ 
+ #include "rrv_pcsx2_spu2.h"
+ 
++#include <algorithm>
+ #include <atomic>
+ #include <chrono>
+ #include <cinttypes>
+@@ -361,6 +362,85 @@ bool test_determinism(RunResult* inline_out = nullptr, RunResult* threaded_out =
+ 	return ok;
+ }
+ 
++struct SyncEquivalenceResult
++{
++	std::vector<rrv_spu2_event> events;
++	std::vector<float> output;
++	rrv_spu2_stats stats{};
++	uint64_t state_hash = 0;
++};
++
++SyncEquivalenceResult run_sync_equivalence(int threaded, bool explicitAdvance)
++{
++	SyncEquivalenceResult result;
++	rrv_spu2_config cfg{threaded, 1 << 15};
++	rrv_spu2* s = rrv_spu2_create(&cfg);
++	if (!s) { std::printf("sync-equivalence: create failed\n"); std::exit(2); }
++
++	const auto tone = encode_sine_loop(48, 12);
++	uint64_t t = 1000;
++	rrv_spu2_dma_write(s, t, 0, 0x5000, tone.data(), uint32_t(tone.size()));
++	key_voice(s, t, 0, 0, 0x5000, 0x1000);
++	rrv_spu2_write16(s, t, cr(0, IRQA), 0x5028);
++	rrv_spu2_write16(s, t, cr(0, ATTR), 0x80C0);
++	rrv_spu2_write16(s, t, cr(0, KON), 0x0001);
++	rrv_spu2_write16(s, t, cx(0, MVOLL), 0x3FFF);
++	rrv_spu2_write16(s, t, cx(0, MVOLR), 0x3FFF);
++
++	rrv_spu2_event events[16];
++	for (int i = 1; i <= 64; ++i)
++	{
++		t = 1000u + uint64_t(i) * (kIopHz / 256u);
++		if (explicitAdvance)
++			rrv_spu2_advance(s, t);
++		size_t count;
++		do
++		{
++			count = rrv_spu2_sync(s, t, events, 16);
++			result.events.insert(result.events.end(), events, events + count);
++		} while (count == 16);
++	}
++	result.state_hash = rrv_spu2_state_hash(s, t);
++	result.output.resize(size_t(kIopHz / kCyclesPerFrame) * 2);
++	const size_t frames = rrv_spu2_pull_output(s, result.output.data(), result.output.size() / 2);
++	result.output.resize(frames * 2);
++	rrv_spu2_get_stats(s, &result.stats);
++	rrv_spu2_destroy(s);
++	return result;
++}
++
++bool test_sync_equivalence()
++{
++	bool ok = true;
++	for (int threaded = 0; threaded <= 1; ++threaded)
++	{
++		const auto withAdvance = run_sync_equivalence(threaded, true);
++		const auto syncOnly = run_sync_equivalence(threaded, false);
++		bool eventsSame = withAdvance.events.size() == syncOnly.events.size();
++		for (size_t i = 0; eventsSame && i < withAdvance.events.size(); ++i)
++			eventsSame = withAdvance.events[i].iop_cycle == syncOnly.events[i].iop_cycle &&
++				withAdvance.events[i].kind == syncOnly.events[i].kind &&
++				withAdvance.events[i].data == syncOnly.events[i].data;
++		const bool outputSame = withAdvance.output.size() == syncOnly.output.size() &&
++			std::memcmp(withAdvance.output.data(), syncOnly.output.data(),
++				withAdvance.output.size() * sizeof(float)) == 0;
++		const bool sawDmaCompletion = std::any_of(withAdvance.events.begin(), withAdvance.events.end(),
++			[](const rrv_spu2_event& event) { return event.kind == RRV_SPU2_EVENT_DMA4_DONE; });
++		const bool same = eventsSame && outputSame &&
++			withAdvance.state_hash == syncOnly.state_hash &&
++			withAdvance.stats.output_hash == syncOnly.stats.output_hash &&
++			withAdvance.stats.frames_mixed == syncOnly.stats.frames_mixed;
++		std::printf("sync-equivalence: %s mode events=%s state=%s PCM=%s frames=%s\n",
++			threaded ? "threaded" : "inline", eventsSame ? "same" : "DIFFERENT",
++			withAdvance.state_hash == syncOnly.state_hash ? "same" : "DIFFERENT",
++			outputSame && withAdvance.stats.output_hash == syncOnly.stats.output_hash ? "same" : "DIFFERENT",
++			withAdvance.stats.frames_mixed == syncOnly.stats.frames_mixed ? "same" : "DIFFERENT");
++		ok = ok && same && sawDmaCompletion && withAdvance.stats.frames_mixed != 0;
++	}
++	std::printf("sync-equivalence: %s\n", ok ? "PASS" : "FAIL");
++	return ok;
++}
++
+ // ---------------------------------------------------------------------------
+ // 3. Threading: caller-side cost + concurrent consumer (for TSan)
+ // ---------------------------------------------------------------------------
+@@ -410,7 +490,7 @@ bool test_threading()
  	rrv_spu2_destroy(s);
  	std::printf("threading: concurrent consumer pulled %" PRIu64 " of %" PRIu64 " frames (overrun %" PRIu64 ", underrun %" PRIu64 ")\n",
  		pulled.load(), st.frames_mixed, st.overrun_frames, st.underrun_frames);
@@ -343,3 +471,12 @@ index c179067d772af61b7c19275ad465890b2848e71f..d2ba1014a7d6eae20903c53942d39817
  	std::printf("threading: %s\n", ok ? "PASS" : "FAIL");
  	return ok;
  }
+@@ -471,6 +551,8 @@ int main(int argc, char** argv)
+ 		ok = test_tone() && ok;
+ 	if (what == "determinism" || what == "all")
+ 		ok = test_determinism() && ok;
++	if (what == "sync-equivalence" || what == "all")
++		ok = test_sync_equivalence() && ok;
+ 	if (what == "threading" || what == "all")
+ 		ok = test_threading() && ok;
+ 	if (what == "bench" || what == "all")

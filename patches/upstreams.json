@@ -144,7 +144,7 @@
       "base_revision": "e8818121566cfaf3d361e38745860b0a9438e27b",
       "id": "fukami",
       "patch": "patches/fukami.patch",
-      "patch_sha256": "7d17fe0fd8ba1be1e23af4f37bb765fa22f4f3ebd9fc10a6f63afea8172a8142",
+      "patch_sha256": "2d328e4612fcd24763f610bc49e41daba25b359909cc78e32ea728ce47d8764e",
       "path": "source/fukami",
       "untracked": [
         {

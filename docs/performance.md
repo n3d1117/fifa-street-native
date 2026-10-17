@@ -31,3 +31,24 @@ The native VU0 path now runs through the first mission without runtime faults, a
 Native execution exceeded 3.1 million calls. Its mismatch counter is meaningful only in differential mode; the prior `vu0-native-live-diff-2` run compared 3,928,064 duplicate calls with zero mismatches, alongside 1,000 offline IEEE/VI cases. In `reports/vu0-native-fixed.sample.txt`, VU0 accounts for 218/4,536 GameThread samples (~4.8%), versus about 19% in a separate baseline capture. This indicates a lower observed VU0 share in that native capture, not a controlled performance comparison or a whole-game result.
 
 The present Metal bridge and packaged app are macOS targets. iOS/tvOS support would require a platform port and device validation of the runtime, GS backend, display lifecycle, audio/input, memory and thermal behavior; Mac results do not establish mobile performance. Use Apple's [CAMetalLayer API](https://developer.apple.com/documentation/quartzcore/cametallayer) as the platform presentation reference. The 50-FPS toggle did not raise ~22 DISPFB2 changes/s in this observed mission segment, while GS field-service cadence stayed near 50 Hz. The counters show roughly 3.52 ms aggregate GPU work per field, so they do not point to GPU saturation, but they cannot identify a hard guest cap or establish total host CPU headroom. These data do not support a claim that 50/60 unique gameplay FPS is feasible without guest timing changes.
+
+## Build 9 follow-up — 2026-10-17
+
+A fresh first-mission 120-Hz/4×/16:9 sample has 4,428 GameThread samples.
+`RenderOpaqueStatic` has 979 inclusive samples, chiefly nested VIF/MFIFO/native
+VU1 work; these counts overlap and cannot be added. Native VU1 leaf TUs and
+dispatcher already compile at O2 with strict FP settings. Metal nextDrawable
+appears in only two sampled stacks, so drawable stalls are not the leading
+target in this run. This is CPU attribution, not a GPU-utilization measurement.
+
+The SPU host issued Advance(t), then immediately Sync(t). Both commands process
+through the same timestamp; Sync also returns events. Removing the duplicate
+Advance reduces command dispatch work without changing emulated time. The new
+inline/threaded equivalence fixture checks returned events, core state, output
+PCM/hash and mixed-frame count; all match. The existing determinism fixture
+also passes. No overall FPS speedup is claimed from this change alone.
+
+Keep Metal resource synchronization intact until a measured stall justifies a
+change. Upstream already pipelines ordinary rendering; removing waits needed
+for resource reuse or readback would trade correctness for an unproven gain.
+See [Apple command-buffer guidance](https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/CommandBuffers.html).

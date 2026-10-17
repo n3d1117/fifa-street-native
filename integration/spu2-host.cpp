@@ -479,8 +479,6 @@ void advance(uint64_t iop_cycle) {
     poll_pcm_capture_trigger();
     write_pcm_capture();
     g_last_cycle.store(iop_cycle, std::memory_order_relaxed);
-    rrv_spu2_advance(g_spu2, iop_cycle);
-    report_audio_health(iop_cycle);
 
     std::array<rrv_spu2_event, 32> events{};
     size_t count = 0;
@@ -506,6 +504,9 @@ void advance(uint64_t iop_cycle) {
             }
         }
     } while (count == events.size());
+    // The barrier sync mixes through this cycle, harvests events, and replaces
+    // the redundant same-cycle advance call.
+    report_audio_health(iop_cycle);
 }
 
 uint64_t next_event() {
