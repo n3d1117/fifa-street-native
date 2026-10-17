@@ -37,6 +37,34 @@ set(PS2X_VU0GEN_DIR "${TARZAN_ROOT}/generated/vu0-native" CACHE PATH "Native VU0
 set(PS2X_VU1GEN_DIR "${TARZAN_ROOT}/generated/vu1-disc-native" CACHE PATH "Disc-derived guarded VU1 source directory")
 add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
 
+# Keep the canonical disc-derived guarded VU1 source current during incremental
+# Ninja builds; custom VU1 generator directories remain entirely user-owned.
+get_filename_component(TARZAN_VU1GEN_CANONICAL "${TARZAN_ROOT}/generated/vu1-disc-native" REALPATH)
+get_filename_component(TARZAN_VU1GEN_SELECTED "${PS2X_VU1GEN_DIR}" REALPATH)
+if(TARZAN_VU1GEN_SELECTED STREQUAL TARZAN_VU1GEN_CANONICAL)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    set(TARZAN_VU1GEN_STAMP "${CMAKE_CURRENT_BINARY_DIR}/vu1-disc-native-generated.stamp")
+    add_custom_command(OUTPUT "${TARZAN_VU1GEN_STAMP}"
+        COMMAND "${Python3_EXECUTABLE}" "${TARZAN_ROOT}/scripts/configure-local.py" --vu1-only
+        COMMAND "${CMAKE_COMMAND}" -E touch "${TARZAN_VU1GEN_STAMP}"
+        DEPENDS "${TARZAN_ROOT}/extracted/disc/SLES_503.50"
+                "${TARZAN_ROOT}/scripts/configure-local.py"
+                "${TARZAN_ROOT}/scripts/extract-vu-microcode.py"
+                "${TARZAN_ROOT}/tools/vu1recomp/vu1recomp.py"
+                "${TARZAN_ROOT}/tools/vu1recomp/vu1decode.py"
+        BYPRODUCTS "${PS2X_VU1GEN_DIR}/vu1rec_guarded.cpp"
+        VERBATIM)
+    add_custom_target(tarzan_generate_disc_vu1 DEPENDS "${TARZAN_VU1GEN_STAMP}")
+    add_dependencies(ps2EntryRunner tarzan_generate_disc_vu1)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # Explicit NEON already supplies vector math; these passes scale poorly
+        # on the large guarded CFG. Keep O2 and strict floating-point semantics.
+        set_property(SOURCE "${PS2X_VU1GEN_DIR}/vu1rec_guarded.cpp"
+            TARGET_DIRECTORY ps2EntryRunner APPEND PROPERTY COMPILE_OPTIONS
+            "-fno-slp-vectorize;-mllvm;-misched-regpressure=false")
+    endif()
+endif()
+
 # CMake's option de-duplication collapses repeated `-framework` tokens from
 # pkg-config's static FFmpeg flags. Keep each framework and its name grouped.
 if(TARGET PkgConfig::FFMPEG)

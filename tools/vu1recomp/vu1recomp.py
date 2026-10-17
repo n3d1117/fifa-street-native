@@ -1072,7 +1072,10 @@ class Emitter:
         w("    return;")
         w("FAIL:")
         w("    ctx.failed = true;")
-        w("    goto EXIT;")
+        # Guarded dispatch discards failed state/data/GIF transactionally. Joining
+        # thousands of failure edges to unused register writeback creates huge
+        # PHIs and pathological compile times, with no observable benefit.
+        w("    return;" if g.guarded else "    goto EXIT;")
         w("}")
 
     def emit_node(self, n: Node):

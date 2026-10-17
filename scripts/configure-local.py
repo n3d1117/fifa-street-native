@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Create local canonical configuration and symbol maps from the owner's extracted ELF."""
 from pathlib import Path
+import argparse
 import json
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--vu1-only', action='store_true', help='regenerate VU1 without rewriting EE configuration')
+vu1_only = parser.parse_args().vu1_only
 elf = ROOT / 'extracted/disc/SLES_503.50'
 if not elf.is_file():
     raise SystemExit('Extract your own PAL disc first: scripts/extract-disc.py /path/to/disc.iso')
-(ROOT / 'reports').mkdir(exist_ok=True)
-subprocess.run([sys.executable, str(ROOT / 'scripts/generate-symbol-map.py')], check=True)
-config = (ROOT / 'config/SLES-50350.template.toml').read_text().replace('@ROOT@', str(ROOT))
-(ROOT / 'config/SLES-50350.symbolmap-entry.toml').write_text(config)
+if not vu1_only:
+    (ROOT / 'reports').mkdir(exist_ok=True)
+    subprocess.run([sys.executable, str(ROOT / 'scripts/generate-symbol-map.py')], check=True)
+    config = (ROOT / 'config/SLES-50350.template.toml').read_text().replace('@ROOT@', str(ROOT))
+    (ROOT / 'config/SLES-50350.symbolmap-entry.toml').write_text(config)
 vu = ROOT / 'runtime/vu1-disc'
 subprocess.run([sys.executable, str(ROOT / 'scripts/extract-vu-microcode.py'),
                 str(elf), '--output', str(vu), '--tarzan-patches'], check=True)
@@ -29,4 +34,5 @@ for candidate in manifest['candidates']:
 for pc in sorted({pc for group in manifest['groups'].values() for pc in group['entry_vu_pcs']}):
     args.extend(['--indirect-entry', pc])
 subprocess.run(args, check=True)
-print('Created local config, symbol maps and disc-derived native VU1 code (untracked).')
+print('Generated disc-derived native VU1 code (untracked).' if vu1_only else
+      'Created local config, symbol maps and disc-derived native VU1 code (untracked).')
