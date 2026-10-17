@@ -18,6 +18,7 @@
 #include "runtime/ps2_vu1_recomp.h"
 
 #include <algorithm>
+#include <array>
 #include <cfenv>
 #include <cstdio>
 #include <cstdlib>
@@ -286,8 +287,111 @@ namespace
     }
 }
 
+struct Vu1NativeDispatcherTestAccess
+{
+    static const Vu1RecImage *lookup(Vu1NativeDispatcher &dispatcher, const uint8_t *code, uint64_t generation)
+    {
+        return dispatcher.currentImage(code, generation);
+    }
+};
+
+namespace
+{
+    uint64_t testCodeHash(const uint8_t *code, size_t size)
+    {
+        uint64_t hash = 1469598103934665603ull;
+        for (size_t i = 0; i < size; ++i)
+        {
+            hash ^= code[i];
+            hash *= 1099511628211ull;
+        }
+        return hash;
+    }
+
+    void registryRefreshTestFn(Vu1RecContext &ctx, uint32_t entryPc)
+    {
+        if (entryPc != 0u || !ctx.state)
+        {
+            ctx.failed = true;
+            ctx.failPc = entryPc;
+            return;
+        }
+        ctx.state->vi[15] = 0x5a17;
+        ++ctx.cycle;
+    }
+
+    bool runRegistryRefreshTest()
+    {
+        std::array<uint8_t, PS2_VU1_CODE_SIZE> code{};
+        uint64_t hash = 0;
+        for (unsigned value = 0; value <= 0xffu; ++value)
+        {
+            code.fill(static_cast<uint8_t>(value));
+            hash = testCodeHash(code.data(), code.size());
+            if (!vu1recFind(hash))
+                break;
+        }
+        if (vu1recFind(hash))
+        {
+            std::fprintf(stderr, "[vu1-replay-test] could not find an unregistered test image hash\n");
+            return false;
+        }
+
+        Vu1NativeDispatcher dispatcher;
+        constexpr uint64_t codeGeneration = 77u;
+        if (Vu1NativeDispatcherTestAccess::lookup(dispatcher, code.data(), codeGeneration))
+        {
+            std::fprintf(stderr, "[vu1-replay-test] expected initial native-image cache miss\n");
+            return false;
+        }
+
+        static constexpr uint32_t entries[] = {0u};
+        Vu1RecImage image{hash, entries, 1u, registryRefreshTestFn, registryRefreshTestFn, false};
+        vu1recRegister(image);
+        const Vu1RecImage *resolved = Vu1NativeDispatcherTestAccess::lookup(dispatcher, code.data(), codeGeneration);
+        if (!resolved || resolved->fast != registryRefreshTestFn)
+        {
+            std::fprintf(stderr, "[vu1-replay-test] same-code lookup did not see newly registered image\n");
+            return false;
+        }
+
+        // Grow the registry far past its initial capacity so the cached image
+        // pointer is invalidated, then verify the next same-code lookup refreshes it.
+        for (uint64_t i = 1u; i <= 128u; ++i)
+        {
+            Vu1RecImage filler{hash ^ (0x9e3779b97f4a7c15ull * i), entries, 1u,
+                               registryRefreshTestFn, registryRefreshTestFn, false};
+            if (filler.hash == hash || vu1recFind(filler.hash))
+                continue;
+            vu1recRegister(filler);
+        }
+        resolved = Vu1NativeDispatcherTestAccess::lookup(dispatcher, code.data(), codeGeneration);
+        if (!resolved || resolved != vu1recFind(hash) || resolved->fast != registryRefreshTestFn)
+        {
+            std::fprintf(stderr, "[vu1-replay-test] cached image pointer was not refreshed after registry growth\n");
+            return false;
+        }
+
+        VU1State state{};
+        Vu1RecContext ctx{};
+        ctx.state = &state;
+        ctx.cycle = 9u;
+        resolved->fast(ctx, 0u);
+        if (ctx.failed || state.vi[15] != 0x5a17 || ctx.cycle != 10u)
+        {
+            std::fprintf(stderr, "[vu1-replay-test] newly registered native function did not execute\n");
+            return false;
+        }
+
+        std::printf("[vu1-replay-test] late registration and registry-growth refresh passed\n");
+        return true;
+    }
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !std::strcmp(argv[1], "--test-registry-refresh"))
+        return runRegistryRefreshTest() ? 0 : 1;
     if (argc < 3)
     {
         std::fprintf(stderr,

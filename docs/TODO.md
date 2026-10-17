@@ -12,11 +12,45 @@
 
 ## P1 — Performance without correctness regressions
 
+- Eliminate scene-dependent VU1 interpreter fallback: cover disc microprograms
+  and legal indirect branch targets, validate against captured execution, and
+  qualify each mission rather than relying on first-level coverage.
+- Follow Fukami's static block-AOT architecture: extract shipped MPG uploads,
+  compile every instruction-slot entry into relocatable, deduplicated blocks,
+  and select by exact executable bytes instead of whole-bank identity. Preserve
+  Tarzan's scheduler/pipeline state at block boundaries and arbitrary indirect
+  jumps. Include runtime-patched variants; no JIT or mission-by-mission manual
+  discovery as the primary coverage strategy. Static ELF extraction is ready;
+  block translation and runtime integration remain open.
+- Audit cross-program flag liveness before enabling block-level elision:
+  unknown later programs must receive complete observable flag/pipeline state;
+  a captured-program corpus alone cannot establish whole-game dead flags.
 - Profile frame pacing, CPU/GPU cost, loading stalls, and thermal behavior by
   scene. Treat 60/120 FPS as targets, not guarantees; retain a native-scale
   baseline and compare visual/audio checkpoints after every optimization.
 - Measure render-scale and sharpening GPU/memory cost on representative Macs;
   keep defaults conservative and document any scene-specific limits.
+
+### Fukami adoption queue
+
+Reference: [Fukami](https://github.com/danisandoval/fukami), reviewed at
+`e8818121566cfaf3d361e38745860b0a9438e27b`. Reuse methods; validate Tarzan behavior.
+
+- After VU coverage, profile generated EE render/culling hot paths; investigate
+  batching scheduler-quiet accounting with exact commits at runtime boundaries.
+- Profile Metal queue/submission ownership; adopt bounded backpressure,
+  deterministic draining and failure wakeups where the current path needs them.
+  Retain resource lifetime/synchronization guarantees. Pipeline front caching is
+  conditional on a measured Metal lookup hotspot; the upstream Vulkan patch is
+  not directly applicable.
+- Extend existing timestamped SPU inline/worker equivalence to long transitions,
+  underruns and pause/resume; keep host audio pacing separate from guest clocks.
+- Audit atomic settings/save publication and verified BYOD import, especially
+  for mobile containers. Test interrupted writes and rejected imports. Add
+  loading caches only after showing actual read/decompression cost.
+- Adopt fixed-input control/candidate runs with first-divergence state, GIF,
+  audio and timing evidence. Fukami's RR5-specific camera/LOD patches, reported
+  frame rates and platform support are not Tarzan acceptance evidence.
 
 ## P2 — Tutorial text clarity
 
@@ -60,3 +94,9 @@
   user-owned game-data import and container-based saves. Qualify memory,
   suspend/resume, controller input, audio interruptions, and Apple TV import UX
   on physical devices. See [apple-platforms.md](apple-platforms.md).
+
+## Experimental backlog — Infinite lives
+
+- Add an opt-in infinite-lives option, off by default. Identify and verify the
+  guest life decrement/reset paths; preserve health, mission rules, normal saves,
+  and default behavior. Test death, retry, checkpoints, and mission transitions.

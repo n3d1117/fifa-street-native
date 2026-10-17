@@ -137,6 +137,8 @@ public:
     void printStats(const char *why);
 
 private:
+    friend struct Vu1NativeDispatcherTestAccess;
+
     bool dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
                   uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume);
     struct Stats
@@ -159,6 +161,7 @@ private:
     };
 
     const Vu1RecImage *currentImage(PS2Memory &memory);
+    const Vu1RecImage *currentImage(const uint8_t *code, uint64_t codeGeneration);
     void runDiff(const Vu1RecImage &image, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
                  uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume);
     void maybePrintPeriodic();
@@ -189,6 +192,8 @@ private:
     uint64_t m_lastSwaps2 = 0;
     double m_vu1Seconds = 0.0;
     double m_lastVu1Seconds = 0.0;
+    // Keep new cache state at the end: debugger tooling relies on existing offsets.
+    uint64_t m_cachedRegistryGeneration = ~0ull;
 };
 
 #endif

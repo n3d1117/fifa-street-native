@@ -56,6 +56,49 @@ VU1_PC_MASK = 0x3FFF
 VU0_CODE_SIZE = 0x1000
 VU0_PC_MASK = 0x0FFF
 MAX_NODES = 60000
+MIN_BRANCH_TABLE_ARMS = 3
+
+
+def find_static_branch_table_targets(code: bytes, unit: str = 'vu1') -> List[int]:
+    """Find PCs of repeated B/BAL table arms that indirect branches may select.
+
+    Some VU code uses a VI-computed JR to enter one of several 16-byte-spaced
+    branch stubs, each of which branches to the same continuation. These are
+    discoverable from code alone. Requiring at least three consecutive arms
+    with the same branch opcode and destination keeps the candidate set narrow;
+    adding a candidate only emits another guarded switch case and does not
+    change the value computed by the JR.
+    """
+    if unit not in ('vu0', 'vu1'):
+        raise GenError(f"unknown VU unit {unit!r}")
+    code_size = VU0_CODE_SIZE if unit == 'vu0' else VU1_CODE_SIZE
+    pc_mask = VU0_PC_MASK if unit == 'vu0' else VU1_PC_MASK
+    if len(code) != code_size:
+        raise GenError(f"{unit.upper()} image size {len(code)} != {code_size // 1024} KiB")
+
+    groups: Dict[Tuple[str, int, int], List[int]] = defaultdict(list)
+    for pc in range(0, code_size, 8):
+        pair = decode_pair(code, pc)
+        if pair.ibit:
+            continue
+        name = lower_name(pair.lower)
+        if name not in ('B', 'BAL') or pc + 16 > code_size:
+            continue
+        target = (pc + 8 + IMM11(pair.lower) * 8) & pc_mask
+        groups[(name, target, pc & 0x0F)].append(pc)
+
+    found = set()
+    for pcs in groups.values():
+        run = []
+        for pc in pcs:
+            if run and pc != run[-1] + 0x10:
+                if len(run) >= MIN_BRANCH_TABLE_ARMS:
+                    found.update(run)
+                run = []
+            run.append(pc)
+        if len(run) >= MIN_BRANCH_TABLE_ARMS:
+            found.update(run)
+    return sorted(pc for pc in found if pc % 8 == 0 and 0 <= pc < code_size)
 
 
 class GenError(Exception):
@@ -230,6 +273,8 @@ class Generator:
         self.node_index: Dict[Tuple[int, AState, str], int] = {}
         self.worklist: List[int] = []
         self.link_labels = self._find_link_labels()
+        self.static_branch_targets = (find_static_branch_table_targets(code, unit)
+                                      if unit == 'vu1' else [])
         self.dynamic_targets = dynamic_targets or {}
         self.entry_nodes: Dict[int, int] = {}
         self.failed_entries: Dict[int, str] = {}
@@ -521,7 +566,8 @@ class Generator:
             # Dynamic branch resolution occurs in its delay slot. The actual
             # JR/JALR instruction is the preceding pair, where `brt` was set.
             branch_pc = (n.pc - 8) & self.pc_mask
-            targets = sorted(set(self.link_labels) | set(self.dynamic_targets.get(branch_pc, [])))
+            targets = sorted(set(self.link_labels) | set(self.static_branch_targets) |
+                             set(self.dynamic_targets.get(branch_pc, [])))
             n.term = ('dyn', [(lab, self.get_node(lab, st)) for lab in targets])
 
     @staticmethod

@@ -268,12 +268,18 @@ Vu1NativeDispatcher::~Vu1NativeDispatcher()
 
 const Vu1RecImage *Vu1NativeDispatcher::currentImage(PS2Memory &memory)
 {
-    const uint8_t *code = memory.getVU1Code();
-    const uint64_t generation = memory.getVU1CodeGeneration();
-    if (code != m_cachedCode || generation != m_cachedGeneration)
+    return currentImage(memory.getVU1Code(), memory.getVU1CodeGeneration());
+}
+
+const Vu1RecImage *Vu1NativeDispatcher::currentImage(const uint8_t *code, uint64_t generation)
+{
+    const uint64_t currentRegistryGeneration = registryGeneration();
+    if (code != m_cachedCode || generation != m_cachedGeneration ||
+        currentRegistryGeneration != m_cachedRegistryGeneration)
     {
         m_cachedCode = code;
         m_cachedGeneration = generation;
+        m_cachedRegistryGeneration = currentRegistryGeneration;
         CodeImageCache &cache = codeImageCache();
         ++cache.lookups;
         CodeImageCacheEntry *hit = nullptr;
@@ -294,10 +300,10 @@ const Vu1RecImage *Vu1NativeDispatcher::currentImage(PS2Memory &memory)
             // Registration is normally complete before dispatch. If a plugin
             // adds images later, vector growth can invalidate stored pointers;
             // the epoch lets us refresh the pointer without rehashing code.
-            if (hit->registryGeneration != registryGeneration())
+            if (hit->registryGeneration != currentRegistryGeneration)
             {
                 hit->image = vu1recFind(hit->hash);
-                hit->registryGeneration = registryGeneration();
+                hit->registryGeneration = currentRegistryGeneration;
             }
             m_cachedImage = hit->image;
         }
@@ -322,7 +328,7 @@ const Vu1RecImage *Vu1NativeDispatcher::currentImage(PS2Memory &memory)
             {
                 std::memcpy(victim->code.data(), code, PS2_VU1_CODE_SIZE);
                 victim->hash = m_cachedHash;
-                victim->registryGeneration = registryGeneration();
+                victim->registryGeneration = currentRegistryGeneration;
                 victim->lastUse = ++cache.clock;
                 victim->image = m_cachedImage;
                 victim->valid = true;

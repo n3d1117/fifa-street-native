@@ -1,4 +1,4 @@
-# Status — 2026-10-16
+# Status — 2026-10-17
 
 Goal: faithful whole-game behavior on native ARM64 + Metal, with stable audio,
 input, saves and pacing. This is an experimental static recompilation, not a
@@ -9,7 +9,7 @@ completed source decompilation or a verified complete game port.
 | Main ELF | 10,171 mapped functions: 9,801 translated (96.36%), 370 native runtime bindings; no skips or decode failures. Mapped spans cover 92.23% of executable-section bytes, including padding/data caveats. |
 | Gameplay | First mission reached; user confirmed the stretched-head correction. Full progression and later missions remain untested. |
 | Arithmetic | Scalar SQRT.S incorrectly read Fs instead of Ft; corrected compiler and active generated sites. DIV/RSQRT zero/denormal handling corrected at tested sites. |
-| VU1 | 13 captured microprogram images have native paths. 914 captured replay states matched; 213,759 live differential calls recorded no mismatch. Unknown later images can fall back. |
+| VU1 | Native catalog expanded from 13 to 25 captured code-bank images. Static branch-table discovery fixes a family of indirect-target fallbacks without per-image traces. All 1,106 captured inputs replay with zero full/fast mismatches, skips or interpreter-budget stops, including 124 inputs held out from target metadata. Live inspection traced severe scene-dependent drops to unknown images and uncompiled table arms; Metal was not the dominant cost. Whole-game vector coverage remains incomplete. |
 | IOP / VU0 | Native exact-image VU0 skinning now works in first-mission gameplay; 3,928,064 live differential calls and 1,000 IEEE/VI edge cases matched. Unknown VU0 programs still fall back; IOP remains interpreted. |
 | Audio | Found movie PES loss: MPEG ignored zero (buffer-full) callback results and discarded whole audio packets. Fixed packet-by-packet acceptance/retry, incomplete packets and ring wrapping. Startup: 19,986 non-silent blocks align with source; story onset: 51,428 blocks over 15 seconds align with the selected source stream, with no decoded clipping. Five focused MPEG tests pass. Build 8 corrects immutable movie-PTS timing and double-counted synchronous IOP RPC cycles. The real story trace returns to ~48k mixed frames/s, versus ~51k before correction. User confirmed the startup/story audio is fixed. Later movies remain unqualified. See `docs/audio.md`. |
 | Saves | Native host-directory card save/reload exercised for slot A at 0%; complete card semantics and all checkpoints unverified. Saves live outside the bundle. |
@@ -47,6 +47,13 @@ first-mission evidence must never be presented as whole-game completion.
 
 ## Next acceptance gates
 
+0. Replace capture-led whole-bank VU1 coverage with Fukami-style static block
+   AOT from shipped uploads, including patched variants and arbitrary entry
+   slots. The bounds-checked extractor recovers three ELF upload chains; none
+   is an exact whole-range match to the sampled live banks. Preserve this
+   runtime's exact pipeline semantics rather than copying RR5's execution
+   assumptions. This is the current top performance/correctness priority.
+
 1. User confirmed startup/story audio is fixed. Extend listening and timing
    acceptance to later movies and transitions; compare the earlier ~93 ms
    initial pre-roll discrepancy with original playback separately.
@@ -63,3 +70,5 @@ first-mission evidence must never be presented as whole-game completion.
    feasible; assess iOS/tvOS on actual devices afterward.
 
 See `docs/performance.md` for measured Metal attribution and upstream references.
+Fukami adoption candidates and the off-by-default infinite-lives experiment
+are tracked in `docs/TODO.md`. Incident-only debugger tools remain local.
