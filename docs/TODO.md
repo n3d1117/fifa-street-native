@@ -2,9 +2,6 @@
 
 ## P0 — Whole-game correctness
 
-- Investigate existing VIF STMOD/UNPACK fixture failures and the off-executor
-  `sceDmaSend` test assertion; both reproduce on checkpoint `3a9254e`.
-
 - Qualify complete progression, checkpoints, saves/reloads, menus, and exit paths;
   record crashes, hangs, and guest-state mismatches.
 - Finish audio/video review across every movie and transition. Startup and the

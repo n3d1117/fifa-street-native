@@ -7465,10 +7465,17 @@ index 0458a8cc8665efa376aa5764f5d08027c0e90533..b1c91b06b3a0efb77850c0c0929e2b31
                                      "sceGsResetGraph should free its temporary GIF packet");
          });
 diff --git a/ps2xTest/src/ps2_memory_tests.cpp b/ps2xTest/src/ps2_memory_tests.cpp
-index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc957d3a15b 100644
+index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d71b1a70c 100644
 --- a/ps2xTest/src/ps2_memory_tests.cpp
 +++ b/ps2xTest/src/ps2_memory_tests.cpp
-@@ -410,6 +410,105 @@ void register_ps2_memory_tests()
+@@ -1,5 +1,6 @@
+ #include "MiniTest.h"
+ #include "runtime/ps2_memory.h"
++#include "runtime/ee_scheduler.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/gs/ps2_gs_psmct32.h"
+ #include "ps2_runtime.h"
+@@ -410,6 +411,105 @@ void register_ps2_memory_tests()
              t.IsTrue(matches, "MPG num=0 should copy 2048 bytes into VU1 code memory");
          });
  
@@ -7574,7 +7581,15 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
          tc.Run("VIF UNPACK num zero uploads 256 vectors", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -440,6 +539,126 @@ void register_ps2_memory_tests()
+@@ -418,6 +518,7 @@ void register_ps2_memory_tests()
+             // UNPACK V4_32: opcode 0x6C (vn=3, vl=0), num=0 => 256 vectors, 16 bytes each.
+             std::vector<uint8_t> packet;
+             packet.reserve(4u + 4096u);
++            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(packet, makeVifCmd(0x6Cu, 0u, 0u));
+             for (uint32_t i = 0; i < 4096u; ++i)
+             {
+@@ -440,6 +541,126 @@ void register_ps2_memory_tests()
              t.IsTrue(matches, "UNPACK num=0 should copy 256 V4_32 vectors (4096 bytes)");
          });
  
@@ -7701,7 +7716,31 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
          tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1370,6 +1589,45 @@ void register_ps2_memory_tests()
+@@ -490,6 +711,7 @@ void register_ps2_memory_tests()
+             const uint16_t comps[4] = {0xFF80u, 0x0001u, 0x7FFFu, 0x8001u};
+ 
+             std::vector<uint8_t> signPacket;
++            appendU32(signPacket, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(signPacket, makeVifCmd(0x6Du, 1u, 0x0000u)); // sign-extend
+             for (uint16_t c : comps)
+             {
+@@ -512,6 +734,7 @@ void register_ps2_memory_tests()
+ 
+             // Same UNPACK with imm bit14 set => zero-extend.
+             std::vector<uint8_t> zeroPacket;
++            appendU32(zeroPacket, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(zeroPacket, makeVifCmd(0x6Du, 1u, 0x4000u)); // zero-extend
+             for (uint16_t c : comps)
+             {
+@@ -657,6 +880,7 @@ void register_ps2_memory_tests()
+             std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+ 
+             std::vector<uint8_t> packet;
++            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
+             appendU32(packet, 10u);
+             appendU32(packet, 20u);
+@@ -1370,6 +1594,45 @@ void register_ps2_memory_tests()
              t.IsTrue(ct32Ok, "all CT32 pixels should survive a preceding paletted upload in the same GIF DMA chain");
          });
  
@@ -7747,7 +7786,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
          tc.Run("VIF1 DMA DIRECT forwards payload to GIF callback and clears channel", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1418,6 +1676,256 @@ void register_ps2_memory_tests()
+@@ -1418,6 +1681,256 @@ void register_ps2_memory_tests()
              t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u, "VIF1 QWC should be cleared after drain");
          });
  
@@ -8004,7 +8043,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
          tc.Run("VIF1 DMA chain preserves compact tag high bytes for DIRECT packets", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1912,6 +2420,73 @@ void register_ps2_memory_tests()
+@@ -1912,6 +2425,73 @@ void register_ps2_memory_tests()
              }
          });
  
@@ -8078,7 +8117,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
          tc.Run("DMAC SPR_FROM copies scratchpad to RDRAM and completes channel 8", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1947,6 +2522,132 @@ void register_ps2_memory_tests()
+@@ -1947,6 +2527,132 @@ void register_ps2_memory_tests()
                  t.Equals(causes[0], 8u, "SPR_FROM completion should use DMAC cause 8");
          });
  
@@ -8211,7 +8250,15 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
          tc.Run("DMAC SPR_TO copies RDRAM to scratchpad and completes channel 9", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -2138,7 +2839,7 @@ void register_ps2_memory_tests()
+@@ -2034,6 +2740,7 @@ void register_ps2_memory_tests()
+             R5900Context ctx{};
+             setRegU32(ctx, 4, 1u); // sceDmaGetChan(1) / VIF1
+             setRegU32(ctx, 5, kTag);
++            runtime.eeScheduler().reset(rdram, ctx);
+             ps2_stubs::sceDmaSend(rdram, &ctx, &runtime);
+ 
+             t.Equals(static_cast<int32_t>(::getRegU32(&ctx, 2)), 0,
+@@ -2138,7 +2845,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -8220,7 +8267,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..4c623f1c0098a8f30a206fe81e38edc9
              appendU64(packet, makeGifTag(1u, GIF_FMT_IMAGE, 0u, true));
              appendU64(packet, 0ull);
              for (uint32_t i = 0; i < 16u; ++i)
-@@ -2187,7 +2888,7 @@ void register_ps2_memory_tests()
+@@ -2187,7 +2894,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;

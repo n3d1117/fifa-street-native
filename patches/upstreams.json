@@ -4,7 +4,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-tests",
       "patch": "patches/ps2recomp-tests.patch",
-      "patch_sha256": "9cfb4a357ba9f7be72d607b9ae47945fde15498bf9cb11096163c02b1d161442",
+      "patch_sha256": "777902bafc006a69bc0dbfb4b98e0de20af6ea2505914dfe0d7843287088bac8",
       "path": "source/PS2Recomp",
       "untracked": [
         {
