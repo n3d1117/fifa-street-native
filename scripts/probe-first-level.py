@@ -29,8 +29,15 @@ parser.add_argument('--seconds', type=int, default=180)
 parser.add_argument('--hold-ms', type=int, default=150)
 parser.add_argument('--route-captures', action='store_true', help='capture each menu before and after input to diagnose route timing')
 parser.add_argument('--diagnostic-input', action='store_true', help='process-local FIFO input independent of desktop focus (diagnostic only)')
+parser.add_argument('--new-game', action='store_true', help='create a new game in an empty isolated user directory; enter the first Story mission')
 parser.add_argument('--play', action='store_true', help='after observed VU0 activity, dismiss tutorial cards and walk briefly; capture evidence')
 args = parser.parse_args()
+if args.new_game:
+    personal = Path.home() / 'Library/Application Support/TarzanFreeridePS2'
+    if args.app or args.user_dir.resolve() == personal.resolve() or (args.user_dir.exists() and any(args.user_dir.iterdir())):
+        parser.error('--new-game requires an empty isolated --user-dir and cannot use --app')
+    if args.seconds < (110 if args.fast else 140):
+        parser.error('--new-game needs at least 110 seconds with --fast, or 140 without it')
 if args.keep_story and not args.fast:
     parser.error('--keep-story requires --fast')
 if args.capture_story_audio:
@@ -172,7 +179,7 @@ with (out / 'stdout.log').open('wb') as log:
     started = time.monotonic()
     result = {'pid': process.pid, 'command': command, 'started': time.time(),
               'runtime_log': str(runtime_log), 'runtime_log_offset': runtime_log_offset,
-              'gameplay_verified': False, 'skip_cutscene': args.skip_cutscene, 'debug_skip_movies': args.fast, 'inputs': []}
+              'gameplay_verified': False, 'new_game': args.new_game, 'skip_cutscene': args.skip_cutscene, 'debug_skip_movies': args.fast, 'inputs': []}
     (out / 'launch.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({'pid': process.pid, 'output': str(out)}), flush=True)
     route = [(47,7), (53,36), (60,125), (61,7), (68,7), (75,7), (82,7)]
@@ -181,6 +188,12 @@ with (out / 'stdout.log').open('wb') as log:
         route = [(20,7), (27,36), (33,125), (34,7), (42,7), (49,7), (56,7)]
     elif args.skip_cutscene:
         route.append((100,36))
+    if args.new_game:
+        route = [(second,key) for second,key in route if key != 125]
+        # Three name characters move the guest selection automatically to END.
+        # The usual final key enters the first character; fill and confirm it.
+        last = route[-1][0]
+        route.extend([(last+7,7), (last+8,7), (last+9,7), (last+16,7), (last+23,7)])
     try:
         route_delay = 0.0
         capture = ROOT / 'build/capture-window'

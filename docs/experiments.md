@@ -102,3 +102,10 @@ CAM frame's saved caller and dialog pointer, so guest yields do not lose its
 context. Prologue, caller and SetId instructions are verified against the ELF.
 `TARZAN_TRACE_CAMERA_CONTEXT=1` logs up to 64 distinct camera/dialog tuples for
 future scene diagnosis; it never selects cameras by transient heap addresses.
+
+Fresh-start diagnostics: `probe-first-level.py --new-game --user-dir <empty-dir>`
+creates a separate slot, fills the name through normal input, and enters the
+first Story mission. It rejects personal/nonempty save directories and the
+installed-launcher mode. `--fast --keep-story` retains the actual story movie;
+omitting `--play` avoids automated tutorial confirmations. This route verifies
+new-game creation; it does not yet reliably reproduce the reported tip card.
