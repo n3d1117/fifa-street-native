@@ -122,11 +122,31 @@ static inline float vr_fmac_exact_override(float rounded, float a, float s, floa
 static inline float32x4_t vr_fmac_override(float32x4_t rounded, float32x4_t acc,
                                             float32x4_t s, float32x4_t t, bool subtract)
 {
-    float out[4], a[4], x[4], y[4];
-    vst1q_f32(out, rounded); vst1q_f32(a, acc); vst1q_f32(x, s); vst1q_f32(y, t);
-    for (unsigned i = 0; i < 4; ++i)
-        out[i] = vr_fmac_exact_override(out[i], a[i], x[i], y[i], subtract);
-    return vld1q_f32(out);
+    const float64x2_t minNormal = vdupq_n_f64(static_cast<double>(std::numeric_limits<float>::min()));
+    const float64x2_t maxFinite = vdupq_n_f64(static_cast<double>(std::numeric_limits<float>::max()));
+    const auto correct = [subtract, minNormal, maxFinite](float32x2_t rounded2, float32x2_t acc2,
+                                                          float32x2_t s2, float32x2_t t2) {
+        const float64x2_t a = vcvt_f64_f32(acc2);
+        float64x2_t x = vcvt_f64_f32(s2);
+        if (subtract)
+            x = vnegq_f64(x);
+        const float64x2_t y = vcvt_f64_f32(t2);
+        // Match the scalar oracle's left-associated double multiply then add.
+        const float64x2_t exact = vaddq_f64(a, vmulq_f64(x, y));
+        const float64x2_t magnitude = vabsq_f64(exact);
+        const uint64x2_t tiny64 = vcltq_f64(magnitude, minNormal);
+        const uint64x2_t large64 = vcgtq_f64(magnitude, maxFinite);
+        const uint32x2_t tiny = vmovn_u64(tiny64);
+        const uint32x2_t large = vmovn_u64(large64);
+        const uint32x2_t sign = vand_u32(vshrn_n_u64(vreinterpretq_u64_f64(exact), 32),
+                                          vdup_n_u32(0x80000000u));
+        const uint32x2_t roundedBits = vreinterpret_u32_f32(rounded2);
+        const uint32x2_t tinyValue = vbsl_u32(tiny, sign, roundedBits);
+        const uint32x2_t largeValue = vorr_u32(sign, vdup_n_u32(0x7F7FFFFFu));
+        return vreinterpret_f32_u32(vbsl_u32(large, largeValue, tinyValue));
+    };
+    return vcombine_f32(correct(vget_low_f32(rounded), vget_low_f32(acc), vget_low_f32(s), vget_low_f32(t)),
+                        correct(vget_high_f32(rounded), vget_high_f32(acc), vget_high_f32(s), vget_high_f32(t)));
 }
 static inline float32x4_t vr_madd(float32x4_t acc, float32x4_t s, float32x4_t t)
 {

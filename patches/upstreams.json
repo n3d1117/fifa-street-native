@@ -4,7 +4,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-tests",
       "patch": "patches/ps2recomp-tests.patch",
-      "patch_sha256": "8066e44f8a1aa579502aa32af2976ae321ce558c5e7c7aacbe366c31694b770f",
+      "patch_sha256": "1f1c296f1c308335e342b11a2a921d247a70b06c8a93310d8217c89527328841",
       "path": "source/PS2Recomp",
       "untracked": [
         {
@@ -46,7 +46,7 @@
         {
           "mode": "0644",
           "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h",
-          "sha256": "6f3f93b703ef4c476b8efaed92e52d76a3c97c7a8669ebc969985ced31118b67",
+          "sha256": "7e7a531c8fa33c74d41155699acdf5b6bba5fcc54c3a3ad44322f117ce1e372e",
           "snapshot": "patches/upstreams/ps2recomp-tests/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h"
         },
         {
@@ -116,7 +116,7 @@
         {
           "mode": "0644",
           "path": "ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h",
-          "sha256": "6f3f93b703ef4c476b8efaed92e52d76a3c97c7a8669ebc969985ced31118b67",
+          "sha256": "7e7a531c8fa33c74d41155699acdf5b6bba5fcc54c3a3ad44322f117ce1e372e",
           "snapshot": "patches/upstreams/ps2recomp-metal/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h"
         },
         {

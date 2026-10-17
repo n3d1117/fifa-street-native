@@ -6899,7 +6899,7 @@ index bd75bba318bbaec0e635c5aeddb61be0a7123095..6639cd3fcea3a1cfbdf9e378daa7ecbf
          std::fesetround(previousRoundingMode);
  }
 diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
-index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4afccc3aa42ab5090a6314cf8b57bc4a3e388960 100644
+index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64 100644
 --- a/ps2xTest/CMakeLists.txt
 +++ b/ps2xTest/CMakeLists.txt
 @@ -29,6 +29,7 @@ add_library(ps2_test_lib STATIC
@@ -6910,6 +6910,19 @@ index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4afccc3aa42ab5090a6314cf8b57bc4a
      src/ps2_vu1_tests.cpp
      src/ps2_vu_tests.cpp
      src/ps2_gs_tests.cpp
+@@ -39,6 +40,12 @@ add_library(ps2_test_lib STATIC
+     src/ps2_runtime_expansion_tests.cpp
+ )
+ 
++# Exercise native VU helpers with the shipping arithmetic contract.
++if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
++    set_source_files_properties(src/ps2_vu_tests.cpp PROPERTIES
++        COMPILE_OPTIONS "-O2;-ffp-contract=off;-frounding-math;-fno-fast-math")
++endif()
++
+ target_include_directories(ps2_test_lib PRIVATE
+     ${CMAKE_CURRENT_SOURCE_DIR}/include
+     ${CMAKE_SOURCE_DIR}/ps2xRecomp/include
 diff --git a/ps2xTest/include/MiniTest.h b/ps2xTest/include/MiniTest.h
 index 9fc510b8dc45059794ec83bcdf7ee517dbd0a727..8dae012ffb01ad626e15a18ce93c35f29b7c955f 100644
 --- a/ps2xTest/include/MiniTest.h
@@ -9640,3 +9653,183 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..2f5dd3ed299a12ec20f23f6ff60aea9e
 +        });
      });
  }
+diff --git a/ps2xTest/src/ps2_vu_tests.cpp b/ps2xTest/src/ps2_vu_tests.cpp
+index b96befe6566f5187c30246e4b431c14b07433634..932d210ba17f19b12d031b29fb6d823f94c64218 100644
+--- a/ps2xTest/src/ps2_vu_tests.cpp
++++ b/ps2xTest/src/ps2_vu_tests.cpp
+@@ -5,10 +5,15 @@
+ #include "Kernel/Stubs/VU.h"
+ 
+ #include <cmath>
++#include <cfenv>
+ #include <cstdint>
+ #include <cstring>
+ #include <vector>
+ 
++#if defined(__aarch64__)
++#include "runtime/ps2_vu1_recomp_support.h"
++#endif
++
+ namespace
+ {
+     constexpr float kEps = 1e-4f;
+@@ -75,6 +80,29 @@ namespace
+         m[10] = 1.0f;
+         m[15] = 1.0f;
+     }
++
++#if defined(__aarch64__)
++    uint32_t floatBits(float value)
++    {
++        uint32_t bits;
++        std::memcpy(&bits, &value, sizeof(bits));
++        return bits;
++    }
++
++    float bitsFloat(uint32_t bits)
++    {
++        float value;
++        std::memcpy(&value, &bits, sizeof(value));
++        return value;
++    }
++
++    struct FenvRestore
++    {
++        fenv_t saved{};
++        FenvRestore() { std::fegetenv(&saved); }
++        ~FenvRestore() { std::fesetenv(&saved); }
++    };
++#endif
+ }
+ 
+ void register_ps2_vu_tests()
+@@ -97,6 +125,129 @@ void register_ps2_vu_tests()
+                      "MulVector should multiply lanes component-wise");
+         });
+ 
++#if defined(__aarch64__)
++        tc.Run("FmacOverride_matches_scalar_exact_all_rounding_modes", [](TestCase &t)
++        {
++            FenvRestore restore;
++            constexpr int roundingModes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
++            constexpr uint32_t edgeBits[] = {
++                0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u,
++                0x007FFFFFu, 0x807FFFFFu, 0x00800000u, 0x80800000u,
++                0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u,
++                0x7FC00001u, 0xFFC12345u, 0x3F800000u, 0xBF800000u,
++                0x4B000001u, 0xCB000001u, 0x7EFFFFFFu, 0xFEFFFFFFu,
++                0x33800000u, 0xB3800000u, 0x00800001u, 0x80800001u
++            };
++            struct InputBits
++            {
++                uint32_t acc[4];
++                uint32_t s[4];
++                uint32_t t[4];
++            };
++            constexpr InputBits boundaryVectors[] = {
++                // Exact positive and negative cancellation for both add and subtract.
++                {{0x3F800000u, 0x3F800000u, 0xBF800000u, 0xBF800000u},
++                 {0xBF800000u, 0x3F800000u, 0x3F800000u, 0xBF800000u},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
++                // Tiny exact values plus immediately below/above the minimum normal boundary.
++                {{0x00000000u, 0x00000000u, 0x00800000u, 0x00800000u},
++                 {0x00000001u, 0x80000001u, 0x80000001u, 0x00000001u},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
++                // Rounded overflow must clamp to signed FLT_MAX; also exercise the exact boundary.
++                {{0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F7FFFFFu, 0xFF7FFFFFu},
++                 {0x7F7FFFFFu, 0xFF7FFFFFu, 0xFF7FFFFFu, 0x7F7FFFFFu},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
++                {{0x00000000u, 0x00000000u, 0x7F7FFFFFu, 0xFF7FFFFFu},
++                 {0x7F7FFFFFu, 0xFF7FFFFFu, 0x00000000u, 0x00000000u},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}}
++            };
++            auto checkInputs = [&](const float *acc, const float *s, const float *v)
++            {
++                const float32x4_t va = vld1q_f32(acc);
++                const float32x4_t vs = vld1q_f32(s);
++                const float32x4_t vv = vld1q_f32(v);
++                const float32x4_t product = vmulq_f32(vs, vv);
++                const float32x4_t roundedAdd = vaddq_f32(va, product);
++                const float32x4_t roundedSub = vsubq_f32(va, product);
++                const float32x4_t addActual = vr_madd(va, vs, vv);
++                const float32x4_t subActual = vr_msub(va, vs, vv);
++                const float32x4_t addOverride = vr_fmac_override(roundedAdd, va, vs, vv, false);
++                const float32x4_t subOverride = vr_fmac_override(roundedSub, va, vs, vv, true);
++                float addOut[4], subOut[4], addDirect[4], subDirect[4];
++                vst1q_f32(addOut, addActual);
++                vst1q_f32(subOut, subActual);
++                vst1q_f32(addDirect, addOverride);
++                vst1q_f32(subDirect, subOverride);
++                for (unsigned lane = 0; lane < 4; ++lane)
++                {
++                    const float expectedAdd = vr_fmac_exact_override(roundedAdd[lane], acc[lane], s[lane], v[lane], false);
++                    const float expectedSub = vr_fmac_exact_override(roundedSub[lane], acc[lane], s[lane], v[lane], true);
++                    if (floatBits(addOut[lane]) != floatBits(expectedAdd) ||
++                        floatBits(addDirect[lane]) != floatBits(expectedAdd) ||
++                        floatBits(subOut[lane]) != floatBits(expectedSub) ||
++                        floatBits(subDirect[lane]) != floatBits(expectedSub))
++                        return false;
++                }
++                return true;
++            };
++
++            bool matches = true;
++            for (int mode : roundingModes)
++            {
++                if (std::fesetround(mode) != 0)
++                {
++                    matches = false;
++                    break;
++                }
++                for (const InputBits &input : boundaryVectors)
++                {
++                    float acc[4], s[4], v[4];
++                    for (unsigned lane = 0; lane < 4; ++lane)
++                    {
++                        acc[lane] = bitsFloat(input.acc[lane]);
++                        s[lane] = bitsFloat(input.s[lane]);
++                        v[lane] = bitsFloat(input.t[lane]);
++                    }
++                    matches = checkInputs(acc, s, v);
++                    if (!matches)
++                        break;
++                }
++                for (size_t i = 0; i < sizeof(edgeBits) / sizeof(edgeBits[0]) && matches; i += 4)
++                {
++                    float acc[4], s[4], v[4];
++                    for (unsigned lane = 0; lane < 4; ++lane)
++                    {
++                        acc[lane] = bitsFloat(edgeBits[(i + lane) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
++                        s[lane] = bitsFloat(edgeBits[(i + lane + 7) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
++                        v[lane] = bitsFloat(edgeBits[(i + lane + 13) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
++                    }
++                    matches = checkInputs(acc, s, v);
++                }
++
++                uint32_t state = 0x9E3779B9u;
++                auto nextBits = [&state]()
++                {
++                    state ^= state << 13;
++                    state ^= state >> 17;
++                    state ^= state << 5;
++                    return state;
++                };
++                for (unsigned sample = 0; sample < 10000u && matches; ++sample)
++                {
++                    float acc[4], s[4], v[4];
++                    for (unsigned lane = 0; lane < 4; ++lane)
++                    {
++                        acc[lane] = bitsFloat(nextBits());
++                        s[lane] = bitsFloat(nextBits());
++                        v[lane] = bitsFloat(nextBits());
++                    }
++                    matches = checkInputs(acc, s, v);
++                }
++            }
++            t.IsTrue(matches, "NEON FMAC override must match scalar exact handling bit-for-bit for all rounding modes");
++        });
++#endif
++
+         tc.Run("ScaleVectorXYZ_scales_xyz", [](TestCase &t)
+         {
+             VuEnv env;
