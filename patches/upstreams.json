@@ -4,7 +4,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-tests",
       "patch": "patches/ps2recomp-tests.patch",
-      "patch_sha256": "23db823492008a85bc8e607547a5571c03316cef85c3ee0c7228a9d71dfe6c90",
+      "patch_sha256": "9cfb4a357ba9f7be72d607b9ae47945fde15498bf9cb11096163c02b1d161442",
       "path": "source/PS2Recomp",
       "untracked": [
         {
@@ -74,7 +74,7 @@
       "base_revision": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
       "id": "ps2recomp-metal",
       "patch": "patches/ps2recomp-metal.patch",
-      "patch_sha256": "3ef2f6dafc986888d0922bb83e9b8057b0a4c6ca93c5c1fcfaef9c0da19b1940",
+      "patch_sha256": "cf41ea3561fbc309bdb38771fe9cf51f7968f4078f25d18ec997f2503231aa1a",
       "path": "source/PS2Recomp-metal",
       "untracked": [
         {

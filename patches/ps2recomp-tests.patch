@@ -6020,7 +6020,7 @@ index 45cb9d267ec998c92f1951d3bc22e7d4c686851e..8e1495b832d034a9cbec845755e24ea8
      if (m_debugUiInitialized && m_debugUiShutdownCallback)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca693a627d6a2d0a24ddd3d8fd5a4087298..ba22fd9c739807fb1a53571110b5a8480085b20d 100644
+index b02c7ca693a627d6a2d0a24ddd3d8fd5a4087298..dcf968294dc844058e4d9628aa17f056987ff2f0 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,8 @@
@@ -6157,8 +6157,8 @@ index b02c7ca693a627d6a2d0a24ddd3d8fd5a4087298..ba22fd9c739807fb1a53571110b5a848
 +    static uint32_t tracePartialCommands = 0u;
 +    static uint32_t traceNanVectors = 0u;
 +    static bool traceNanPayloadSearched = false;
-+    const bool trace = std::getenv("TARZAN_TRACE_VIF1") != nullptr;
-+    const bool traceNan = std::getenv("TARZAN_TRACE_VIF_NAN") != nullptr;
++    static const bool trace = std::getenv("TARZAN_TRACE_VIF1") != nullptr;
++    static const bool traceNan = std::getenv("TARZAN_TRACE_VIF_NAN") != nullptr;
 +    const uint32_t thisCall = traceCall++;
 +    if (trace && thisCall < 16u)
 +        std::cerr << "[tarzan-vif1] enter call=" << thisCall << " bytes=" << sizeBytes
