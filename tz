@@ -8,7 +8,7 @@
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run [--seconds N] [--route first-mission] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
+  tz run [--seconds N] [--route first-mission] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
   tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
@@ -490,7 +490,8 @@ def cmd_run(args):
                 raise Failed(f"{bad} bad cycles, {len(new)} new crash reports")
             return f"{args.quit_cycles} clean quit cycles"
         cmd = [sys.executable, "tools/probe/probe.py", "--out", out, "--route", args.route or "none"]
-        for flag, value in (("--seconds", args.seconds), ("--user-dir", args.user_dir), ("--app", args.app)):
+        for flag, value in (("--seconds", args.seconds), ("--route", args.route), ("--save", args.save),
+                            ("--user-dir", args.user_dir), ("--app", args.app)):
             if value:
                 cmd += [flag, value]
         if args.profile:
@@ -569,6 +570,7 @@ def main():
     r.add_argument("--seconds", type=int)
     r.add_argument("--route", choices=["none", "first-mission"])
     r.add_argument("--user-dir")
+    r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")
     r.add_argument("--profile", action="store_true")
     r.add_argument("--app")
     r.add_argument("--quit-cycles", type=int, metavar="N",

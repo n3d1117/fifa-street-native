@@ -73,7 +73,7 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 
 | # | Item | Why | Effort |
 |---|---|---|---|
-| T1 | **Mission jump.** Unlock-all through the game's own cheat parser (same route as the 99-lives cheat), plus `tz run --save <fixture>` booting from a local unlocked memory-card save in `runtime/regression/saves/` | reach any mission in seconds; multi-mission regression routes | S-M |
+| T1 | **Mission jump.** `tz run --save <fixture>` copies local memory-card fixtures into a fresh isolated user dir; verified route to first mission can seed fixtures. Unlock-all half blocked: the game has no unlock-all cheat to invoke through its parser. | reach later missions in seconds; multi-mission regression routes | S-M |
 | T2 | **Deadline sleep instead of spinning** in the host/VBlank wait: sleep to about 0.5 ms before the boundary, then spin | biggest power/heat win, no game-speed change | S |
 | T3 | **Thread QoS per role** (game/render `USER_INTERACTIVE`, workers `UTILITY`); App Nap off while playing; thermal-state observer that drops the internal scale or FPS target at `.serious` | pacing stability, thermals | S |
 | T4 | **Build speed.** ccache with PCH (`CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime`, `-Xclang -fno-pch-timestamp`) and stable sorted unity batches; one `-ftime-trace` pass for slow TUs; `-g0`/`-gline-tables-only` for generated code; try `-fuse-ld=lld` | rebuild time | S-M |

@@ -27,6 +27,7 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | `./tz test` / `--full` | quick tier (ctest, no disc, seconds) / adds slow tests and the 1,106-run VU1 replay |
 | `./tz run --seconds 60` | bounded boot check with a summary |
 | `./tz run --route first-mission` | scripted new game to first gameplay, isolated saves (about 3 min) |
+| `./tz run --save <fixture-dir> --seconds 60` | bounded boot with `<fixture-dir>/memcards/` copied into fresh isolated saves |
 | `./tz run --app <bundle> --quit-cycles N` | boot and quit the packaged app N times |
 | `./tz where <0xADDR\|name>` | generated file, config entry, HLE handler |
 | `./tz check [--tracked]` | hygiene, header-rebuild warning, unexported dep work |

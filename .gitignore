@@ -41,6 +41,7 @@
 !/tools/metal-deps/compat/
 
 # Never track game media, binaries, captures, logs or saves, anywhere.
+/runtime/regression/saves/
 *.iso
 *.rvz
 *.wbfs

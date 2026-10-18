@@ -4,6 +4,7 @@
 Merges the former run-native-check / diagnose-native / probe-first-level scripts.
   --route first-mission  scripted new-game route through process-local diagnostic input
                          (OCR guard on the language menu before the first key)
+  --save DIR             seed a fresh isolated user dir from DIR/memcards
   --profile              macOS `sample` of the GameThread after --profile-after seconds
   --gpu-capture          bounded Metal frame capture (TARZAN_CAPTURE_*)
   --app BUNDLE           exercise an installed .app (the app binary is the game itself; same isolated user dir and diagnostics)
@@ -219,6 +220,7 @@ def main():
     ap.add_argument("--seconds", type=int)
     ap.add_argument("--route", choices=("none", "first-mission"), default="none")
     ap.add_argument("--user-dir", type=Path)
+    ap.add_argument("--save", type=Path, help="fixture directory containing a non-empty memcards/ subtree")
     ap.add_argument("--runner", type=Path)
     ap.add_argument("--app", type=Path)
     ap.add_argument("--quit-at-end", action="store_true",
@@ -238,6 +240,15 @@ def main():
         ap.error("--quit-at-end needs --app")
     if args.runner and args.app:
         ap.error("--runner and --app are mutually exclusive")
+    if args.save and args.user_dir:
+        ap.error("--save and --user-dir cannot be combined")
+    fixture_cards = None
+    if args.save:
+        fixture = args.save.resolve()
+        fixture_cards = fixture / "memcards"
+        if not fixture.is_dir() or not fixture_cards.is_dir() or not any(p.is_file() for p in fixture_cards.rglob("*")):
+            print(f"save fixture missing or empty: {fixture} (copy a user dir's memcards/ subtree into it)", file=sys.stderr)
+            return 2
     seconds = args.seconds or (150 if args.route == "first-mission" else 60)
     if args.route == "first-mission" and seconds < 140:
         ap.error("--route first-mission needs --seconds >= 140")
@@ -248,8 +259,16 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "run.log"
     scratch = None
-    if args.user_dir:
+    if args.save:
+        scratch = user_dir = Path(tempfile.mkdtemp(prefix="tz-run-"))
+        shutil.copytree(fixture_cards, user_dir / "memcards")
+        card_files = sum(1 for p in (user_dir / "memcards").rglob("*") if p.is_file())
+    elif args.user_dir:
         user_dir = args.user_dir.resolve()
+        user_dir.mkdir(parents=True, exist_ok=True)
+    elif args.route == "first-mission":
+        # Keep route saves with the run output so they can seed local regression fixtures.
+        user_dir = out / "user-dir"
         user_dir.mkdir(parents=True, exist_ok=True)
     else:
         scratch = user_dir = Path(tempfile.mkdtemp(prefix="tz-run-"))
@@ -290,6 +309,9 @@ def main():
     notes, keys = [], []
     started = time.monotonic()
     logf = log_path.open("wb")
+    if args.save:
+        logf.write(f"[probe] seeded {card_files} memory-card files from fixture into {user_dir / 'memcards'}\n".encode())
+        logf.flush()
     proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT)
     cap = Capture(out)
 
@@ -412,7 +434,7 @@ def main():
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
         "menu_confirmed_s": menu_at, "keys": keys, "notes": notes, "crash_report": report,
-        "log": str(log_path), "quit_clean": quit_ok,
+        "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     shutil.rmtree(scratch, ignore_errors=True) if scratch else None

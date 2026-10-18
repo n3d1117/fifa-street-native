@@ -34,6 +34,7 @@ cd tarzan-freeride-native
 ./tz test                       # optional: quick test tier (no disc needed); --full adds slow tests and the VU regression
                                 # corpus (skipped if you do not have it locally)
 ./tz run                        # play from the build tree; --route first-mission scripts a bounded run to gameplay
+./tz run --save runtime/regression/saves/<name> --seconds 60  # boot with that fixture's memcards/ in an isolated user dir
 ./tz package --install          # optional: /Applications/Tarzan Freeride PS2.app
 ```
 
