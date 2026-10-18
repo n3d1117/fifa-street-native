@@ -81,7 +81,7 @@ One `tarzan::Settings` struct (`host/settings.hpp`) is loaded once at startup fr
 `<user dir>/experimental-settings.plist`, the file the Settings window writes
 (format and keys unchanged: `highFPS`, `targetFPS`, `hdWidescreen`, `renderScale`,
 `sharperImage`, `rememberLanguage`, `lastLanguage`, `skipLogos`, `extraLives99`,
-`unlimitedSpears`; unknown keys are preserved on save). Debug overrides are applied
+`unlimitedSpears`, `unlockAllMissions`; unknown keys are preserved on save). Debug overrides are applied
 on top; the guest runtime gets its host configuration through `PS2HostConfig`
 (`ps2SetHostConfig`), not through the environment. Keyboard bindings are a separate
 file (`keyboard.plist`).
