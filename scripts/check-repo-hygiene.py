@@ -17,8 +17,8 @@ def main():
     args = parser.parse_args()
     command = ('diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR') if args.staged else ('ls-files', '-z')
     names = [n.decode() for n in git(*command).split(b'\0') if n]
-    allowed_roots = {'host', 'cmake', 'scripts', 'tests', 'patches', 'tools', 'config', 'docs', '.githooks', '.github'}
-    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'STATUS.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json'}
+    allowed_roots = {'host', 'cmake', 'scripts', 'tests', 'patches', 'tools', 'toolchain', 'config', 'docs', '.githooks', '.github'}
+    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'STATUS.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json', 'requirements.txt'}
     allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml'}
     problems = []
     total = 0
@@ -35,7 +35,7 @@ def main():
             reason = 'unexpected extension or binary/media artifact'
         elif path.parts[0] == 'config' and name != 'config/SLES-50350.template.toml':
             reason = 'local/game-derived configuration'
-        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu1recomp/', 'tools/metal-deps/compat/')) and name != 'tools/deps.py':
+        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu1recomp/', 'tools/metal-deps/compat/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/prepare-metal-bridge.py'}:
             reason = 'dependency/toolchain output'
         elif size > 1024 * 1024:
             reason = 'file exceeds 1 MiB'

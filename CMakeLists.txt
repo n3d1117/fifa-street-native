@@ -10,8 +10,8 @@ option(TARZAN_BUILD_GAME "Build the game runner and Metal host (OFF: upstream to
 set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/deps/ps2recomp")
 set(TARZAN_GENERATED_DIR "${TARZAN_ROOT}/generated/SLES-50350-symbolmap-entry" CACHE PATH
     "Directory containing generated C++ and headers for the guest ELF")
-set(PS2X_DEFAULT_BOOT_ELF "${TARZAN_ROOT}/extracted/disc/SLES_503.50" CACHE STRING
-    "Default guest ELF for the Tarzan native launcher")
+set(PS2X_DEFAULT_BOOT_ELF "extracted/disc/SLES_503.50" CACHE STRING
+    "Default guest ELF, relative to the checkout (found at run time by walking up from the executable), or absolute")
 
 enable_testing()
 

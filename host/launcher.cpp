@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include <mach-o/dyld.h>
+
 namespace
 {
 void configureRuntimeArena(const std::filesystem::path& elfPath)
@@ -68,6 +70,44 @@ std::filesystem::path defaultUserDirectory()
     return std::filesystem::path(home) / "Library" / "Application Support" / "TarzanFreeridePS2";
 }
 
+// A relative default ELF is looked up from the executable's directory upward,
+// then from the working directory upward, so no checkout path is baked in.
+std::filesystem::path resolveDefaultElf(const std::filesystem::path &relative)
+{
+    if (relative.is_absolute())
+    {
+        return relative;
+    }
+    std::vector<std::filesystem::path> starts;
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string exe(size, '\0');
+    if (size != 0 && _NSGetExecutablePath(exe.data(), &size) == 0)
+    {
+        starts.push_back(std::filesystem::path(exe.c_str()).lexically_normal().parent_path());
+    }
+    std::error_code ec;
+    starts.push_back(std::filesystem::current_path(ec));
+    for (std::filesystem::path dir : starts)
+    {
+        while (!dir.empty())
+        {
+            std::filesystem::path candidate = dir / relative;
+            if (std::filesystem::exists(candidate, ec))
+            {
+                return candidate;
+            }
+            std::filesystem::path parent = dir.parent_path();
+            if (parent == dir)
+            {
+                break;
+            }
+            dir = parent;
+        }
+    }
+    return relative;
+}
+
 void printUsage(const char *program)
 {
     std::cerr << "Usage: " << program << " [--user-dir DIRECTORY] [GAME.ELF]\n";
@@ -108,7 +148,7 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
 #if defined(PS2X_DEFAULT_BOOT_ELF)
     if (options.elfPath.empty())
     {
-        options.elfPath = PS2X_DEFAULT_BOOT_ELF;
+        options.elfPath = resolveDefaultElf(PS2X_DEFAULT_BOOT_ELF);
     }
 #endif
     if (options.elfPath.empty())

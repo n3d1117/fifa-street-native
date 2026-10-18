@@ -37,9 +37,10 @@ Local sequence: `python3 tools/deps.py sync`; supply a supported PAL disc and ru
 prepare the local toolchain under `tools/build` and dependencies; build the Metal
 bridge and game;
 generate the icon with `make-icon.sh`; package with `package-ps2-app.py`.
-Build tooling is preserved, but a fresh-machine end-to-end rebuild is not yet
-qualified. Build helpers default to `tools/build` inside this checkout and can
-use another local toolchain root through `TARZAN_NATIVE_TOOLS_ROOT`. Toolchains
+Setup is `python3 tools/deps.py sync`, `toolchain/bootstrap.sh` (CMake, Ninja,
+LLVM 19 into `tools/build`; set `TARZAN_LLVM` to reuse an existing LLVM 19) and
+`tools/build-deps.sh` (pkgconf, FFmpeg, Metal deps, bridge, SPU2; every
+download is pinned by sha256; idempotent). Toolchains
 remain BYOD and are not checked into Git; no game data is uploaded. Build the
 canonical target in `build/game-metal`.
 

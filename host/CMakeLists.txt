@@ -8,7 +8,7 @@ endif()
 set(TARZAN_SPU2_BACKEND "${TARZAN_ROOT}/build/spu2-backend/librrv_pcsx2_spu2.a"
     CACHE FILEPATH "Built pinned PCSX2 SPU2 static library")
 if(NOT EXISTS "${TARZAN_SPU2_BACKEND}")
-    message(FATAL_ERROR "Missing PCSX2 SPU2 backend; run scripts/build-spu2-backend.sh: ${TARZAN_SPU2_BACKEND}")
+    message(FATAL_ERROR "Missing PCSX2 SPU2 backend; run tools/build-deps.sh: ${TARZAN_SPU2_BACKEND}")
 endif()
 set(TARZAN_SOUNDTOUCH_LIBRARY "${TARZAN_ROOT}/build/metal-bridge/pcsx2/3rdparty/soundtouch/libpcsx2-soundtouch.a"
     CACHE FILEPATH "Built pinned PCSX2 SoundTouch static library")
