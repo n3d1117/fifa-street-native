@@ -251,8 +251,9 @@ def main():
         user_dir.mkdir(parents=True, exist_ok=True)
     else:
         scratch = user_dir = Path(tempfile.mkdtemp(prefix="tz-run-"))
-    if args.route != "none" and any(user_dir.iterdir()):
-        ap.error("--route first-mission needs an empty --user-dir (new game)")
+    # A settings file may be pre-seeded; anything else means saved games exist.
+    if args.route != "none" and any(p.name != "experimental-settings.plist" for p in user_dir.iterdir()):
+        ap.error("--route first-mission needs a --user-dir without saves (new game); only experimental-settings.plist is allowed")
     explicit_real = bool(args.user_dir) and user_dir == REAL_SUPPORT.resolve()
     before = save_hash(REAL_SUPPORT)
 

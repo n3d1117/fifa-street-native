@@ -24,8 +24,11 @@ Internal resolution is independently selectable as Native, 2×, 3× or 4×.
   their 2× scale on migration. No Ridge Racer-specific full-frame path is used.
   Original 4:3 menus and movies are not re-authored.
 
-The BYOD generated-code patcher checks expected ELF instructions and reapplies
-four title-scoped hooks after regeneration. It never patches the disc. Use
+Game hooks are host code in `host/game-hooks.cpp`, called from the generated code at
+the instruction addresses listed as `[[hooks]]` in `config/SLES-50350.template.toml`
+(a PS2Recomp feature; `generated/` is pure recompiler output). They are installed at
+startup only if every guest instruction word they depend on matches the verified
+ELF, and each does nothing when its setting is off. Nothing patches the disc. Use
 `TARZAN_TRACE_GAME_CLOCK=1` to compare game milliseconds and host milliseconds;
 framebuffer changes, guest updates and displayed presents are distinct metrics.
 Diagnostic `TARZAN_EXPERIMENT_FPS=60|120` and `TARZAN_EXPERIMENT_HD=1` override only

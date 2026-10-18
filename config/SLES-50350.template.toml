@@ -1149,6 +1149,47 @@ entries = [
 # Individual instruction patches
 instructions = []
 
+# Host calls emitted at instruction addresses (implemented in host/game-hooks.cpp).
+# `before` hooks may jump to `redirect` when the host call returns nonzero.
+[[hooks]]
+address = "0x3699c0"  # CAM_vAdjustCameraToViewport entry: camera context trace
+when = "before"
+[[hooks]]
+address = "0x369a3c"  # camera zoom constant (lui $v0, 0x3F00)
+when = "after"
+[[hooks]]
+address = "0x369a7c"  # camera Y-FOV factor (div.s $f1, $f21, $f20)
+when = "after"
+[[hooks]]
+address = "0x35ec74"  # FPS gate init (sb $v0, 0xB8($at))
+when = "after"
+[[hooks]]
+address = "0x3f8df4"  # FPS gate sync (lbu $v0, 0xB8($at))
+when = "after"
+[[hooks]]
+address = "0x360388"  # engine clock store (clock trace)
+when = "after"
+[[hooks]]
+address = "0x34fce0"  # CMenu::Start: saved language startup item
+when = "before"
+[[hooks]]
+address = "0x350350"  # CMenu::Process entry: saved language startup state
+when = "before"
+[[hooks]]
+address = "0x2cd48c"  # language request handler returned success
+when = "before"
+[[hooks]]
+address = "0x2c0e40"  # language change accepted
+when = "before"
+[[hooks]]
+address = "0x2dac2c"  # cheat menu: built-in cheats, continue at 0x2dada4
+when = "before"
+redirect = "0x2dada4"
+[[hooks]]
+address = "0x35e2c4"  # startup jal: skip the logo movie, continue at 0x35e2cc
+when = "before"
+redirect = "0x35e2cc"
+
 # Performance critical functions (may need manual optimization)
 [performance]
 critical = [
