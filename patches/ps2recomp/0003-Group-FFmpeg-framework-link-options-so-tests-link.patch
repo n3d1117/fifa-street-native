@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 13:32:02 +0200
-Subject: [PATCH 03/35] Group FFmpeg framework link options so tests link
+Subject: [PATCH 03/36] Group FFmpeg framework link options so tests link
 
 
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt

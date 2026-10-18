@@ -28,3 +28,20 @@ add_test(NAME ps2x_tests COMMAND ps2x_tests WORKING_DIRECTORY "${TARZAN_TEST_RUN
 set_tests_properties(ps2x_tests PROPERTIES
     FAIL_REGULAR_EXPRESSION "\\[Failed\\]"
     LABELS ps2x)
+
+if(TARZAN_GAME_READY)
+    add_executable(tarzanFileIoGuestTest
+        "${TARZAN_ROOT}/tests/fileio-guest-test.cpp"
+        "${TARZAN_GENERATED_DIR}/_sceFsSemInit_0x2250b8.cpp"
+        "${TARZAN_GENERATED_DIR}/_sceFsSigSema_0x225138.cpp"
+        "${TARZAN_GENERATED_DIR}/CreateSema_0x2213a0.cpp"
+        "${TARZAN_GENERATED_DIR}/SignalSema_0x2213c0.cpp"
+        $<TARGET_OBJECTS:ps2_test_function_table>)
+    target_include_directories(tarzanFileIoGuestTest PRIVATE "${TARZAN_GENERATED_DIR}"
+        $<TARGET_PROPERTY:ps2x_tests,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(tarzanFileIoGuestTest PRIVATE
+        $<TARGET_PROPERTY:ps2x_tests,COMPILE_DEFINITIONS>)
+    target_compile_options(tarzanFileIoGuestTest PRIVATE -fno-fast-math -ffp-contract=off)
+    target_link_libraries(tarzanFileIoGuestTest PRIVATE ps2_runtime tarzanTestMetalSeam)
+    add_test(NAME fileio_guest COMMAND tarzanFileIoGuestTest)
+endif()

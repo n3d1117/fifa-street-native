@@ -266,8 +266,6 @@ stubs = [
   "sceSifGetNextRequest@0x00224948",
   "sceSifExecRequest@0x002249A0",
   "sceSifRpcLoop@0x00224B68",
-  "_sceFsSemInit@0x002250B8",
-  "_sceFsSigSema@0x00225138",
   "sceFsInit@0x00225148",
   "sceFsReset@0x00225378",
   "sceOpen@0x002253B0",

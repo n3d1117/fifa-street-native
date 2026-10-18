@@ -12,6 +12,7 @@
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
   tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
+  tz where --unimplemented  audit configured direct TODO handlers
 
 Full output goes to build/logs/<cmd>-<UTC>.log; -v streams it. Exit codes:
 0 pass, 1 check failed, 2 missing prerequisite (the message names the fix).
@@ -542,7 +543,7 @@ def cmd_package(args):
 def cmd_where(args):
     sys.path.insert(0, str(ROOT / "tools"))
     import where
-    code, lines = where.where(args.query)
+    code, lines = where.unimplemented() if args.unimplemented else where.where(args.query)
     print("\n".join(lines))
     return 2 if code is None else code
 
@@ -581,7 +582,10 @@ def main():
     k.add_argument("--install", action="store_true")
     k.set_defaults(fn=cmd_package)
     w = sp.add_parser("where")
-    w.add_argument("query")
+    where_mode = w.add_mutually_exclusive_group(required=True)
+    where_mode.add_argument("query", nargs="?")
+    where_mode.add_argument("--unimplemented", action="store_true",
+                            help="audit configured direct TODO handlers, including underscore aliases")
     w.set_defaults(fn=cmd_where)
     argv = sys.argv[1:]
     verbose = any(a in ("-v", "--verbose") for a in argv)

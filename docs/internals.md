@@ -12,6 +12,12 @@ Mechanisms, invariants and constants. Read the section for the area you touch. C
 - Framebuffer changes (DISPFB2), guest updates and displayed presents are different metrics. `fps_dispfb2` in the `tz run` summary is the first; gameplay is 25/s, movies 50/s.
 - Gameplay is CPU-bound (GPU about 3.5 ms per 20 ms field, no GPU readbacks). Guest render/culling (`HIE_fn_vSendBufferedCharacterToViewport` and its VIF/MFIFO/VU1 children) dominates samples. Metal drawable waits only matter at 120 Hz without the upstream display-rate throttle, which is enabled.
 
+## Reachable library helpers
+
+- FileIO `_sceFsSemInit` (`0x2250b8`) and `_sceFsSigSema` (`0x225138`) run the original guest code rather than throwing HLE aliases. The disc ELF symbols and instructions identify a no-argument initializer using the semaphore slot at `0x49f94c`: sentinel `-1` creates a semaphore through `CreateSema` (`0x2213a0`), with initial/max count one; subsequent calls return the existing ID. The signal helper loads that slot into `a0` and tail-calls `SignalSema` (`0x2213c0`). No RPC service is involved. `fileio_guest` exercises initialization, reuse, signaling and overflow through those generated functions and the runtime syscalls.
+- Removing a config stub alone cannot restore guest execution: PS2Recomp also auto-binds names in `ps2_call_list.h`. The FileIO pair is removed from both lists, and its throwing handlers are deleted.
+- `./tz where --unimplemented` regenerates the configured direct `TODO_NAMED` handler count, resolving optional leading underscores as the runtime does. This is a binding audit, not evidence of dynamic reachability.
+
 ## IOP load delay
 
 - LWL/LWR merge with the pending load value when its destination matches `rt`; otherwise they merge with `gpr[rt]`. The merged result still has a load delay. Address calculation, ALU operands and stores read the committed registers; a direct register write in the delay slot still supersedes the pending load. `./tz test` covers both pair orders, unaligned offsets and ordinary load-delay behavior.

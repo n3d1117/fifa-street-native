@@ -64,15 +64,48 @@ def config_hits(name, start):
 
 def hle_hits(name):
     base = name.split("__")[0]
-    hits = []
-    if CALL_LIST.is_file() and re.search(r"\bX\(%s\)" % re.escape(base), CALL_LIST.read_text(errors="replace")):
+    if not CALL_LIST.is_file():
+        return []
+    names = re.findall(r"\bX\((\w+)\)", CALL_LIST.read_text(errors="replace"))
+    base = resolve_name(base, names)
+    if base:
         pat = re.compile(r"\bvoid\s+%s\s*\(" % re.escape(base))
         for p in sorted(HLE_SRC.rglob("*.cpp")):
             for no, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
                 if pat.search(line):
                     return [f"HLE {p.relative_to(ROOT)}:{no} ({base})"]
         return [f"HLE bound in ps2_call_list.h ({base}); handler not found"]
-    return hits
+    return []
+
+
+def resolve_name(name, names):
+    if name in names:
+        return name
+    if name.startswith("_"):
+        return name[1:] if name[1:] in names else ""
+    return next((n for n in names if n == "_" + name), "")
+
+
+def configured_stubs():
+    configured = re.search(r"(?ms)^stubs\s*=\s*\[(.*?)\]", CONFIG.read_text()).group(1)
+    return re.findall(r'"([^"\n]+)"', configured)
+
+
+def unimplemented():
+    """Count configured direct TODO handlers, including the runtime's underscore aliases."""
+    if not CONFIG.is_file() or not CALL_LIST.is_file():
+        return 2, ["config or runtime missing -> ./tz setup"]
+    names = [selector.split("@", 1)[0] for selector in configured_stubs()]
+    handlers = re.findall(r"\bX\((\w+)\)", CALL_LIST.read_text())
+    todo = {}
+    for path in sorted((HLE_SRC / "lib/Kernel").rglob("*.cpp")):
+        for match in re.finditer(r"\bvoid\s+(\w+)\([^)]*\)\s*\{\s*TODO_NAMED\(", path.read_text()):
+            todo[match[1]] = path.relative_to(ROOT)
+    found = [(name, resolve_name(name, handlers)) for name in names]
+    found = [(name, handler) for name, handler in found if handler in todo]
+    aliases = sum(name != handler for name, handler in found)
+    return 0, [f"{len(found)} configured unimplemented HLE names ({len(found) - aliases} exact, {aliases} underscore aliases)"] + [
+        f"  {name} -> {handler} ({todo[handler]})" for name, handler in found]
 
 
 def where(query):
