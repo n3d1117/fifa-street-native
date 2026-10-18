@@ -30,6 +30,9 @@ int tarzan_experiments_remember_language();
 // Returns the last validated language ID (0..4), or -1 while remembering is disabled/invalid.
 int tarzan_experiments_saved_language();
 int tarzan_experiments_skip_logos();
+int tarzan_experiments_extra_lives_99();
+int tarzan_experiments_unlimited_spears();
+int tarzan_experiments_builtin_cheat(const uint8_t* rdram, uint32_t owner);
 int tarzan_experiments_skip_startup_logo(const uint8_t* rdram, uint32_t name);
 // Diagnostic setters update the active and pending snapshots only. They do not
 // update the controls or save the plist.

@@ -43,6 +43,31 @@ void clearLanguageCross() {
 }
 } // namespace
 
+// Called only after the guest verifies its own cheat-menu context.
+extern "C" int tarzan_experiments_builtin_cheat(const uint8_t* ram, uint32_t owner) {
+    if (!tarzan_experiments_extra_lives_99() && !tarzan_experiments_unlimited_spears()) return 0;
+    uint32_t input = 0;
+    if (!owner || !readGuestLanguage32(ram, owner, 0xA8u, input) || (input & 0xFFFFu)) return 0;
+    if (tarzan_experiments_extra_lives_99()) {
+        uint32_t player = 0, lives = 0, cap = 0;
+        if (readGuestLanguage32(ram, 0x4C8658u, 0, player) && player &&
+            readGuestLanguage32(ram, player, 0x180u, lives) &&
+            readGuestLanguage32(ram, player, 0x184u, cap) && cap &&
+            lives < (cap < 99u ? cap : 99u)) {
+            std::fprintf(stderr, "[tarzan-cheat] submitting original 99-lives code (lives=%u)\n", lives);
+            return 1;
+        }
+    }
+    if (tarzan_experiments_unlimited_spears()) {
+        uint32_t flags = 0;
+        if (readGuestLanguage32(ram, 0x4C85F8u, 0, flags) && !(flags & 0xFFu)) {
+            std::fprintf(stderr, "[tarzan-cheat] submitting original unlimited-spears code\n");
+            return 2;
+        }
+    }
+    return 0;
+}
+
 extern "C" int tarzan_experiments_skip_startup_logo(const uint8_t* ram, uint32_t name) {
     if (!tarzan_experiments_skip_logos() || name != 0x4B6460u) return 0;
     uint32_t word = 0, tail = 0;

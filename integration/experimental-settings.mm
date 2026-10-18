@@ -25,6 +25,10 @@ std::atomic<bool> s_rememberLanguage{false};
 std::atomic<bool> s_pendingRememberLanguage{false};
 std::atomic<bool> s_skipLogos{false};
 std::atomic<bool> s_pendingSkipLogos{false};
+std::atomic<bool> s_extraLives99{false};
+std::atomic<bool> s_pendingExtraLives99{false};
+std::atomic<bool> s_unlimitedSpears{false};
+std::atomic<bool> s_pendingUnlimitedSpears{false};
 std::atomic<int> s_savedLanguage{-1};
 std::atomic<int> s_targetFPS{60};
 std::atomic<int> s_pendingTargetFPS{60};
@@ -39,6 +43,8 @@ NSButton* s_hdWidescreenButton;
 NSButton* s_sharperImageButton;
 NSButton* s_rememberLanguageButton;
 NSButton* s_skipLogosButton;
+NSButton* s_extraLives99Button;
+NSButton* s_unlimitedSpearsButton;
 NSPopUpButton* s_targetFPSPopup;
 NSPopUpButton* s_renderScalePopup;
 NSTextField* s_status;
@@ -49,6 +55,8 @@ constexpr NSInteger kHDWidescreenTag = 2;
 constexpr NSInteger kSharperImageTag = 3;
 constexpr NSInteger kRememberLanguageTag = 4;
 constexpr NSInteger kSkipLogosTag = 5;
+constexpr NSInteger kExtraLives99Tag = 6;
+constexpr NSInteger kUnlimitedSpearsTag = 7;
 
 bool isIntegerNumber(id value) {
     return [value isKindOfClass:[NSNumber class]] &&
@@ -96,6 +104,10 @@ void refreshControls() {
         [s_rememberLanguageButton setState:s_pendingRememberLanguage.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_skipLogosButton)
         [s_skipLogosButton setState:s_pendingSkipLogos.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
+    if (s_extraLives99Button)
+        [s_extraLives99Button setState:s_pendingExtraLives99.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
+    if (s_unlimitedSpearsButton)
+        [s_unlimitedSpearsButton setState:s_pendingUnlimitedSpears.load(std::memory_order_relaxed) ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_targetFPSPopup)
         [s_targetFPSPopup selectItemWithTag:s_pendingTargetFPS.load(std::memory_order_relaxed)];
     if (s_renderScalePopup)
@@ -114,6 +126,10 @@ void updatePendingFromControl(NSButton* sender) {
         s_pendingRememberLanguage.store(enabled, std::memory_order_relaxed);
     else if ([sender tag] == kSkipLogosTag)
         s_pendingSkipLogos.store(enabled, std::memory_order_relaxed);
+    else if ([sender tag] == kExtraLives99Tag)
+        s_pendingExtraLives99.store(enabled, std::memory_order_relaxed);
+    else if ([sender tag] == kUnlimitedSpearsTag)
+        s_pendingUnlimitedSpears.store(enabled, std::memory_order_relaxed);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 
@@ -163,6 +179,8 @@ bool saveSettings() {
     plist[@"renderScale"] = @(s_pendingRenderScale.load(std::memory_order_relaxed));
     plist[@"sharperImage"] = @(s_pendingSharperImage.load(std::memory_order_relaxed));
     plist[@"skipLogos"] = @(s_pendingSkipLogos.load(std::memory_order_relaxed));
+    plist[@"extraLives99"] = @(s_pendingExtraLives99.load(std::memory_order_relaxed));
+    plist[@"unlimitedSpears"] = @(s_pendingUnlimitedSpears.load(std::memory_order_relaxed));
     const bool remember = s_pendingRememberLanguage.load(std::memory_order_relaxed);
     plist[@"rememberLanguage"] = @(remember);
     const int language = s_savedLanguage.load(std::memory_order_relaxed);
@@ -183,7 +201,7 @@ void showWindowOnMain() {
     }
 
     const CGFloat width = 590;
-    const CGFloat height = 644;
+    const CGFloat height = 720;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -270,10 +288,10 @@ void showWindowOnMain() {
 
     s_rememberLanguageButton = [NSButton checkboxWithTitle:@"Remember last language" target:s_actions action:@selector(settingChanged:)];
     [s_rememberLanguageButton setTag:kRememberLanguageTag];
-    [s_rememberLanguageButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [s_rememberLanguageButton setFrame:NSMakeRect(22, 162, 546, 24)];
     [content addSubview:s_rememberLanguageButton];
-    NSTextField* languageDetail = [NSTextField labelWithString:@"On the next launch, skip language selection and use the last language you accepted."];
-    [languageDetail setFrame:NSMakeRect(46, 116, 510, 30)];
+    NSTextField* languageDetail = [NSTextField labelWithString:@"Reuse your last choice and skip language selection on launch."];
+    [languageDetail setFrame:NSMakeRect(46, 142, 510, 20)];
     [languageDetail setMaximumNumberOfLines:2];
     [[languageDetail cell] setWraps:YES];
     [[languageDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
@@ -289,15 +307,44 @@ void showWindowOnMain() {
 
     s_skipLogosButton = [NSButton checkboxWithTitle:@"Skip Disney / Ubisoft logos" target:s_actions action:@selector(settingChanged:)];
     [s_skipLogosButton setTag:kSkipLogosTag];
-    [s_skipLogosButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [s_skipLogosButton setFrame:NSMakeRect(22, 184, 546, 24)];
     [content addSubview:s_skipLogosButton];
     NSTextField* logosDetail = [NSTextField labelWithString:@"Boot without branding movies. Story movies still play."];
-    [logosDetail setFrame:NSMakeRect(46, 116, 510, 30)];
+    [logosDetail setFrame:NSMakeRect(46, 164, 510, 20)];
     [logosDetail setMaximumNumberOfLines:2];
     [[logosDetail cell] setWraps:YES];
     [[logosDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
     [logosDetail setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:logosDetail];
+
+    // Move all earlier controls up one more row; leave status and Save anchored below.
+    for (NSView* subview in [content subviews]) {
+        NSRect frame = [subview frame];
+        frame.origin.y += 76;
+        [subview setFrame:frame];
+    }
+
+    s_extraLives99Button = [NSButton checkboxWithTitle:@"99 lives (built-in cheat)" target:s_actions action:@selector(settingChanged:)];
+    [s_extraLives99Button setTag:kExtraLives99Tag];
+    [s_extraLives99Button setFrame:NSMakeRect(22, 206, 546, 24)];
+    [content addSubview:s_extraLives99Button];
+    NSTextField* livesDetail = [NSTextField labelWithString:@"Apply the original 99-lives cheat when selecting a mission."];
+    [livesDetail setFrame:NSMakeRect(46, 186, 510, 20)];
+    [[livesDetail cell] setWraps:YES];
+    [[livesDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [livesDetail setTextColor:[NSColor secondaryLabelColor]];
+    [content addSubview:livesDetail];
+
+    s_unlimitedSpearsButton = [NSButton checkboxWithTitle:@"Unlimited spears (built-in cheat)" target:s_actions action:@selector(settingChanged:)];
+    [s_unlimitedSpearsButton setTag:kUnlimitedSpearsTag];
+    [s_unlimitedSpearsButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [content addSubview:s_unlimitedSpearsButton];
+    NSTextField* spearsDetail = [NSTextField labelWithString:@"Use the original unlimited-spears cheat."];
+    [spearsDetail setFrame:NSMakeRect(46, 132, 510, 20)];
+    [[spearsDetail cell] setWraps:YES];
+    [[spearsDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [spearsDetail setTextColor:[NSColor secondaryLabelColor]];
+    [content addSubview:spearsDetail];
 
     s_status = [NSTextField labelWithString:@"Changes apply after restarting the game."];
     [s_status setFrame:NSMakeRect(22, 70, 420, 20)];
@@ -343,6 +390,8 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         const bool sharperImage = isBoolean(plist[@"sharperImage"]) && [plist[@"sharperImage"] boolValue];
         const bool rememberLanguage = isBoolean(plist[@"rememberLanguage"]) && [plist[@"rememberLanguage"] boolValue];
         const bool skipLogos = isBoolean(plist[@"skipLogos"]) && [plist[@"skipLogos"] boolValue];
+        const bool extraLives99 = isBoolean(plist[@"extraLives99"]) && [plist[@"extraLives99"] boolValue];
+        const bool unlimitedSpears = isBoolean(plist[@"unlimitedSpears"]) && [plist[@"unlimitedSpears"] boolValue];
         const int savedLanguage = rememberLanguage ? validLanguage(plist[@"lastLanguage"]) : -1;
         int targetFPS = 60;
         id targetValue = plist[@"targetFPS"];
@@ -362,6 +411,10 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
         s_pendingRememberLanguage.store(rememberLanguage, std::memory_order_relaxed);
         s_skipLogos.store(skipLogos, std::memory_order_relaxed);
         s_pendingSkipLogos.store(skipLogos, std::memory_order_relaxed);
+        s_extraLives99.store(extraLives99, std::memory_order_relaxed);
+        s_pendingExtraLives99.store(extraLives99, std::memory_order_relaxed);
+        s_unlimitedSpears.store(unlimitedSpears, std::memory_order_relaxed);
+        s_pendingUnlimitedSpears.store(unlimitedSpears, std::memory_order_relaxed);
         s_savedLanguage.store(savedLanguage, std::memory_order_relaxed);
         s_targetFPS.store(targetFPS, std::memory_order_relaxed);
         s_renderScale.store(renderScale, std::memory_order_relaxed);
@@ -390,6 +443,8 @@ extern "C" int tarzan_experiments_saved_language() {
     return language >= 0 && language <= 4 ? language : -1;
 }
 extern "C" int tarzan_experiments_skip_logos() { return s_skipLogos.load(std::memory_order_relaxed) ? 1 : 0; }
+extern "C" int tarzan_experiments_extra_lives_99() { return s_extraLives99.load(std::memory_order_relaxed) ? 1 : 0; }
+extern "C" int tarzan_experiments_unlimited_spears() { return s_unlimitedSpears.load(std::memory_order_relaxed) ? 1 : 0; }
 
 extern "C" void tarzan_experiments_accept_language(uint32_t languageID) {
     if (languageID > 4u) return;

@@ -80,8 +80,24 @@ Reference: [Fukami](https://github.com/danisandoval/fukami), reviewed at
   suspend/resume, controller input, audio interruptions, and Apple TV import UX
   on physical devices. See [apple-platforms.md](apple-platforms.md).
 
-## Experimental backlog — Infinite lives
+## Built-in cheats — 99 lives and unlimited spears
 
-- Add an opt-in infinite-lives option, off by default. Identify and verify the
-  guest life decrement/reset paths; preserve health, mission rules, normal saves,
-  and default behavior. Test death, retry, checkpoints, and mission transitions.
+- Implemented in Build 19 as separate off-by-default options. Submit the
+  original codes to the guest parser at its own verified mission-selection
+  menu; retain its SetLife callback, spear flag and confirmation sound.
+- First-mission HUD shows 99 lives; ten spear throws retain five spears.
+  The built-in lives code grants a finite stock, not invulnerability or
+  infinite lives. Wider death/checkpoint/save coverage remains unqualified.
+- Codes: [original PS2 cheats](https://gamefaqs.gamespot.com/ps2/530724-disneys-tarzan-untamed/cheats).
+
+## Experimental backlog — Unlock all missions
+
+- Add an off-by-default unlock-all-missions experiment. Prefer the original
+  unlock/menu path; preserve normal progression and existing save data, and
+  verify mission selection and transitions before shipping.
+
+## Experimental backlog — No damage / invincibility
+
+- Add an off-by-default cheat that prevents damage and resulting life loss.
+  Prefer the original cheat path; verify normal enemies, hazards, instant-death
+  surfaces, and checkpoint/retry behavior without changing the default game.

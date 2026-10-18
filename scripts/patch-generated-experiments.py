@@ -18,6 +18,7 @@ GENERATED = ROOT / "generated/SLES-50350-symbolmap-entry"
 DEFAULT_ELF = ROOT / "extracted/disc/SLES_503.50"
 
 FILES = {
+    "cheats": "Behavior_Loop__9CAIGlobalFv_0x2da7c0.cpp",
     "logo": "GAM_InitEngineState_StartProgram__Fv_0x35dff0.cpp",
     "camera": "CAM_vAdjustCameraToViewport_0x3699c0.cpp",
     "init": "GAM_InitEngineState_Playing__Fv_0x35ec20.cpp",
@@ -35,6 +36,7 @@ INIT_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_INIT"
 SYNC_MARK = "// TARZAN_EXPERIMENT_HIGH_FPS_SYNC"
 CLOCK_MARK = "// TARZAN_EXPERIMENT_CLOCK_TRACE"
 CAMERA_TRACE_MARK = "// TARZAN_EXPERIMENT_CAMERA_CONTEXT_TRACE"
+CHEATS_MARK = "// TARZAN_EXPERIMENT_BUILTIN_CHEATS"
 LOGO_MARK = "// TARZAN_EXPERIMENT_SKIP_STARTUP_LOGO"
 LANGUAGE_START_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_START"
 LANGUAGE_MENU_MARK = "// TARZAN_EXPERIMENT_LANGUAGE_MENU"
@@ -82,6 +84,12 @@ def verify_elf(path: Path) -> None:
         0x338BD8: 0x0C0DA670,
         0x33B324: 0xAC850004,
         0x360388: 0xFC241A10,
+        0x2DAC2C: 0x3C01004D,
+        0x2DADA4: 0x924300A8,
+        0x2DADD4: 0xA02285F8,
+        0x2DAE60: 0x24050063,
+        0x2DAE64: 0x0C0B804C,
+        0x2DAE68: 0x24060001,
         0x35E2B0: 0x3C02004B,
         0x35E2B4: 0x24446460,
         0x35E2C4: 0x0C0D8EAC,
@@ -92,6 +100,10 @@ def verify_elf(path: Path) -> None:
         0x2CD48C: 0x7BBF0010,
         0x2C0E40: 0x24020001,
     }
+    for address, sequence in ((0x4B3210, b"LURDDLURRDLUURDL"),
+                              (0x4B3230, b"RLUDDURLLRDUUDLR")):
+        for offset in range(0, 16, 4):
+            expected[address + offset] = int.from_bytes(sequence[offset:offset + 4], "little")
     for address, word in expected.items():
         actual = elf_word_at(data, address)
         if actual != word:
@@ -382,6 +394,33 @@ def patch_language_accepted(text: str) -> str:
     return ensure_include(text, "language acceptance")
 
 
+def patch_cheats(text: str) -> str:
+    code = """    // TARZAN_EXPERIMENT_BUILTIN_CHEATS: the guest already matched its configured cheat menu.
+    {
+        const uint32_t owner = GPR_U32(ctx, 18);
+        const int cheat = tarzan_experiments_builtin_cheat(rdram, owner);
+        if (cheat) {
+            const char* sequence = cheat == 1 ? "RLUDDURLLRDUUDLR" : "LURDDLURRDLUURDL";
+            for (uint32_t i = 0; i < 16u; ++i) WRITE8(ADD32(owner, 0x98u + i), sequence[i]);
+            WRITE8(ADD32(owner, 0xA8u), 16u);
+            WRITE8(ADD32(owner, 0xA9u), 1u);
+            ctx->pc = 0x2DADA4u;
+            goto label_2dada4;
+        }
+    }
+"""
+    anchor = """label_2dac2c:
+    // 0x2dac2c: 0x3c01004d  lui         $at, 0x4D
+"""
+    if text.count(CHEATS_MARK):
+        if text.count(CHEATS_MARK) != 1:
+            raise PatchError("built-in cheats: multiple experiment markers")
+    else:
+        text = replace_once(text, anchor, "label_2dac2c:\n" + code + anchor.split("\n", 1)[1],
+                            "built-in cheat menu at PC 0x2dac2c")
+    return ensure_include(text, "built-in cheats")
+
+
 def patch_logo(text: str) -> str:
     old = """    if (!runtime->dispatchGuestBranch(rdram, ctx, 0x363AB0u, 0x35E2C4u, 0x35E2CCu, PS2Runtime::GuestBranchKind::DirectCall, "JAL")) {
         return;
@@ -412,6 +451,7 @@ def main() -> int:
         paths = {key: args.generated_dir / name for key, name in FILES.items()}
         contents = {key: path.read_text() for key, path in paths.items()}
         updated = {
+            "cheats": patch_cheats(contents["cheats"]),
             "logo": patch_logo(contents["logo"]),
             "camera": patch_camera(contents["camera"]),
             "init": patch_init(contents["init"]),
