@@ -67,7 +67,7 @@
       },
       "filter": {
         "exclude": {
-          "label": "gui"
+          "label": "gui|slow"
         }
       }
     },
@@ -77,6 +77,18 @@
       "filter": {
         "include": {
           "label": "gui"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "slow",
+      "configurePreset": "release",
+      "filter": {
+        "include": {
+          "label": "slow"
         }
       },
       "output": {

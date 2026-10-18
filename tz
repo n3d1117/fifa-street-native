@@ -6,7 +6,7 @@
   tz disc <iso>            verify SHA-1s, extract, symbol map, config (tools/disc.py)
   tz build [--reconfigure] recompiler if stale, generate if inputs changed, release build
                            (refuses, exit 2, if a build tree was configured from another path/case)
-  tz test                  ctest --preset tests + VU1 replay corpus
+  tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
   tz run [--seconds N] [--route first-mission] [--user-dir D] [--profile] [--app PATH]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
@@ -319,7 +319,9 @@ def cmd_test(args):
     def body(run):
         check_trees(run, False)
         cmake_build(run, "tests")
-        rc = run.sh([str(CTEST), "--preset", "tests"])
+        sys.path.insert(0, str(ROOT / "tools"))
+        import jobs
+        rc = run.sh([str(CTEST), "--preset", "tests", "-j", jobs.jobs()])
         text = run.log_path.read_text(errors="replace")
         m = re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", text)
         failed = re.findall(r"^\s*\d+ - (.+?) \(Failed\)|^\s*\d+ - (.+?) \((?:SEGFAULT|Subprocess aborted|Timeout|Exception)", text, re.M)
@@ -332,6 +334,11 @@ def cmd_test(args):
             run.failed += names or ["ctest"]
             run.notes += [f"  failing: {n}" for n in names[:10]]
             raise Failed(summary)
+        if not args.full:
+            return f"{summary} (quick tier; ./tz test --full adds slow tests and the VU1 replay)"
+        if run.sh([str(CTEST), "--preset", "slow", "--no-tests=ignore", "-j", jobs.jobs()]) != 0:
+            run.failed.append("slow tests")
+            raise Failed(f"{summary}; slow-labelled tests failed")
         vu = ROOT / "generated/vu1-disc-native/vu1rec_guarded.cpp"
         corpus = ROOT / "runtime/regression/vu1"
         if vu.is_file() and (corpus / "catalog").is_dir():
@@ -385,11 +392,25 @@ def fmt(value):
     return "unknown" if value is None else value
 
 
+def wait_for_quiet_machine(run, limit=60):
+    """Measurements taken while builds run are not trustworthy: wait up to `limit` s for the
+    1-minute load average to drop to the core count, then warn and continue."""
+    cores = os.cpu_count() or 1
+    deadline = time.monotonic() + limit
+    load = os.getloadavg()[0]
+    while load > cores and time.monotonic() < deadline:
+        time.sleep(5)
+        load = os.getloadavg()[0]
+    if load > cores:
+        run.notes.append(f"  WARNING: load average {load:.1f} > {cores} cores; results (fps, audio underruns) are unreliable")
+
+
 def cmd_run(args):
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = ROOT / "build/runs" / stamp
 
     def body(run):
+        wait_for_quiet_machine(run)
         if args.app:
             require(args.app, "./tz package --install")
         else:
@@ -466,7 +487,9 @@ def main():
     b = sp.add_parser("build")
     b.add_argument("--reconfigure", action="store_true", help="wipe and reconfigure build trees configured from another path/case")
     b.set_defaults(fn=cmd_build)
-    sp.add_parser("test").set_defaults(fn=cmd_test)
+    t = sp.add_parser("test")
+    t.add_argument("--full", action="store_true", help="also run slow-labelled tests and the 1,106-run VU1 replay")
+    t.set_defaults(fn=cmd_test)
     c = sp.add_parser("check")
     c.add_argument("--tracked", action="store_true")
     c.set_defaults(fn=cmd_check)
