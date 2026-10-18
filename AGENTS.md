@@ -72,18 +72,19 @@ git add patches && git commit -m "ps2recomp: <what>" && git push
 | MIPS/FPU/MMI/VU-macro translation | `deps/ps2recomp/ps2xRecomp/src/lib/*_translator.cpp`, `code_generator.cpp` |
 | function boundaries, stubs, jump tables | `config/SLES-50350.template.toml` |
 | HLE (CD, MPEG, GS, pad, memcard, SIF/RPC) | `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/Stubs/`, `Kernel/Syscalls/` |
+| movies, movie audio/PES handling | `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp`, `host/spu2-host.cpp` |
 | threads, scheduling, clocks | `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp`, `ps2_runtime.cpp` |
 | DMA, VIF, GIF, MFIFO | `deps/ps2recomp/ps2xRuntime/src/lib/ps2_memory.cpp`, `ps2_vif1_interpreter.cpp`, `gs/` |
 | VU0/VU1 native code and guards | `tools/vu/` (generator), `deps/ps2recomp/ps2xRuntime/src/lib/vu/` (runtime) |
 | IOP modules, SPU2, audio output | `deps/ps2recomp/ps2xIOP/src/`, `host/spu2-host.cpp` |
 | rendering, upscaling, widescreen, presentation | `host/metal-gs-adapter.cpp`, `deps/pcsx2/pcsx2/GS/`, `deps/fukami/tools/pcsx2-gs-bridge/` |
-| window, settings, keyboard, gamepad | `host/metal-host.mm`, `settings.hpp`, `experimental-settings.mm`, `keyboard-controls.mm`, `gamepad-input.mm` |
+| window, settings and their defaults, keyboard, gamepad | `host/metal-host.mm`, `settings.hpp` (defaults), `settings.mm` (load/migrate), `experimental-settings.mm` (UI), `keyboard-controls.mm`, `gamepad-input.mm` |
 | FPS unlock, widescreen camera, cheats, logo skip, language | `host/game-hooks.cpp` + `[[hooks]]` in the config |
 | app bundle, signing, icon | `tools/package/` |
 | probes, window capture, GS profile | `tools/probe/` |
 | why something is the way it is | `docs/internals.md`, then `git log -S '<identifier>'` |
 
-Do not read `generated/` wholesale (10k files; use `tz where`), `deps/pcsx2` broadly (grep with a path filter), or `build/` and logs except the file a `tz` command pointed to.
+Read this file before searching. Search with `git grep -n <pattern> -- <path>` (fast, skips ignored trees; for deps use `git -C deps/<x> grep`). Do not read `generated/` wholesale (10k files; use `tz where`), `deps/pcsx2` broadly (grep with a path filter), or `build/` and logs except the file a `tz` command pointed to.
 
 ## Gotchas (each cost hours)
 
