@@ -192,37 +192,6 @@ extern "C" void tarzan_experiments_trace_clock(uint64_t total, uint64_t delta) {
     }
 }
 
-extern "C" void tarzan_experiments_trace_camera_context(uint32_t returnAddress,
-                                                          uint32_t camera,
-                                                          uint32_t worldDialog,
-                                                          uint32_t dialogId,
-                                                          uint32_t worldObject) {
-    static const bool enabled = [] {
-        const char* value = std::getenv("TARZAN_TRACE_CAMERA_CONTEXT");
-        return value && std::strcmp(value, "1") == 0;
-    }();
-    if (!enabled) return;
-
-    struct Key {
-        uint32_t ra, camera, world, id, object;
-        bool operator==(const Key& other) const {
-            return ra == other.ra && camera == other.camera && world == other.world &&
-                   id == other.id && object == other.object;
-        }
-    };
-    static thread_local Key seen[64]{};
-    static thread_local unsigned emitted = 0;
-    const Key current{returnAddress, camera, worldDialog, dialogId, worldObject};
-    for (unsigned i = 0; i < emitted; ++i) {
-        if (current == seen[i]) return;
-    }
-    if (emitted >= 64) return;
-    seen[emitted++] = current;
-    std::fprintf(stderr,
-        "[camera-context] n=%u ra=%08x camera=%08x world=%08x id=%08x object=%08x\n",
-        emitted, current.ra, current.camera, current.world, current.id, current.object);
-}
-
 extern "C" int tarzan_experiments_widescreen_camera(const uint8_t* rdram,
                                                       uint32_t guestSP) {
     if (!tarzan_experiments_hd_widescreen()) return 0;

@@ -26,6 +26,5 @@ file(CREATE_LINK "${TARZAN_PS2RECOMP_SOURCE_DIR}/ps2xRecomp"
 
 add_test(NAME ps2x_tests COMMAND ps2x_tests WORKING_DIRECTORY "${TARZAN_TEST_RUN_DIR}")
 set_tests_properties(ps2x_tests PROPERTIES
-    ENVIRONMENT "PS2X_WALLCLOCK=0"
     FAIL_REGULAR_EXPRESSION "\\[Failed\\]"
     LABELS ps2x)

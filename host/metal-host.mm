@@ -153,21 +153,13 @@ static id s_becomeObserver;
 
 extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32_t height) {
     @autoreleasepool {
-        keyboard_controls_configure(std::getenv("TARZAN_PS2_USER_DIR"));
-        tarzan_experiments_configure(std::getenv("TARZAN_PS2_USER_DIR"));
+        // The launcher normally configured settings already; this is a no-op then.
+        tarzan_experiments_configure(nullptr);
+        keyboard_controls_configure(tarzan_experiments_user_directory());
         tarzan_diagnostic_input_configure(std::getenv("TARZAN_DIAGNOSTIC_INPUT_FIFO"));
-        if (const char* hd = std::getenv("TARZAN_EXPERIMENT_HD"); hd && hd[0] == '1' && hd[1] == 0)
-            tarzan_experiments_set_hd_widescreen(1);
-        if (const char* fps = std::getenv("TARZAN_EXPERIMENT_FPS"); fps && (std::strcmp(fps, "60") == 0 || std::strcmp(fps, "120") == 0)) {
-            tarzan_experiments_set_high_fps(1);
-            tarzan_experiments_set_target_fps(std::atoi(fps));
-        }
-        if (const char* scale = std::getenv("TARZAN_EXPERIMENT_SCALE"); scale &&
-            scale[0] >= '1' && scale[0] <= '4' && scale[1] == 0)
-            tarzan_experiments_set_render_scale(scale[0] - '0');
+        // The GS bridge (a separate library) takes its options from RRV_* variables;
+        // they are derived here from the Settings struct, never set by users.
         if (tarzan_experiments_high_fps()) {
-            const char* rate = tarzan_experiments_target_fps() == 120 ? "120" : "60";
-            setenv("PS2X_EXPERIMENT_VSYNC_HZ", rate, 1);
             setenv("RRV_PCSX2_GS_VSYNC", "1", 1);
             setenv("RRV_PCSX2_GS_PRESENT_THROTTLE", "1", 1);
             // The guest may run faster than the display. Keep drawable pacing
@@ -186,8 +178,6 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
             setenv("RRV_PCSX2_GS_ASPECT", "16:9", 1);
         }
 
-        if (const char* sharp = std::getenv("TARZAN_EXPERIMENT_SHARP"); sharp && sharp[0] == '1' && sharp[1] == 0)
-            tarzan_experiments_set_sharper_image(1);
         if (tarzan_experiments_sharper_image()) {
             setenv("RRV_PCSX2_GS_CAS", "50", 1);
             setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
@@ -197,8 +187,7 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
             setenv("RRV_PCSX2_GS_FIELD_HPO", "1", 1);
         const int scale = tarzan_experiments_render_scale();
         if (scale > 1) {
-            if (!std::getenv("TARZAN_UPSCALE_UI_COVERAGE"))
-                setenv("TARZAN_UPSCALE_UI_COVERAGE", "1", 1);
+            setenv("TARZAN_UPSCALE_UI_COVERAGE", "1", 1);
             const char scaleValue[] = {static_cast<char>('0' + scale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
         }
@@ -292,9 +281,7 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
             NSLog(@"Metal GS surface preparation failed: %s", error);
             return 0;
         }
-        const char* noActivity = std::getenv("TARZAN_NO_ACTIVITY");
-        if (!(noActivity && noActivity[0] == '1' && noActivity[1] == '\0'))
-            s_playbackActivity = [[NSProcessInfo processInfo]
+        s_playbackActivity = [[NSProcessInfo processInfo]
                 beginActivityWithOptions:NSActivityUserInitiated
                 reason:@"Tarzan real-time gameplay"];
         return 1;

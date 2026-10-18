@@ -10,9 +10,7 @@
 #include "experimental-settings.hpp"
 
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
-#include <sys/stat.h>
 
 namespace {
 
@@ -35,28 +33,9 @@ uint32_t cameraFov(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
     return 0;
 }
 
-// Diagnostic: camera/dialog tuple sampling at CAM_vAdjustCameraToViewport entry.
-uint32_t cameraTrace(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
-    if (GPR_U32(ctx, 31) == 0x338BE0u) {
-        const uint32_t worldDialog = GPR_U32(ctx, 17);
-        uint32_t dialogId = 0, worldObject = 0;
-        if (worldDialog <= 0x01FFFF08u) {
-            std::memcpy(&dialogId, rdram + worldDialog + 4u, 4);
-            std::memcpy(&worldObject, rdram + worldDialog + 0xF4u, 4);
-        }
-        tarzan_experiments_trace_camera_context(GPR_U32(ctx, 31), GPR_U32(ctx, 4),
-                                                worldDialog, dialogId, worldObject);
-    } else {
-        tarzan_experiments_trace_camera_context(GPR_U32(ctx, 31), GPR_U32(ctx, 4), 0, 0, 0);
-    }
-    return 0;
-}
-
 // FPS gate init: after `sb $v0, 0xB8($at)` stores the min-sync byte at 0x6B00B8.
 uint32_t fpsInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
-    const char *legacy = std::getenv("TARZAN_EXPERIMENT_50FPS");
-    const bool enhanced = tarzan_experiments_high_fps() != 0 ||
-                          (legacy && legacy[0] == '1' && legacy[1] == '\0');
+    const bool enhanced = tarzan_experiments_high_fps() != 0;
     const uint8_t original = static_cast<uint8_t>(GPR_U32(ctx, 2));
     const uint8_t value = enhanced ? 0u : original;
     if (enhanced) {
@@ -70,13 +49,7 @@ uint32_t fpsInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
 
 // FPS gate sync: after `lbu $v0, 0xB8($at)` in osrSyncCallback at 0x3f8df4.
 uint32_t fpsSync(uint8_t *, R5900Context *ctx, PS2Runtime *) {
-    static const char *marker = std::getenv("TARZAN_EXPERIMENT_50FPS_FILE");
-    bool zero = tarzan_experiments_high_fps() != 0;
-    if (marker && *marker) {
-        struct stat info{};
-        if (stat(marker, &info) == 0) zero = true;
-    }
-    if (zero) SET_GPR_ZE32(ctx, 2, 0u);
+    if (tarzan_experiments_high_fps() != 0) SET_GPR_ZE32(ctx, 2, 0u);
     return 0;
 }
 
@@ -137,7 +110,7 @@ struct Hook {
 };
 
 const Hook kHooks[] = {
-    {0x3699C0u, false, cameraTrace}, {0x369A3Cu, true, cameraZoom}, {0x369A7Cu, true, cameraFov},
+    {0x369A3Cu, true, cameraZoom}, {0x369A7Cu, true, cameraFov},
     {0x35EC74u, true, fpsInit},      {0x3F8DF4u, true, fpsSync},    {0x360388u, true, clockTrace},
     {0x34FCE0u, false, languageStart}, {0x350350u, false, languageMenu},
     {0x2CD48Cu, false, languageAccepted}, {0x2C0E40u, false, languageAccepted},

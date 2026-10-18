@@ -80,7 +80,7 @@ guarded to clamped 256-wide, axis-aligned four-vertex ST quads with constant
 Q=1, depth and color and full 0..1 texture mapping. It does not modify the
 texture bytes, original native-scale path or perspective geometry. The
 4×/16:9 world-selection capture no longer shows the black grid.
-`TARZAN_UPSCALE_UI_COVERAGE=0` disables this correction for diagnosis.
+The correction is on whenever the render scale is above 1.
 
 Window lifecycle: Experimental Settings and Keyboard Controls now retain
 their ARC-owned windows across close/reopen; keyboard capture monitors still
@@ -102,8 +102,7 @@ The widescreen camera adjustment preserves the backdrop's authored camera while
 other dialog/camera paths retain widescreen. The generated-code hook checks the
 CAM frame's saved caller and dialog pointer, so guest yields do not lose its
 context. Prologue, caller and SetId instructions are verified against the ELF.
-`TARZAN_TRACE_CAMERA_CONTEXT=1` logs up to 64 distinct camera/dialog tuples for
-future scene diagnosis; it never selects cameras by transient heap addresses.
+Cameras are never selected by transient heap addresses.
 
 Fresh-start diagnostics: `./tz run --route first-mission --user-dir <empty-dir>`
 creates a separate slot, fills the name through normal input, and enters the

@@ -1152,9 +1152,6 @@ instructions = []
 # Host calls emitted at instruction addresses (implemented in host/game-hooks.cpp).
 # `before` hooks may jump to `redirect` when the host call returns nonzero.
 [[hooks]]
-address = "0x3699c0"  # CAM_vAdjustCameraToViewport entry: camera context trace
-when = "before"
-[[hooks]]
 address = "0x369a3c"  # camera zoom constant (lui $v0, 0x3F00)
 when = "after"
 [[hooks]]

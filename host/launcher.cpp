@@ -1,5 +1,6 @@
 #include "tarzan-app.hpp"
 #include "metal-host.hpp"
+#include "experimental-settings.hpp"
 #include "ps2_runtime.h"
 #include "runtime/ps2_host_arena.h"
 
@@ -249,20 +250,18 @@ int tarzan_run(const TarzanConfig *config)
             throw std::runtime_error("Unable to resolve user directory: " + error.message());
 
         redirectLogsIfDetached(userDirectory);
-        if (setenv("TARZAN_PS2_USER_DIR", userDirectory.c_str(), 1) != 0)
-            throw std::runtime_error("Unable to configure keyboard settings directory");
+        // Settings: the user's file plus the documented debug overrides, loaded once.
+        tarzan_experiments_configure(userDirectory.c_str());
+        PS2HostConfig hostConfig;
         // Pace hardware time from the host clock. Estimated block costs must
         // neither slow it down nor accelerate audio during movie playback.
-        // Preserve explicit overrides for deterministic diagnostic runs.
-        if (!std::getenv("PS2X_WALLCLOCK") && setenv("PS2X_WALLCLOCK", "1", 0) != 0)
-            throw std::runtime_error("Unable to configure real-time game timing");
-        if (!std::getenv("PS2X_WALLCLOCK_STRICT") && setenv("PS2X_WALLCLOCK_STRICT", "1", 0) != 0)
-            throw std::runtime_error("Unable to configure real-time hardware timing");
+        hostConfig.wallClock = tarzan_experiments_wall_clock() != 0;
+        hostConfig.vsyncHz = tarzan_experiments_high_fps() ? uint32_t(tarzan_experiments_target_fps()) : 0u;
         // Tarzan's relocated IOP modules end below 0x80000. Reserve that
         // region and leave room for the native 320 KiB movie sound buffer.
         // The IOP loader checks every relocated module against this boundary.
-        if (!std::getenv("PS2X_IOP_HEAP_BASE") && setenv("PS2X_IOP_HEAP_BASE", "0x80000", 0) != 0)
-            throw std::runtime_error("Unable to configure Tarzan IOP heap");
+        hostConfig.iopHeapFloor = 0x80000u;
+        ps2SetHostConfig(hostConfig);
         // The arena is only a range handed to the runtime allocator; it needs no
         // fresh process image, just to be set before the runtime initializes.
         configureRuntimeArena(elfPath);

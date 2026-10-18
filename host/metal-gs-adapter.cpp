@@ -43,106 +43,12 @@ struct CaptureSession {
     uint64_t last_captured_present_index{};
     uint64_t start_field{};
     uint64_t interval{1};
-    std::filesystem::path trigger_file;
 };
 
 // VSync and capture_after_vsync run synchronously on the EE/GS owner thread.
 // Keep the exact guest snapshot passed to the renderer available to capture
 // metadata without another bridge call or changing the adapter ABI.
 thread_local std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_REG_COUNT> capture_vsync_regs{};
-// Opt-in raw trace for the short MENU transition window. Each accepted record
-// is: "TGMG", uint64 field, uint32 original GIF path, uint32 byte count, bytes.
-// This runs on the serialized GS owner and is deliberately bounded.
-struct MenuGifTrace {
-    bool initialized{};
-    bool enabled{};
-    bool warned{};
-    uint64_t field{};
-    uint32_t packets{};
-    uint64_t bytes{};
-    uint64_t firstField{1800u};
-    uint64_t lastField{2200u};
-    uint32_t packetLimit{256u};
-    uint64_t byteLimit{4u * 1024u * 1024u};
-    const char* trigger{};
-    bool armed{};
-    std::ofstream output;
-};
-thread_local MenuGifTrace menu_gif_trace{};
-constexpr uint64_t kMenuTraceFirstField = 1800;
-constexpr uint64_t kMenuTraceLastField = 2200;
-constexpr uint32_t kMenuTraceMaxPackets = 256;
-constexpr uint64_t kMenuTraceMaxBytes = 4u * 1024u * 1024u;
-
-template <typename T>
-void write_trace_scalar(std::ofstream& out, T value) {
-    out.write(reinterpret_cast<const char*>(&value), sizeof(value));
-}
-
-void trace_menu_gif_submit(uint32_t path, std::span<const uint8_t> packet) {
-    MenuGifTrace& trace = menu_gif_trace;
-    if (!trace.initialized) {
-        trace.initialized = true;
-        const char* destination = std::getenv("TARZAN_TRACE_MENU_GIF");
-        if (destination && destination[0] != '\0') {
-            const std::filesystem::path file(destination);
-            if (!file.is_absolute())
-                throw std::invalid_argument("TARZAN_TRACE_MENU_GIF must be an absolute output file path");
-            trace.output.open(file, std::ios::binary | std::ios::trunc);
-            if (!trace.output)
-                throw std::runtime_error("cannot create TARZAN_TRACE_MENU_GIF: " + file.string());
-            trace.output.write("TGMG", 4);
-            trace.enabled = true;
-            trace.trigger = std::getenv("TARZAN_TRACE_GIF_TRIGGER");
-            if (trace.trigger && *trace.trigger) {
-                trace.firstField = UINT64_MAX;
-                trace.lastField = UINT64_MAX;
-                trace.packetLimit = 8192u;
-                trace.byteLimit = 64u * 1024u * 1024u;
-            }
-            std::clog << "Metal raw GIF trace enabled: " << file
-                      << " fields=" << kMenuTraceFirstField << ".." << kMenuTraceLastField
-                      << " max_packets=" << kMenuTraceMaxPackets
-                      << " max_bytes=" << kMenuTraceMaxBytes << '\n';
-        }
-    }
-    if (trace.enabled && trace.trigger && *trace.trigger && !trace.armed) {
-        std::error_code ec;
-        if (std::filesystem::exists(trace.trigger, ec)) {
-            std::filesystem::remove(trace.trigger, ec);
-            trace.armed = true;
-            trace.firstField = trace.field;
-            trace.lastField = trace.field + 20u;
-            std::clog << "Metal gameplay GIF capture armed at field " << trace.field << '\n';
-        }
-    }
-    if (!trace.enabled || trace.field < trace.firstField ||
-        trace.field > trace.lastField || trace.packets >= trace.packetLimit)
-        return;
-    constexpr uint64_t record_bytes = sizeof(uint64_t) + 2u * sizeof(uint32_t);
-    if (trace.bytes > trace.byteLimit ||
-        record_bytes > trace.byteLimit - trace.bytes ||
-        packet.size() > trace.byteLimit - trace.bytes - record_bytes) {
-        trace.enabled = false;
-        if (!trace.warned) {
-            trace.warned = true;
-            std::clog << "Metal raw GIF trace reached its configured byte bound\n";
-        }
-        return;
-    }
-    write_trace_scalar(trace.output, trace.field);
-    write_trace_scalar(trace.output, path);
-    const uint32_t size = static_cast<uint32_t>(packet.size());
-    write_trace_scalar(trace.output, size);
-    if (size)
-        trace.output.write(reinterpret_cast<const char*>(packet.data()), size);
-    trace.output.flush();
-    if (!trace.output)
-        throw std::runtime_error("failed writing TARZAN_TRACE_MENU_GIF");
-    trace.bytes += record_bytes + size;
-    ++trace.packets;
-}
-
 constexpr const char* kPrivilegedRegisterNames[] = {
     "PMODE", "SMODE1", "SMODE2", "SRFSH", "SYNCH1", "SYNCH2", "SYNCV",
     "DISPFB1", "DISPLAY1", "DISPFB2", "DISPLAY2", "EXTBUF", "EXTDATA",
@@ -190,11 +96,6 @@ CaptureSession& capture_session() {
     session.start_field = start_field;
     session.interval = interval;
     session.enabled = true;
-    if (const char* trigger = std::getenv("TARZAN_CAPTURE_TRIGGER_FILE"); trigger && *trigger) {
-        session.trigger_file = trigger;
-        if (!session.trigger_file.is_absolute())
-            throw std::invalid_argument("TARZAN_CAPTURE_TRIGGER_FILE must be absolute");
-    }
     std::clog << "Metal diagnostic capture enabled: directory=" << session.directory
               << " max_frames=" << session.max_frames
               << " start_field=" << session.start_field
@@ -273,33 +174,12 @@ void MetalGsAdapter::submit(uint32_t path, std::span<const uint8_t> packet) {
     check(rrv_pcsx2_gs_bridge_submit(handle_, path, packet.data(),
                                      static_cast<uint32_t>(packet.size()), error, sizeof(error)),
           "submit", error);
-    trace_menu_gif_submit(path, packet);
 }
 void MetalGsAdapter::vsync(const std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_REG_COUNT>& regs,
                            uint64_t field_index, uint32_t parity) {
     if (!handle_) throw std::logic_error("PCSX2 Metal GS vsync after close");
     if (parity > 1) throw std::invalid_argument("GS field parity must be 0 or 1");
-    // Diagnostic A/B only: OPL's PAL FIELD profile supplies the CRT timing
-    // missing from our HLE. Keep guest registers untouched and capture exactly
-    // what was sent to the renderer on each side of the selected boundary.
     auto scanout_regs = regs;
-    // Controlled comparison with KillzoneRecomp's same-buffer flicker-filter
-    // workaround. A file toggle permits before/after evidence in one run.
-    static const char* circuit_toggle = std::getenv("TARZAN_DIAG_SINGLE_CIRCUIT_FILE");
-    if (circuit_toggle && (regs[0] & 3u) == 3u &&
-        (regs[7] & UINT64_C(0x7ffffffffff)) == (regs[9] & UINT64_C(0x7ffffffffff)) &&
-        std::filesystem::exists(circuit_toggle)) {
-        scanout_regs[9] = scanout_regs[7];
-        scanout_regs[10] = scanout_regs[8];
-    }
-    static const uint64_t pal_syncv_start = capture_uint_env(
-        "TARZAN_DIAG_PAL_SYNCV_START_FIELD", UINT64_MAX, true);
-    if (field_index >= pal_syncv_start && ((regs[1] >> 13) & 3) == 3 &&
-        (regs[2] & 1) && regs[6] == 0) {
-        scanout_regs[6] = UINT64_C(0x00a9000502101401);
-        if (field_index == pal_syncv_start)
-            std::clog << "Metal PAL SYNCV diagnostic begins at field=" << field_index << '\n';
-    }
     if (tarzan_experiments_boot_language_hidden()) {
         // Keep GS work/VSync intact, but do not display the bypassed selector.
         scanout_regs[0] &= ~UINT64_C(3);
@@ -308,7 +188,6 @@ void MetalGsAdapter::vsync(const std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_R
     char error[1024]{};
     check(rrv_pcsx2_gs_bridge_vsync(handle_, scanout_regs.data(), field_index, parity, error, sizeof(error)),
           "vsync", error);
-    menu_gif_trace.field = field_index;
     capture_vsync_regs = scanout_regs;
     capture_after_vsync(field_index);
 }
@@ -319,15 +198,6 @@ void MetalGsAdapter::capture_after_vsync(uint64_t field_index) {
         return;
     // Explicit one-shot rearm lets a diagnostic capture the screen reached
     // by real input, without repeatedly replaying the intro on timed guesses.
-    if (!session.trigger_file.empty()) {
-        std::error_code ec;
-        if (std::filesystem::remove(session.trigger_file, ec)) {
-            session.completed_frames = 0;
-            session.start_field = field_index;
-        } else if (session.completed_frames == 0 || session.completed_frames >= session.max_frames) {
-            return;
-        }
-    }
     if (session.completed_frames >= session.max_frames)
         return;
     if (field_index < session.start_field ||

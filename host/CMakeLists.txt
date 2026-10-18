@@ -24,6 +24,7 @@ if(TARZAN_GAME_READY)
         "${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm"
         "${CMAKE_CURRENT_SOURCE_DIR}/keyboard-controls.mm"
         "${CMAKE_CURRENT_SOURCE_DIR}/experimental-settings.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm"
         "${CMAKE_CURRENT_SOURCE_DIR}/experimental-clock.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/diagnostic-input.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/spu2-host.cpp"
@@ -40,7 +41,8 @@ if(TARZAN_GAME_READY)
     set_target_properties(tarzanMetalHost PROPERTIES UNITY_BUILD OFF)
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm"
         "${CMAKE_CURRENT_SOURCE_DIR}/keyboard-controls.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/experimental-settings.mm" PROPERTIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/experimental-settings.mm"
+        "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm" PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp" PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
@@ -136,6 +138,16 @@ target_compile_options(tarzanKeyboardControlsTest PRIVATE -fobjc-arc -UNDEBUG)
 target_link_options(tarzanKeyboardControlsTest PRIVATE -stdlib=libc++)
 target_link_libraries(tarzanKeyboardControlsTest PRIVATE "-framework Foundation" "-framework AppKit")
 add_test(NAME tarzan_keyboard_controls COMMAND tarzanKeyboardControlsTest)
+
+add_executable(tarzanSettingsTest
+    "${TARZAN_ROOT}/tests/settings-test.mm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm")
+target_include_directories(tarzanSettingsTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(tarzanSettingsTest PRIVATE cxx_std_20)
+target_compile_options(tarzanSettingsTest PRIVATE -fobjc-arc -UNDEBUG)
+target_link_options(tarzanSettingsTest PRIVATE -stdlib=libc++)
+target_link_libraries(tarzanSettingsTest PRIVATE "-framework Foundation")
+add_test(NAME tarzan_settings COMMAND tarzanSettingsTest)
 
 add_executable(tarzanMetalGsAdapterTest
     "${TARZAN_ROOT}/tests/metal-gs-adapter-test.cpp"
