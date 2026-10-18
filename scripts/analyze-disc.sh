@@ -3,8 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INPUT="$ROOT/extracted/disc/SLES_503.50"
-ANALYZER="$ROOT/build/recompiler/ps2xAnalyzer/ps2_analyzer"
-RECOMP="$ROOT/build/recompiler/ps2xRecomp/ps2_recomp"
+ANALYZER="$ROOT/build/tests/ps2recomp/ps2xAnalyzer/ps2_analyzer"
+RECOMP="$ROOT/build/recompiler/ps2recomp/ps2xRecomp/ps2_recomp"
 ANALYZER_CONFIG="$ROOT/config/SLES-50350.analyzer.toml"
 CONFIG="$ROOT/config/SLES-50350.toml"
 

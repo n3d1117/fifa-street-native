@@ -7,27 +7,32 @@
 !/STATUS.md
 !/LICENSE
 !/THIRD_PARTY.md
-!/integration/
+!/host/
+!/cmake/
+!/CMakeLists.txt
+!/CMakePresets.json
 !/scripts/
 !/tests/
 !/patches/
 !/tools/
 
-# Native host and bridge integration source, headers, and build descriptions.
-/integration/*
-/integration/**/*
-!/integration/**/
-!/integration/**/*.c
-!/integration/**/*.cc
-!/integration/**/*.cpp
-!/integration/**/*.cxx
-!/integration/**/*.h
-!/integration/**/*.hh
-!/integration/**/*.hpp
-!/integration/**/*.mm
-!/integration/**/*.m
-!/integration/**/CMakeLists.txt
-!/integration/**/*.cmake
+# Native host source, headers, and build descriptions; CMake modules.
+/cmake/*
+!/cmake/*.cmake
+/host/*
+/host/**/*
+!/host/**/
+!/host/**/*.c
+!/host/**/*.cc
+!/host/**/*.cpp
+!/host/**/*.cxx
+!/host/**/*.h
+!/host/**/*.hh
+!/host/**/*.hpp
+!/host/**/*.mm
+!/host/**/*.m
+!/host/**/CMakeLists.txt
+!/host/**/*.cmake
 
 # Reproducible helper scripts only.
 /scripts/*

@@ -25,7 +25,7 @@ from typing import Dict, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config/SLES-50350.symbolmap-entry.toml"
-DEFAULT_COMPILER = ROOT / "build/recompiler/ps2xRecomp/ps2_recomp"
+DEFAULT_COMPILER = ROOT / "build/recompiler/ps2recomp/ps2xRecomp/ps2_recomp"
 
 
 def fail(message: str) -> None:

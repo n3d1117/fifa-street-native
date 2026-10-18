@@ -17,8 +17,8 @@ def main():
     args = parser.parse_args()
     command = ('diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR') if args.staged else ('ls-files', '-z')
     names = [n.decode() for n in git(*command).split(b'\0') if n]
-    allowed_roots = {'integration', 'scripts', 'tests', 'patches', 'tools', 'config', 'docs', '.githooks', '.github'}
-    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'STATUS.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', 'deps.lock'}
+    allowed_roots = {'host', 'cmake', 'scripts', 'tests', 'patches', 'tools', 'config', 'docs', '.githooks', '.github'}
+    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'STATUS.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json'}
     allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml'}
     problems = []
     total = 0

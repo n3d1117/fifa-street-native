@@ -22,8 +22,8 @@ def fingerprint(path):
 
 
 def source_snapshot():
-    paths = ("integration/launcher.cpp", "integration/metal-gs-adapter.cpp",
-             "integration/spu2-host.cpp", "integration/spu2-host.hpp",
+    paths = ("host/launcher.cpp", "host/metal-gs-adapter.cpp",
+             "host/spu2-host.cpp", "host/spu2-host.hpp",
              "deps/ps2recomp/ps2xRuntime/include/ps2_runtime.h",
              "deps/ps2recomp/ps2xRuntime/include/runtime/ps2_host_arena.h",
              "deps/ps2recomp/ps2xRuntime/src/lib/ps2_runtime.cpp",

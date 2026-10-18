@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD="$ROOT/build/runtime-tests"
-BINARY="$BUILD/ps2xTest/ps2x_tests"
+BUILD="$ROOT/build/tests"
+BINARY="$BUILD/ps2recomp/ps2xTest/ps2x_tests"
 LOG_DIR="$ROOT/logs"
 LOG="$LOG_DIR/mfifo-targeted-tests.log"
 

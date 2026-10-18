@@ -1,13 +1,28 @@
 cmake_minimum_required(VERSION 3.21)
-project(TarzanPS2 LANGUAGES C CXX)
+project(TarzanPS2 LANGUAGES C CXX OBJC OBJCXX)
 
-set(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
-set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/deps/ps2recomp" CACHE PATH
-    "Path to the upstream PS2Recomp checkout")
+if(NOT APPLE)
+    message(FATAL_ERROR "This project builds only on macOS (Metal)")
+endif()
+
+get_filename_component(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+option(TARZAN_BUILD_GAME "Build the game runner and Metal host (OFF: upstream tools/tests only)" ON)
+set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/deps/ps2recomp")
 set(TARZAN_GENERATED_DIR "${TARZAN_ROOT}/generated/SLES-50350-symbolmap-entry" CACHE PATH
     "Directory containing generated C++ and headers for the guest ELF")
 set(PS2X_DEFAULT_BOOT_ELF "${TARZAN_ROOT}/extracted/disc/SLES_503.50" CACHE STRING
     "Default guest ELF for the Tarzan native launcher")
+
+enable_testing()
+
+if(NOT TARZAN_BUILD_GAME)
+    add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
+    add_subdirectory(host)
+    include("${TARZAN_ROOT}/cmake/ps2x-tests.cmake")
+    include("${TARZAN_ROOT}/cmake/relative-rpath.cmake")
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL tarzan_apply_relative_rpaths)
+    return()
+endif()
 
 foreach(required_file IN ITEMS
     "${TARZAN_GENERATED_DIR}/register_functions.cpp"
@@ -93,7 +108,7 @@ foreach(runner_source IN LISTS PS2X_RUNNER_SOURCES)
     list(APPEND TARZAN_FILTERED_RUNNER_SOURCES "${runner_source}")
 endforeach()
 set(PS2X_RUNNER_SOURCES "${TARZAN_FILTERED_RUNNER_SOURCES}")
-list(APPEND PS2X_RUNNER_SOURCES "${CMAKE_CURRENT_LIST_DIR}/launcher.cpp")
+list(APPEND PS2X_RUNNER_SOURCES "${TARZAN_ROOT}/host/launcher.cpp")
 set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${PS2X_RUNNER_SOURCES}")
 
 file(GLOB TARZAN_GENERATED_SOURCES CONFIGURE_DEPENDS
@@ -133,3 +148,9 @@ target_compile_options(ps2_runtime PRIVATE
 target_compile_options(ps2EntryRunner PRIVATE
     "$<$<CONFIG:Release>:-O1>"
     -fno-lto -fno-fast-math -ffp-contract=off)
+
+# Game configuration only: the Metal host library, its tests and smoke runners.
+add_subdirectory(host)
+
+include("${TARZAN_ROOT}/cmake/relative-rpath.cmake")
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL tarzan_apply_relative_rpaths)

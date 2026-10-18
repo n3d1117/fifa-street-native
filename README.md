@@ -5,7 +5,7 @@ Goal: a faithful, complete native ARM64 port of **Disney’s Tarzan: Freeride (P
 Current: first-mission gameplay reached on macOS. EE code is statically recompiled; 9,801 mapped functions are translated and 370 use native runtime bindings. Captured VU1 programs have native paths; captured VU0 skinning also runs natively, with interpreter fallbacks; IOP remains interpreted. This is recompilation, not recovered original source. Whole-game correctness and 50 FPS remain under validation; iOS/tvOS are future targets.
 
 ```text
-integration/       Cocoa window/input/audio + Metal GS adapter + CMake
+host/              Cocoa window/input/audio + Metal GS adapter + CMake
 scripts/           BYOD extraction/generation, builds, packaging, diagnostics
 patches/           Pinned upstream source changes and dependency manifest
 config/            Portable template; generated/local config stays untracked

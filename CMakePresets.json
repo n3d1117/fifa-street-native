@@ -1,0 +1,86 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 25, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-llvm19.cmake",
+      "cacheVariables": {
+        "CMAKE_MAKE_PROGRAM": "${sourceDir}/tools/build/ninja-1.13.1/ninja",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/tools/build/llvm19;${sourceDir}/tools/metal-deps/prefix",
+        "PKG_CONFIG_ARGN": "--static",
+        "PKG_CONFIG_EXECUTABLE": "${sourceDir}/tools/pkgconf/bin/pkg-config",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      },
+      "environment": {
+        "ZERO_AR_DATE": "1",
+        "PKG_CONFIG_PATH": "${sourceDir}/tools/ffmpeg/arm64/lib/pkgconfig",
+        "PATH": "${sourceDir}/tools/pkgconf/bin:$penv{PATH}"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Game (Metal, Release)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/game-metal",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "TARZAN_BUILD_GAME": "ON"
+      }
+    },
+    {
+      "name": "tests",
+      "displayName": "Upstream and host tests (Debug)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/tests",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TARZAN_BUILD_GAME": "OFF",
+        "PS2X_BUILD_RECOMP": "ON",
+        "PS2X_BUILD_ANALYZER": "ON",
+        "PS2X_BUILD_RUNTIME": "ON",
+        "PS2X_BUILD_TEST": "ON",
+        "PS2X_IOP_BUILD_TESTS": "ON",
+        "PS2X_BUILD_STUDIO": "OFF",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+      }
+    },
+    {
+      "name": "recompiler",
+      "displayName": "PS2Recomp recompiler (Debug)",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/recompiler",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "TARZAN_BUILD_GAME": "OFF",
+        "PS2X_BUILD_RECOMP": "ON",
+        "PS2X_BUILD_RUNTIME": "OFF",
+        "PS2X_BUILD_ANALYZER": "OFF",
+        "PS2X_BUILD_TEST": "OFF",
+        "PS2X_BUILD_STUDIO": "OFF",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/build/_deps"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "release", "configurePreset": "release", "targets": ["ps2EntryRunner", "tarzanMetalHostSmoke"]},
+    {"name": "tests", "configurePreset": "tests"},
+    {"name": "recompiler", "configurePreset": "recompiler", "targets": ["ps2_recomp"]}
+  ],
+  "testPresets": [
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 4}
+    },
+    {
+      "name": "gui",
+      "configurePreset": "release",
+      "filter": {"include": {"label": "gui"}},
+      "output": {"outputOnFailure": true}
+    }
+  ]
+}

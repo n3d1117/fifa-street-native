@@ -33,14 +33,14 @@ def main():
         # Catch host/API/link errors before paying for translated game compilation.
         ("host-build", [str(NINJA), "-C", "build/game-metal", "-j2",
                         "ps2_runtime", "tarzanMetalHostSmoke"]),
-        ("test-build", [str(NINJA), "-C", "build/runtime-tests", "-j2", "ps2x_tests",
+        ("test-build", [str(NINJA), "-C", "build/tests", "-j2", "ps2x_tests",
                         "ps2_iop_emulator_tests", "ps2_iop_import_tests",
                         "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests"]),
         ("runtime-regressions", ["bash", "scripts/test-native-regressions.sh"]),
     ]
     for name in ("ps2_iop_emulator_tests", "ps2_iop_import_tests",
                  "ps2_iop_compatibility_tests", "ps2_iop_import_version_tests"):
-        steps.append((name, [str(ROOT / "build/runtime-tests/ps2xIOP" / name)]))
+        steps.append((name, [str(ROOT / "build/tests/ps2recomp/ps2xIOP" / name)]))
     steps.append(("game-build", [str(NINJA), "-C", "build/game-metal", "-j2", "ps2EntryRunner"]))
     report = {"started_utc": stamp, "steps": [], "gameplay_verified": False}
     report_path = directory / "validation.json"

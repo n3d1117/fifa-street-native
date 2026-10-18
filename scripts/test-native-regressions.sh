@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BINARY="$ROOT/build/runtime-tests/ps2xTest/ps2x_tests"
+BINARY="$ROOT/build/tests/ps2recomp/ps2xTest/ps2x_tests"
 LOG="$ROOT/logs/native-regressions.log"
 test -x "$BINARY"
 mkdir -p "$ROOT/logs"
