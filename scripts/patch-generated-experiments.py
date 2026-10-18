@@ -154,19 +154,17 @@ def patch_camera(text: str) -> str:
     if text.count(FOV_MARK) == 0:
         old = """    // 0x369a7c: 0x4614a843  div.s       $f1, $f21, $f20
     ctx->pc = 0x369a7cu;
-    if (ctx->f[20] == 0.0f) { ctx->fcr31 |= 0x100000; /* DZ flag */ ctx->f[1] = copysignf(INFINITY, ctx->f[21] * 0.0f); } else ctx->f[1] = ctx->f[21] / ctx->f[20];"""
+    { const float divFs = ctx->f[21]; const float divFt = ctx->f[20]; uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) { ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; const uint32_t divResultBits = ((divFsBits ^ divFtBits) & 0x80000000u) | 0x7f7fffffu; std::memcpy(&ctx->f[1], &divResultBits, sizeof(divResultBits)); } else ctx->f[1] = divFs / divFt; }"""
         new = """    // 0x369a7c: 0x4614a843  div.s       $f1, $f21, $f20
     ctx->pc = 0x369a7cu;
     // TARZAN_EXPERIMENT_HD_FOV: upstream PAL-M Y-FOV stub, opt-in.
     if (tarzan_experiments_hd_widescreen()) {
-        if (ctx->f[20] == 0.0f) { ctx->fcr31 |= 0x100000; /* DZ flag */ ctx->f[1] = copysignf(INFINITY, ctx->f[21] * 0.0f); }
-        else ctx->f[1] = ctx->f[21] / ctx->f[20];
+        { const float divFs = ctx->f[21]; const float divFt = ctx->f[20]; uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) { ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; const uint32_t divResultBits = ((divFsBits ^ divFtBits) & 0x80000000u) | 0x7f7fffffu; std::memcpy(&ctx->f[1], &divResultBits, sizeof(divResultBits)); } else ctx->f[1] = divFs / divFt; }
         SET_GPR_U32(ctx, 1, 0x3f400000u);
         { const uint32_t bits = GPR_U32(ctx, 1); std::memcpy(&ctx->f[30], &bits, sizeof(bits)); }
         ctx->f[1] = FPU_MUL_S(ctx->f[1], ctx->f[30]);
     } else {
-        if (ctx->f[20] == 0.0f) { ctx->fcr31 |= 0x100000; /* DZ flag */ ctx->f[1] = copysignf(INFINITY, ctx->f[21] * 0.0f); }
-        else ctx->f[1] = ctx->f[21] / ctx->f[20];
+        { const float divFs = ctx->f[21]; const float divFt = ctx->f[20]; uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) { ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; const uint32_t divResultBits = ((divFsBits ^ divFtBits) & 0x80000000u) | 0x7f7fffffu; std::memcpy(&ctx->f[1], &divResultBits, sizeof(divResultBits)); } else ctx->f[1] = divFs / divFt; }
     }"""
         text = replace_once(text, old, new, "camera FOV at PC 0x369a7c")
     elif text.count(FOV_MARK) != 1:
@@ -248,6 +246,8 @@ def patch_init(text: str) -> str:
                      original, value, enhanced ? 1u : 0u);
     } while (0);"""
     original = """    WRITE8(ADD32(GPR_U32(ctx, 1), 184), (uint8_t)GPR_U32(ctx, 2));"""
+    # Current recompiler lowers this store to a constant-address traced FAST_WRITE8.
+    original_const = """    do { uint8_t _value = static_cast<uint8_t>((uint8_t)GPR_U32(ctx, 2)); ps2TraceGuestWrite(rdram, 0x6B00B8u, 1u, _value, 0u, "WRITE8", ctx); FAST_WRITE8(0x6B00B8u, _value); } while (0);"""
     new = """    // TARZAN_EXPERIMENT_HIGH_FPS_INIT: settings opt-in plus legacy A/B switch.
     do {
         const char* legacy = std::getenv("TARZAN_EXPERIMENT_50FPS");
@@ -264,10 +264,11 @@ def patch_init(text: str) -> str:
         if text.count(INIT_MARK) != 1:
             raise PatchError("init FPS: multiple experiment markers")
     else:
-        matches = text.count(legacy) + text.count(original)
+        forms = (legacy, original, original_const)
+        matches = sum(text.count(form) for form in forms)
         if matches != 1:
             raise PatchError(f"init FPS hook at PC 0x35ec74: expected one known source form, found {matches}")
-        text = text.replace(legacy if legacy in text else original, new, 1)
+        text = text.replace(next(form for form in forms if form in text), new, 1)
     text = ensure_include(text, "init")
     return ensure_standard_includes(text, ("cstdlib", "cstdio"), "init")
 
@@ -285,6 +286,8 @@ def patch_sync(text: str) -> str:
         SET_GPR_ZE32(ctx, 2, value);
     }"""
     original = """    SET_GPR_ZE32(ctx, 2, (uint8_t)READ8(ADD32(GPR_U32(ctx, 1), 184)));"""
+    # Current recompiler lowers this load to a constant-address FAST_READ8.
+    original_const = """    SET_GPR_ZE32(ctx, 2, (uint8_t)FAST_READ8(0x6B00B8u));"""
     new = """    // TARZAN_EXPERIMENT_HIGH_FPS_SYNC: setting and legacy marker enable mode 0.
     {
         const char* marker = std::getenv("TARZAN_EXPERIMENT_50FPS_FILE");
@@ -300,10 +303,11 @@ def patch_sync(text: str) -> str:
         if text.count(SYNC_MARK) != 1:
             raise PatchError("sync FPS: multiple experiment markers")
     else:
-        matches = text.count(legacy) + text.count(original)
+        forms = (legacy, original, original_const)
+        matches = sum(text.count(form) for form in forms)
         if matches != 1:
             raise PatchError(f"sync FPS hook at PC 0x3f8df4: expected one known source form, found {matches}")
-        text = text.replace(legacy if legacy in text else original, new, 1)
+        text = text.replace(next(form for form in forms if form in text), new, 1)
     text = ensure_include(text, "sync")
     return ensure_standard_includes(text, ("cstdlib", "sys/stat.h"), "sync")
 
