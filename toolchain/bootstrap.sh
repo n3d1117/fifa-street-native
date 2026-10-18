@@ -6,6 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 B="$ROOT/tools/build"
 LOGS="$ROOT/logs"
+JOBS="${TZ_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
 CMAKE_VER=3.31.12
 CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v$CMAKE_VER/cmake-$CMAKE_VER-macos-universal.tar.gz"
 CMAKE_SHA=799af7fd545db9bf1b9cfe72f8095880e727a2d4e0df0e3dffc3bc7b95c2d3b0
@@ -90,7 +91,7 @@ if [[ ! -f "$BUILD/build.ninja" ]]; then
     -DCLANG_ENABLE_ARCMT=OFF \
     -DLLVM_PARALLEL_LINK_JOBS=1 2>&1 | tee "$LOGS/llvm19-configure.log"
 fi
-"$NINJA" -C "$BUILD" -j"$(sysctl -n hw.ncpu)" install-llvm-headers install-llvm-libraries install-llvm-config install-llvm-tblgen install-cmake-exports install-clang-cmake-exports install-clang install-clang-resource-headers 2>&1 | tee -a "$LOGS/llvm19-build.log"
+"$NINJA" -C "$BUILD" -j"$JOBS" install-llvm-headers install-llvm-libraries install-llvm-config install-llvm-tblgen install-cmake-exports install-clang-cmake-exports install-clang install-clang-resource-headers 2>&1 | tee -a "$LOGS/llvm19-build.log"
 
 # Stage 2: libc++/libc++abi built with the new clang.
 RBUILD="$B/src/build-llvm19-runtimes"
@@ -118,5 +119,5 @@ if [[ ! -f "$RBUILD/build.ninja" ]]; then
     -DLIBCXXABI_INCLUDE_TESTS=OFF \
     2>&1 | tee "$LOGS/llvm19-runtimes-configure.log"
 fi
-"$NINJA" -C "$RBUILD" -j"$(sysctl -n hw.ncpu)" install-cxx install-cxxabi 2>&1 | tee -a "$LOGS/llvm19-runtimes-build.log"
+"$NINJA" -C "$RBUILD" -j"$JOBS" install-cxx install-cxxabi 2>&1 | tee -a "$LOGS/llvm19-runtimes-build.log"
 echo "== LLVM 19 installed: $PREFIX"
