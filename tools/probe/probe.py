@@ -92,11 +92,13 @@ def title_screen_present(lines):
 
 def split_underruns(text):
     """(steady, boundary, overruns, saw_health). Boundary = the first health line after a PSS movie's audio stream
-    starts (`iop-audio-rpc fn=12` following a .PSS open), and the
-    health line containing or following an `iop-audio-rpc fn=11 ... init=0` (movie EOF flush)."""
+    starts (`iop-audio-rpc fn=12` following a .PSS open); the health line containing or following an
+    `iop-audio-rpc fn=11 ... init=0` (movie EOF flush); and, by signature, any silent interval (rms=0: the burst is
+    stream start/flush/load padding and cannot be an audible glitch), however late it lands under load."""
     steady = boundary = overruns = 0
     seen = False
-    pss_open = after_start = after_flush = False
+    pss_open = after_start = False
+    after_flush = False
     for line in text.splitlines():
         if re.search(r"\[sceCdSearchFile:ok\] path=\"[^\"]*\.PSS", line):
             pss_open = True
@@ -105,15 +107,17 @@ def split_underruns(text):
         elif re.search(r"\[iop-audio-rpc\] fn=11 .*\binit=0\b", line):
             after_flush = True
         else:
-            m = re.search(r"\[tarzan-spu2-health\].*?underrun=(\d+) overrun=(\d+)", line)
+            m = re.search(r"\[tarzan-spu2-health\].*?underrun=(\d+) overrun=(\d+).*?rms=([0-9.]+)", line)
             if m:
                 seen = True
                 overruns += int(m[2])
-                if after_start or after_flush:
+                silent = float(m[3]) == 0.0
+                if after_start or silent or after_flush:
                     boundary += int(m[1])
                 else:
                     steady += int(m[1])
-                after_start = after_flush = False
+                after_start = False
+                after_flush = False
     return steady, boundary, overruns, seen
 
 
