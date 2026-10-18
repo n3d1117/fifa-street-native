@@ -1,5 +1,5 @@
 # Native Cocoa/Metal host for the recompiled game plus its tests. Included from
-# the root project; the host library and runner wiring exist only in game builds.
+# the root project once the generated game sources exist.
 set(TARZAN_METAL_BRIDGE "${TARZAN_ROOT}/build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
     CACHE FILEPATH "Pinned PCSX2 GS bridge dylib")
 if(NOT EXISTS "${TARZAN_METAL_BRIDGE}")
@@ -17,7 +17,7 @@ if(NOT EXISTS "${TARZAN_SOUNDTOUCH_LIBRARY}")
 endif()
 set(TARZAN_LIBCXX_INCLUDE "${TARZAN_LLVM}/include/c++/v1")
 
-if(TARZAN_BUILD_GAME)
+if(TARZAN_GAME_READY)
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(ps2_runtime PRIVATE TARZAN_USE_METAL=1)
     add_library(tarzanMetalHost STATIC
@@ -55,17 +55,6 @@ if(TARZAN_BUILD_GAME)
     target_link_libraries(tarzanMetalHost PRIVATE "${TARZAN_SOUNDTOUCH_LIBRARY}")
 endif()
 
-if(NOT TARZAN_BUILD_GAME)
-    # Tests compile the shipped runtime configuration; see test-metal-seam.cpp.
-    target_compile_definitions(ps2_runtime PUBLIC TARZAN_USE_METAL=1)
-    add_library(tarzanTestMetalSeam STATIC "${CMAKE_CURRENT_SOURCE_DIR}/test-metal-seam.cpp")
-    target_include_directories(tarzanTestMetalSeam PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_features(tarzanTestMetalSeam PRIVATE cxx_std_20)
-    target_link_libraries(ps2_runtime PUBLIC tarzanTestMetalSeam)
-    set_property(SOURCE "${TARZAN_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/ps2_pad.cpp"
-        TARGET_DIRECTORY ps2_runtime APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
-endif()
-
 add_executable(tarzanAudioStretcherTest
     "${TARZAN_ROOT}/deps/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/audio-stretcher-test.cpp")
@@ -79,7 +68,7 @@ target_link_options(tarzanAudioStretcherTest PRIVATE -stdlib=libc++)
 target_link_libraries(tarzanAudioStretcherTest PRIVATE "${TARZAN_SOUNDTOUCH_LIBRARY}")
 add_test(NAME tarzan_audio_stretcher COMMAND tarzanAudioStretcherTest)
 
-if(TARZAN_BUILD_GAME)
+if(TARZAN_GAME_READY)
     target_link_libraries(ps2EntryRunner PRIVATE tarzanMetalHost)
     add_executable(tarzanMetalHostSmoke "${CMAKE_CURRENT_SOURCE_DIR}/metal-host-smoke.cpp")
     target_include_directories(tarzanMetalHostSmoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

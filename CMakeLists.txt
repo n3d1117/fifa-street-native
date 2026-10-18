@@ -6,7 +6,6 @@ if(NOT APPLE)
 endif()
 
 get_filename_component(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
-option(TARZAN_BUILD_GAME "Build the game runner and Metal host (OFF: upstream tools/tests only)" ON)
 set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/deps/ps2recomp")
 set(TARZAN_GENERATED_DIR "${TARZAN_ROOT}/generated/SLES-50350-symbolmap-entry" CACHE PATH
     "Directory containing generated C++ and headers for the guest ELF")
@@ -14,35 +13,35 @@ set(PS2X_DEFAULT_BOOT_ELF "extracted/disc/SLES_503.50" CACHE STRING
     "Default guest ELF, relative to the checkout (found at run time by walking up from the executable), or absolute")
 
 # Ninja job pools: translation units that take minutes and gigabytes are
-# serialised (JOB_POOL_COMPILE heavy) while the rest of the build runs at -j4.
+# serialised (JOB_POOL_COMPILE heavy) while the rest of the build runs at the host-derived width (tools/jobs.py).
 set_property(GLOBAL APPEND PROPERTY JOB_POOLS heavy=1)
 
 enable_testing()
 
-if(NOT TARZAN_BUILD_GAME)
-    add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
-    if(TARGET ps2_runtime)
-        add_subdirectory(host)
-    endif()
-    include("${TARZAN_ROOT}/cmake/ps2x-tests.cmake")
-    include("${TARZAN_ROOT}/cmake/relative-rpath.cmake")
-    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL tarzan_apply_relative_rpaths)
-    return()
-endif()
-
+# One project, one build tree: the game (ps2EntryRunner + Metal host), the
+# recompiler (ps2_recomp) and every test binary are targets of this configure.
+# The generated guest sources only exist after the recompiler has run once, so
+# until then only the recompiler and the tests are configured as live targets;
+# `tz build` reconfigures after generating.
+set(TARZAN_GAME_READY ON)
 foreach(required_file IN ITEMS
     "${TARZAN_GENERATED_DIR}/register_functions.cpp"
     "${TARZAN_GENERATED_DIR}/ps2_recompiled_functions.h"
     "${TARZAN_GENERATED_DIR}/ps2_recompiled_stubs.h")
     if(NOT EXISTS "${required_file}")
-        message(FATAL_ERROR "Generated game output is incomplete: ${required_file}")
+        set(TARZAN_GAME_READY OFF)
     endif()
 endforeach()
+set(TARZAN_GAME_CONFIGURED ${TARZAN_GAME_READY} CACHE INTERNAL "read by tz" FORCE)
+if(NOT TARZAN_GAME_READY)
+    message(STATUS "Generated game output not found in ${TARZAN_GENERATED_DIR}: configuring recompiler and tests only")
+endif()
 
-set(PS2X_BUILD_RECOMP OFF CACHE BOOL "" FORCE)
+set(PS2X_BUILD_RECOMP ON CACHE BOOL "" FORCE)
 set(PS2X_BUILD_RUNTIME ON CACHE BOOL "" FORCE)
-set(PS2X_BUILD_ANALYZER OFF CACHE BOOL "" FORCE)
-set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(PS2X_BUILD_ANALYZER ON CACHE BOOL "" FORCE)
+set(PS2X_BUILD_TEST ON CACHE BOOL "" FORCE)
+set(PS2X_IOP_BUILD_TESTS ON CACHE BOOL "" FORCE)
 set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_DEBUG_UI OFF CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_FFMPEG ON CACHE BOOL "" FORCE)
@@ -57,6 +56,22 @@ set(PS2X_VU0_GENERATOR "${TARZAN_ROOT}/tools/vu/vu1recomp.py" CACHE FILEPATH "VU
 set(PS2X_VU0GEN_DIR "${TARZAN_ROOT}/generated/vu0-native" CACHE PATH "Native VU0 source directory")
 set(PS2X_VU1GEN_DIR "${TARZAN_ROOT}/generated/vu1-disc-native" CACHE PATH "Disc-derived guarded VU1 source directory")
 add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
+
+# Test targets: no LTO, strict floating point like the shipped runtime, and the
+# shipped TARZAN_USE_METAL configuration (see cmake/ps2x-tests.cmake).
+include("${TARZAN_ROOT}/cmake/ps2x-tests.cmake")
+foreach(tool_target IN ITEMS ps2_recomp ps2_recomp_lib ps2_analyzer ps2_analyzer_lib ps2_test_lib ps2x_tests)
+    if(TARGET ${tool_target})
+        set_property(TARGET ${tool_target} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
+    endif()
+endforeach()
+
+if(NOT TARZAN_GAME_READY)
+    set_target_properties(ps2EntryRunner PROPERTIES EXCLUDE_FROM_ALL ON)
+    include("${TARZAN_ROOT}/cmake/relative-rpath.cmake")
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL tarzan_apply_relative_rpaths)
+    return()
+endif()
 
 # Keep the canonical disc-derived guarded VU1 source current during incremental
 # Ninja builds; custom VU1 generator directories remain entirely user-owned.

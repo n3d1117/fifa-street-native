@@ -56,7 +56,7 @@ CMAKE = ROOT / "tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 CTEST = CMAKE.with_name("ctest")
 ELF = ROOT / "extracted/disc/SLES_503.50"
 GEN_CONFIG = ROOT / "config/SLES-50350.symbolmap-entry.toml"
-RECOMP_BIN = ROOT / "build/recompiler/ps2recomp/ps2xRecomp/ps2_recomp"
+RECOMP_BIN = ROOT / "build/game-metal/ps2recomp/ps2xRecomp/ps2_recomp"
 STAMP = ROOT / "build/generate.stamp"
 ERROR_RE = re.compile(r"error:|\bFAILED\b|\*\*\*Failed|Traceback|fatal error|^FAIL|failed:|Errors? while running", re.I)
 
@@ -163,7 +163,8 @@ def configured(preset, build_dir):
     return (ROOT / build_dir / "CMakeCache.txt").is_file()
 
 
-BUILD_TREES = ["build/game-metal", "build/tests", "build/recompiler"]
+BUILD_TREES = ["build/game-metal"]
+LEGACY_TREES = ["build/tests", "build/recompiler", "build/_deps"]  # pre-5c separate trees
 
 
 def stale_trees():
@@ -182,6 +183,10 @@ def stale_trees():
 
 
 def check_trees(run, reconfigure):
+    for tree in LEGACY_TREES:
+        if (ROOT / tree).exists():
+            run.say(f"removing retired build tree {tree}")
+            shutil.rmtree(ROOT / tree)
     stale = stale_trees()
     if not stale:
         return
@@ -193,9 +198,15 @@ def check_trees(run, reconfigure):
         shutil.rmtree(ROOT / tree)
 
 
-def cmake_build(run, preset, build_dir):
-    if not configured(preset, build_dir):
-        run.must([cmake(), "--preset", preset], f"configure {preset}")
+def game_configured():
+    """True when the cached configure saw the generated game sources."""
+    cache = ROOT / "build/game-metal/CMakeCache.txt"
+    return cache.is_file() and "TARZAN_GAME_CONFIGURED:INTERNAL=ON" in cache.read_text(errors="replace")
+
+
+def cmake_build(run, preset, build_dir="build/game-metal", reconfigure=False):
+    if reconfigure or not configured(preset, build_dir):
+        run.must([cmake(), "--preset", "release"], "configure")
     sys.path.insert(0, str(ROOT / "tools"))
     import jobs
     run.must([cmake(), "--build", "--preset", preset, "--parallel", jobs.jobs()], f"build {preset}")
@@ -280,7 +291,7 @@ def cmd_build(args):
         require(ELF, "./tz disc <iso>")
         require(GEN_CONFIG, "./tz disc <iso>")
         check_trees(run, args.reconfigure)
-        cmake_build(run, "recompiler", "build/recompiler")
+        cmake_build(run, "recompiler")
         want = generate_inputs_hash()
         have = STAMP.read_text().strip() if STAMP.is_file() else ""
         gen_dir = ROOT / "generated/SLES-50350-symbolmap-entry"
@@ -291,7 +302,7 @@ def cmd_build(args):
             tmp.write_text(want + "\n")
             os.replace(tmp, STAMP)
             note = "regenerated; " + run.last_message()
-        cmake_build(run, "release", "build/game-metal")
+        cmake_build(run, "release", reconfigure=not game_configured())
         return note
     return run_command("build", args, body)
 
@@ -307,7 +318,7 @@ def parse_replay(text):
 def cmd_test(args):
     def body(run):
         check_trees(run, False)
-        cmake_build(run, "tests", "build/tests")
+        cmake_build(run, "tests")
         rc = run.sh([str(CTEST), "--preset", "tests"])
         text = run.log_path.read_text(errors="replace")
         m = re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", text)

@@ -33,7 +33,7 @@ from typing import Dict, Tuple
 
 ROOT = Path(os.environ.get("TARZAN_ROOT") or Path(__file__).resolve().parents[1])
 DEFAULT_CONFIG = ROOT / "config/SLES-50350.symbolmap-entry.toml"
-DEFAULT_COMPILER = ROOT / "build/recompiler/ps2recomp/ps2xRecomp/ps2_recomp"
+DEFAULT_COMPILER = ROOT / "build/game-metal/ps2recomp/ps2xRecomp/ps2_recomp"
 INVENTORY = ROOT / "build/generate-inventory.json"
 
 

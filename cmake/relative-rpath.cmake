@@ -12,7 +12,7 @@ endfunction()
 
 function(tarzan_apply_relative_rpaths)
     set(_dirs "${TARZAN_LLVM}/lib")
-    if(TARZAN_BUILD_GAME)
+    if(TARZAN_GAME_READY)
         list(APPEND _dirs "${TARZAN_ROOT}/build/metal-bridge/pcsx2/pcsx2-gs-bridge")
     endif()
     tarzan_collect_targets("${CMAKE_SOURCE_DIR}" _all)
