@@ -5,7 +5,7 @@ README.md covers setup. This file covers working here. Mechanisms and constants:
 
 ## Hard rules
 
-1. **Bring your own disc.** Never commit disc images, extracted files, generated code, symbol maps, binaries, build products, captures, saves or logs. Enable the pre-commit hook once per clone: `git config core.hooksPath .githooks`.
+1. **Bring your own disc.** Never commit disc images, extracted files, generated code, symbol maps, binaries, build products, captures, saves or logs.
 2. **Preserve PS2 semantics.**
    - No fast-math, no FP contraction, no reordering of guest float math. The per-file flags in `CMakeLists.txt` are load-bearing.
    - Never change guest clocks or speed the game up to raise FPS.

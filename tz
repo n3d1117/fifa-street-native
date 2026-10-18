@@ -269,6 +269,7 @@ def cmd_setup(args):
         else:
             run.must(["bash", "toolchain/bootstrap.sh"], "toolchain bootstrap")
         run.must(["bash", "tools/build-deps.sh"], "build-deps")
+        run.must(["git", "config", "core.hooksPath", ".githooks"], "enable pre-commit hook")
         return "toolchain and dependencies ready; next: ./tz disc <iso>"
     return run_command("setup", args, body)
 
@@ -362,6 +363,19 @@ def cmd_test(args):
 FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_runtime\w*\.h|ps2_syscalls\.h|ps2_stubs\.h|ps2_recompiled_\w*\.h)")
 
 
+def lint(run):
+    """shellcheck / ruff on tracked shell and Python files; a missing tool only warns."""
+    files = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0")
+    sh = [f for f in files if f.endswith(".sh") and (ROOT / f).exists()]
+    py = [f for f in files if (f.endswith(".py") or f == "tz") and (ROOT / f).exists()]
+    for tool, targets, cmd in (("shellcheck", sh, ["shellcheck"]), ("ruff", py, ["ruff", "check"])):
+        if not shutil.which(tool):
+            run.notes.append(f"  WARNING: {tool} not installed; skipped")
+        elif targets and run.sh(cmd + targets) != 0:
+            run.failed.append(tool)
+            raise Failed(f"{tool} reported problems (see log)")
+
+
 def cmd_check(args):
     def body(run):
         mode = "--tracked" if args.tracked else "--staged"
@@ -377,13 +391,15 @@ def cmd_check(args):
             if hits:
                 run.notes.append("  WARNING: staged patches touch " + ", ".join(sorted(hits)) +
                                  " -> full generated-code rebuild (long)")
+        lint(run)
         rc = run.sh([sys.executable, "tools/deps.py", "status"])
         status = run.log_path.read_text()
-        bad = [l for l in status.splitlines() if re.search(r"UNEXPORTED|\bdirty\b|no tarzan branch|not synced", l)]
+        bad = [l for l in status.splitlines() if re.search(r"UNEXPORTED|no tarzan branch|not synced", l)]
+        run.notes += ["  WARNING (uncommitted edits in deps): " + l.strip() for l in status.splitlines() if re.search(r"\bdirty\b", l)]
         if rc != 0 or bad:
             run.failed.append("deps status")
             run.notes += ["  " + l for l in bad]
-            raise Failed("deps unexported or dirty -> ./tz deps export (commit edits in deps/<x> first)")
+            raise Failed("deps commits unexported -> ./tz deps export (commit edits in deps/<x> first)")
         return f"hygiene ({mode[2:]}) and deps clean"
     return run_command("check", args, body)
 

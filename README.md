@@ -28,7 +28,7 @@ Details: [docs/STATUS.md](docs/STATUS.md).
 ```sh
 git clone https://github.com/n3d1117/tarzan-freeride-native.git
 cd tarzan-freeride-native
-./tz setup                      # upstream checkouts (deps.lock + patches/), Python venv, toolchain, FFmpeg/SDL3/PCSX2 deps (once)
+./tz setup                      # upstream checkouts (deps.lock + patches/), Python venv, toolchain, FFmpeg/SDL3/PCSX2 deps, pre-commit hook (once)
 ./tz disc ~/path/to/Tarzan.iso  # verify and extract your disc, derive symbols and config
 ./tz build                      # generate the game code and build build/game-metal
 ./tz test                       # optional: quick test tier (no disc needed)
