@@ -55,6 +55,17 @@ if(TARZAN_BUILD_GAME)
     target_link_libraries(tarzanMetalHost PRIVATE "${TARZAN_SOUNDTOUCH_LIBRARY}")
 endif()
 
+if(NOT TARZAN_BUILD_GAME)
+    # Tests compile the shipped runtime configuration; see test-metal-seam.cpp.
+    target_compile_definitions(ps2_runtime PUBLIC TARZAN_USE_METAL=1)
+    add_library(tarzanTestMetalSeam STATIC "${CMAKE_CURRENT_SOURCE_DIR}/test-metal-seam.cpp")
+    target_include_directories(tarzanTestMetalSeam PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(tarzanTestMetalSeam PRIVATE cxx_std_20)
+    target_link_libraries(ps2_runtime PUBLIC tarzanTestMetalSeam)
+    set_property(SOURCE "${TARZAN_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/ps2_pad.cpp"
+        TARGET_DIRECTORY ps2_runtime APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+
 add_executable(tarzanAudioStretcherTest
     "${TARZAN_ROOT}/deps/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/audio-stretcher-test.cpp")

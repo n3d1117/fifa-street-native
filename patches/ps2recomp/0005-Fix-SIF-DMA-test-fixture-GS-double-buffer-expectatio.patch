@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 15:38:16 +0200
+Subject: [PATCH 5/5] Fix SIF DMA test fixture, GS double-buffer expectations
+ and Metal-config tests
+
+
+diff --git a/ps2xTest/src/ps2_gs_tests.cpp b/ps2xTest/src/ps2_gs_tests.cpp
+index 1907bdc919f846aceb28485680b51bf374eb93ee..207814e656c2af15c47b0d9afb0ac9a0dc6147bc 100644
+--- a/ps2xTest/src/ps2_gs_tests.cpp
++++ b/ps2xTest/src/ps2_gs_tests.cpp
+@@ -636,6 +636,17 @@ void register_ps2_gs_tests()
+             constexpr uint32_t kXYOffset1Offset = kDraw01Offset + 0x20u;
+             constexpr uint32_t kXYOffset1AddrOffset = kDraw01Offset + 0x28u;
+ 
++            // The stub models libgraph, whose display window depends on the global
++            // GParam: pin interlaced NTSC frame mode so the test is order independent.
++            // 640 wide gives MAGH=3 (DW = 640 * 4 - 1) and a frame-mode interlaced
++            // DH of 448 * 2 - 1.
++            R5900Context resetCtx{};
++            setRegU32(resetCtx, 4, 0u);
++            setRegU32(resetCtx, 5, 1u);
++            setRegU32(resetCtx, 6, 2u);
++            setRegU32(resetCtx, 7, 1u);
++            ps2_stubs::sceGsResetGraph(rdram.data(), &resetCtx, &runtime);
++
+             R5900Context ctx{};
+             setRegU32(ctx, 4, kEnvAddr);
+             setRegU32(ctx, 5, 0u);
+@@ -658,8 +669,8 @@ void register_ps2_gs_tests()
+             std::memcpy(&xyoffset10Addr, rdram.data() + kEnvAddr + kXYOffset1AddrOffset, sizeof(xyoffset10Addr));
+ 
+             t.Equals((dispfb0 >> 9) & 0x3Fu, 10ull, "dbuff display env should seed FBW from width");
+-            t.Equals((display0 >> 32) & 0x0FFFull, 639ull, "dbuff display env should seed DW from width");
+-            t.Equals((display0 >> 44) & 0x07FFull, 447ull, "dbuff display env should seed DH from height");
++            t.Equals((display0 >> 32) & 0x0FFFull, 2559ull, "dbuff display env should seed DW from width at MAGH=3");
++            t.Equals((display0 >> 44) & 0x07FFull, 895ull, "dbuff display env should seed DH from interlaced frame height");
+             t.Equals((frame10 >> 16) & 0x3Full, 10ull, "dbuff draw env should seed FRAME FBW from width");
+             t.Equals(frame10Addr, 0x4Cull, "dbuff draw env should seed FRAME_1 register id");
+             t.Equals(xyoffset10 & 0xFFFFull, 0x6C00ull, "dbuff draw env should seed OFX in 12.4 fixed point");
+@@ -680,7 +691,7 @@ void register_ps2_gs_tests()
+ 
+             t.Equals(runtime.memory().gs().dispfb1 & 0x1FFull, 151ull,
+                      "sceGsSwapDBuffDc should program GS to the selected display page");
+-            t.Equals((runtime.memory().gs().display1 >> 32) & 0x0FFFull, 639ull,
++            t.Equals((runtime.memory().gs().display1 >> 32) & 0x0FFFull, 2559ull,
+                      "sceGsSwapDBuffDc should preserve the display width from the seeded env");
+         });
+ 
+@@ -4176,6 +4187,9 @@ void register_ps2_gs_tests()
+             expectGuestHeapReusable(t, runtime,
+                                     "sceGsExecStoreImage should free its temporary GIF packet");
+ 
++#if !defined(TARZAN_USE_METAL)
++            // With the native Metal GS, VRAM lives in the GPU bridge and the
++            // pixel roundtrip is covered by the host smoke tests, not here.
+             bool roundtripOk = true;
+             size_t mismatchIndex = 0u;
+             for (size_t i = 0; i < sizeof(pixels); ++i)
+@@ -4194,6 +4208,7 @@ void register_ps2_gs_tests()
+                        ", got " + std::to_string(rdram[kDstAddr + mismatchIndex]) +
+                        ", expected " + std::to_string(pixels[mismatchIndex]) + ")");
+             }
++#endif
+         });
+ 
+         tc.Run("sceGifPkRefLoadImage seeds A+D GIFtag nloop once (no double-count)", [](TestCase &t)
+diff --git a/ps2xTest/src/ps2_memory_tests.cpp b/ps2xTest/src/ps2_memory_tests.cpp
+index 79e92985ddee46a4765763e32a33931d71b1a70c..24959ff7308df8d09ee0682e1cf651374f8c26eb 100644
+--- a/ps2xTest/src/ps2_memory_tests.cpp
++++ b/ps2xTest/src/ps2_memory_tests.cpp
+@@ -1712,6 +1712,14 @@ void register_ps2_memory_tests()
+             t.Equals(captured.size(), static_cast<size_t>(2u), "initial GIFtag and synthesized image continuation should be forwarded");
+             if (captured.size() >= 2u)
+             {
++#if defined(TARZAN_USE_METAL)
++                // The Metal GS bridge retains the open IMAGE tag, so the
++                // continuation is forwarded as the raw payload without a tag.
++                t.Equals(captured[1].size(), static_cast<size_t>(32u), "continuation packet should contain only the two payload QWC");
++                bool payloadMatches = captured[1].size() == 32u;
++                for (uint32_t i = 0u; payloadMatches && i < 32u; ++i)
++                    payloadMatches = captured[1][i] == static_cast<uint8_t>(0x80u + i);
++#else
+                 uint64_t continuationTag = 0u;
+                 std::memcpy(&continuationTag, captured[1].data(), sizeof(continuationTag));
+                 t.Equals(static_cast<uint32_t>(continuationTag & 0x7FFFu), 2u, "continuation IMAGE tag should carry both QWC");
+@@ -1720,6 +1728,7 @@ void register_ps2_memory_tests()
+                 bool payloadMatches = captured[1].size() == 48u;
+                 for (uint32_t i = 0u; payloadMatches && i < 32u; ++i)
+                     payloadMatches = captured[1][16u + i] == static_cast<uint8_t>(0x80u + i);
++#endif
+                 t.IsTrue(payloadMatches, "continued IMAGE bytes should come from DIRECT payload, not VIF commands");
+             }
+         });
+diff --git a/ps2xTest/src/ps2_sif_dma_tests.cpp b/ps2xTest/src/ps2_sif_dma_tests.cpp
+index aace83cbd6c44ea7c810236c563efad179270ea4..3503002414ce0325fc4fdf14c34e0d94c0ed834f 100644
+--- a/ps2xTest/src/ps2_sif_dma_tests.cpp
++++ b/ps2xTest/src/ps2_sif_dma_tests.cpp
+@@ -31,6 +31,10 @@ namespace
+         {
+             ps2_stubs::resetSifState();
+             std::memset(&ctx, 0, sizeof(ctx));
++            // SIF DMA helpers call into the EE scheduler, which asserts that the
++            // caller is its executor thread. Bind it like a guest syscall would.
++            runtime.eeScheduler().reset(rdram.data(), ctx);
++            runtime.eeScheduler().bindMainContextForSyscall(ctx, rdram.data());
+         }
+     };
+ 
