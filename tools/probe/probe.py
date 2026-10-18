@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import select
 import signal
 import struct
 import subprocess
@@ -161,6 +162,11 @@ def crash_from(text, returncode, killed_by_us):
     sym = symbols.symbol_at(pc) if pc is not None else None
     return {"signal": sig or ("terminate" if term else "fault"),
             "pc": f"0x{pc:x}" if pc is not None else None, "symbol": sym[0] if sym else None}
+
+
+def child_exited(exit_watch):
+    """Check without reaping so wait4 can collect this child's resource usage."""
+    return bool(exit_watch.control(None, 0, 0))
 
 
 def sample_game_thread(pid, path):
@@ -313,6 +319,10 @@ def main():
         logf.write(f"[probe] seeded {card_files} memory-card files from fixture into {user_dir / 'memcards'}\n".encode())
         logf.flush()
     proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT)
+    exit_watch = select.kqueue()
+    exit_watch.control([select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
+                                      flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+                                      fflags=select.KQ_NOTE_EXIT)], 0, 0)
     cap = Capture(out)
 
     def log_text():
@@ -339,7 +349,7 @@ def main():
     next_ocr, profiled = 0.0, None
     route_i, route_delay, seen_len = 0, 0.0, 0
     try:
-        while time.monotonic() < deadline and proc.poll() is None:
+        while time.monotonic() < deadline and not child_exited(exit_watch):
             now = time.monotonic() - started
             text_now = log_text()
             if not args.keep_running_on_failure and any(m in text_now[seen_len:] for m in FAULT_MARKERS):
@@ -374,27 +384,38 @@ def main():
                 keys.append({"second": route[route_i][0], "elapsed": round(time.monotonic() - started, 1), "rc": rc})
                 route_i += 1
             time.sleep(0.2)
-        if route and route_i == len(route) and proc.poll() is None and not fault_stop:
+        if route and route_i == len(route) and not child_exited(exit_watch) and not fault_stop:
             cap.grab(proc.pid)
     finally:
         quit_ok = None
-        if args.quit_at_end and proc.poll() is None:
+        if args.quit_at_end and not child_exited(exit_watch):
             subprocess.run(["osascript", "-e", 'tell application id "org.rrv.tarzan-freeride-ps2" to quit'],
                            capture_output=True, timeout=30)  # the app cancels terminate and shuts down itself
             try:
-                proc.wait(timeout=30)
-                quit_ok = proc.returncode == 0
+                end = time.monotonic() + 30
+                while time.monotonic() < end and not child_exited(exit_watch):
+                    time.sleep(0.01)
+                quit_ok = child_exited(exit_watch)
+                if not quit_ok:
+                    notes.append("quit did not exit within 30 s")
             except subprocess.TimeoutExpired:
                 quit_ok = False
                 notes.append("quit did not exit within 30 s")
-        if proc.poll() is None:
+        if not child_exited(exit_watch):
             killed_by_us = True
             proc.send_signal(signal.SIGTERM)  # the GS dependency can swallow SIGTERM: escalate
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
+            end = time.monotonic() + 2
+            while time.monotonic() < end and not child_exited(exit_watch):
+                time.sleep(0.01)
+            if not child_exited(exit_watch):
                 proc.kill()
-                proc.wait()
+        _, status, usage = os.wait4(proc.pid, 0)
+        proc.returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)
+        if args.quit_at_end and quit_ok:
+            quit_ok = proc.returncode == 0
+        exit_watch.close()
+        cpu_user_s = round(usage.ru_utime, 3)
+        cpu_sys_s = round(usage.ru_stime, 3)
         logf.close()
         if fifo_fd is not None:
             os.close(fifo_fd)
@@ -426,7 +447,8 @@ def main():
     target = "first-mission" if route else "title"
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
-        "fps_dispfb2": metrics.get("fps_dispfb2"), "presents_per_s": None,
+        "fps_dispfb2": metrics.get("fps_dispfb2"),
+        "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
         "audio_boundary_underruns": metrics.get("audio_boundary_underruns"),
         "audio_overruns": metrics.get("audio_overruns"), "vu_native_fail": metrics.get("vu_native_fail"),

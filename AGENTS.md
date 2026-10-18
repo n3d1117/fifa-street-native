@@ -34,7 +34,7 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | `./tz deps [sync\|export\|status]` | upstream checkouts and our patch stack |
 | `./tz disc <iso>`, `./tz setup`, `./tz package` | disc import, one-time setup, app bundle |
 
-Judge a run by its summary (`reached`, `fps_dispfb2`, `vu_fallbacks`, `audio_underruns`, `crash`). Open the log only when the summary is wrong. Run `./tz run` on a quiet machine; it waits up to 60 s for one.
+Judge a run by its summary (`reached`, `fps_dispfb2`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). CPU seconds are for the game child process only. Open the log only when the summary is wrong. Run `./tz run` on a quiet machine; it waits up to 60 s for one.
 
 | You changed | Run before committing |
 |---|---|
