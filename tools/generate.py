@@ -185,17 +185,17 @@ def patch_camera(text: str) -> str:
     if text.count(FOV_MARK) == 0:
         old = """    // 0x369a7c: 0x4614a843  div.s       $f1, $f21, $f20
     ctx->pc = 0x369a7cu;
-    { const float divFs = ctx->f[21]; const float divFt = ctx->f[20]; uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) { ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; const uint32_t divResultBits = ((divFsBits ^ divFtBits) & 0x80000000u) | 0x7f7fffffu; std::memcpy(&ctx->f[1], &divResultBits, sizeof(divResultBits)); } else ctx->f[1] = divFs / divFt; }"""
+    { uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &ctx->f[21], sizeof(divFsBits)); std::memcpy(&divFtBits, &ctx->f[20], sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; ctx->f[1] = FPU_DIV_S(ctx->f[21], ctx->f[20]); }"""
         new = """    // 0x369a7c: 0x4614a843  div.s       $f1, $f21, $f20
     ctx->pc = 0x369a7cu;
     // TARZAN_EXPERIMENT_HD_FOV: upstream PAL-M Y-FOV stub, opt-in.
     if (tarzan_experiments_hd_widescreen()) {
-        { const float divFs = ctx->f[21]; const float divFt = ctx->f[20]; uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) { ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; const uint32_t divResultBits = ((divFsBits ^ divFtBits) & 0x80000000u) | 0x7f7fffffu; std::memcpy(&ctx->f[1], &divResultBits, sizeof(divResultBits)); } else ctx->f[1] = divFs / divFt; }
+        { uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &ctx->f[21], sizeof(divFsBits)); std::memcpy(&divFtBits, &ctx->f[20], sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; ctx->f[1] = FPU_DIV_S(ctx->f[21], ctx->f[20]); }
         SET_GPR_U32(ctx, 1, 0x3f400000u);
         { const uint32_t bits = GPR_U32(ctx, 1); std::memcpy(&ctx->f[30], &bits, sizeof(bits)); }
         ctx->f[1] = FPU_MUL_S(ctx->f[1], ctx->f[30]);
     } else {
-        { const float divFs = ctx->f[21]; const float divFt = ctx->f[20]; uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) { ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; const uint32_t divResultBits = ((divFsBits ^ divFtBits) & 0x80000000u) | 0x7f7fffffu; std::memcpy(&ctx->f[1], &divResultBits, sizeof(divResultBits)); } else ctx->f[1] = divFs / divFt; }
+        { uint32_t divFsBits; uint32_t divFtBits; std::memcpy(&divFsBits, &ctx->f[21], sizeof(divFsBits)); std::memcpy(&divFtBits, &ctx->f[20], sizeof(divFtBits)); if ((divFtBits & 0x7f800000u) == 0) ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; ctx->f[1] = FPU_DIV_S(ctx->f[21], ctx->f[20]); }
     }"""
         text = replace_once(text, old, new, "camera FOV at PC 0x369a7c")
     elif text.count(FOV_MARK) != 1:

@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 17:00:43 +0200
+Subject: [PATCH 11/11] Keep DIV.S flag handling with literal FPU_DIV_S
+ emission for upstream tests
+
+
+diff --git a/ps2xRecomp/src/lib/fpu_translator.cpp b/ps2xRecomp/src/lib/fpu_translator.cpp
+index 801340b58874d9b7cfb043927dd0853f5c223fba..3fe00546a5eac8c779abf218de6600f5341fcef1 100644
+--- a/ps2xRecomp/src/lib/fpu_translator.cpp
++++ b/ps2xRecomp/src/lib/fpu_translator.cpp
+@@ -55,16 +55,15 @@ namespace ps2recomp
+             case COP1_S_DIV:
+                 // R5900 DIV.S: a zero or denormal divisor sets the divide-by-zero (or invalid for 0/0)
+                 // cause+sticky flags; the quotient comes from FPU_DIV_S (PS2 float semantics, +-0x7FFFFFFF).
+-                // Capture both operands before writing Fd so Fs/Ft/Fd aliases are safe.
++                // Fd is written last, so Fs/Ft/Fd aliases are safe.
+                 return fmt::format(
+-                    "{{ const float divFs = ctx->f[{}]; const float divFt = ctx->f[{}]; "
+-                    "uint32_t divFsBits; uint32_t divFtBits; "
+-                    "std::memcpy(&divFsBits, &divFs, sizeof(divFsBits)); "
+-                    "std::memcpy(&divFtBits, &divFt, sizeof(divFtBits)); "
++                    "{{ uint32_t divFsBits; uint32_t divFtBits; "
++                    "std::memcpy(&divFsBits, &ctx->f[{}], sizeof(divFsBits)); "
++                    "std::memcpy(&divFtBits, &ctx->f[{}], sizeof(divFtBits)); "
+                     "if ((divFtBits & 0x7f800000u) == 0) "
+                     "ctx->fcr31 |= ((divFsBits & 0x7f800000u) == 0) ? 0x00020040u : 0x00010020u; "
+-                    "ctx->f[{}] = FPU_DIV_S(divFs, divFt); }}",
+-                    fs, ft, fd);
++                    "ctx->f[{}] = FPU_DIV_S(ctx->f[{}], ctx->f[{}]); }}",
++                    fs, ft, fd, fs, ft);
+             case COP1_S_SQRT:
+                 // R5900 SQRT.S reads Ft (not Fs) and takes sqrt(|Ft|); FPU_SQRT_S applies the PS2 float rules.
+                 return fmt::format("ctx->f[{}] = FPU_SQRT_S(fabsf(ctx->f[{}]));", fd, ft);
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index 385b40cc5b0a69e25f1b84d8d21f26a25cca22cf..c0bdd1ae7b432571c6d5bf252dc495c1969a15fb 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -1093,9 +1093,10 @@ void register_code_generator_tests()
+                      "DIV.S must treat zero and denormal Ft as zero");
+             t.IsTrue(generated.find("0x00020040u : 0x00010020u") != std::string::npos,
+                      "DIV.S must set invalid (0/0) or divide-by-zero cause and sticky flags");
+-            t.IsTrue(generated.find("const float divFs = ctx->f[4]; const float divFt = ctx->f[5];") != std::string::npos,
+-                     "DIV.S must capture sources before writing an aliased destination");
+-            t.IsTrue(generated.find("ctx->f[5] = FPU_DIV_S(divFs, divFt)") != std::string::npos,
++            t.IsTrue(generated.find("std::memcpy(&divFsBits, &ctx->f[4]") != std::string::npos &&
++                         generated.find("std::memcpy(&divFtBits, &ctx->f[5]") != std::string::npos,
++                     "DIV.S must read the flag sources before writing an aliased destination");
++            t.IsTrue(generated.find("ctx->f[5] = FPU_DIV_S(ctx->f[4], ctx->f[5])") != std::string::npos,
+                      "DIV.S quotient (including x/0 saturation) must come from FPU_DIV_S");
+             t.IsTrue(generated.find("copysignf(INFINITY") == std::string::npos,
+                      "DIV.S must not emit IEEE infinity for a zero divisor");
