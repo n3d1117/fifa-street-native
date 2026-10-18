@@ -66,6 +66,7 @@
 !/tools/disc.py
 !/tools/generate.py
 !/tools/where.py
+!/tools/jobs.py
 !/tools/check-repo-hygiene.py
 !/tools/probe/
 /tools/probe/*
