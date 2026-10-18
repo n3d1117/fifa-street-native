@@ -17,6 +17,7 @@
 !/tools/
 !/toolchain/
 !/requirements.txt
+!/tz
 
 # Native host source, headers, and build descriptions; CMake modules.
 /cmake/*
@@ -71,23 +72,25 @@
 !/tools/deps.py
 !/tools/build-deps.sh
 !/tools/prepare-metal-bridge.py
-!/tools/vu1recomp/
-/tools/vu1recomp/*
-!/tools/vu1recomp/*.py
-!/tools/vu1recomp/LICENSE
-!/tools/vu1recomp/README.md
-!/tools/vu1recomp/test/
-/tools/vu1recomp/test/**
-!/tools/vu1recomp/test/**/
-!/tools/vu1recomp/test/**/*.py
-!/tools/vu1recomp/test/**/*.sh
-!/tools/vu1recomp/test/**/*.c
-!/tools/vu1recomp/test/**/*.cc
-!/tools/vu1recomp/test/**/*.cpp
-!/tools/vu1recomp/test/**/*.h
-!/tools/vu1recomp/test/**/*.hpp
-!/tools/vu1recomp/test/**/*.txt
-!/tools/vu1recomp/test/**/README.md
+!/tools/disc.py
+!/tools/generate.py
+!/tools/vu/
+/tools/vu/*
+!/tools/vu/*.py
+!/tools/vu/LICENSE
+!/tools/vu/README.md
+!/tools/vu/test/
+/tools/vu/test/**
+!/tools/vu/test/**/
+!/tools/vu/test/**/*.py
+!/tools/vu/test/**/*.sh
+!/tools/vu/test/**/*.c
+!/tools/vu/test/**/*.cc
+!/tools/vu/test/**/*.cpp
+!/tools/vu/test/**/*.h
+!/tools/vu/test/**/*.hpp
+!/tools/vu/test/**/*.txt
+!/tools/vu/test/**/README.md
 
 # Never publish game media, extracted data, generated code/maps, captures,
 # runtime state, build products, dependency caches, or local machine settings.

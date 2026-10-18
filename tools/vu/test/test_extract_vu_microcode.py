@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "extract-vu-microcode.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "extract-vu-microcode.py"
 SPEC = importlib.util.spec_from_file_location("extract_vu_microcode", SCRIPT)
 EXTRACTOR = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXTRACTOR)

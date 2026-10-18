@@ -17,7 +17,9 @@ enable_testing()
 
 if(NOT TARZAN_BUILD_GAME)
     add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
-    add_subdirectory(host)
+    if(TARGET ps2_runtime)
+        add_subdirectory(host)
+    endif()
     include("${TARZAN_ROOT}/cmake/ps2x-tests.cmake")
     include("${TARZAN_ROOT}/cmake/relative-rpath.cmake")
     cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL tarzan_apply_relative_rpaths)
@@ -47,7 +49,7 @@ set(PS2X_ENABLE_RUNNER_UNITY_BUILD ON CACHE BOOL "" FORCE)
 set(PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE 32 CACHE STRING "" FORCE)
 
 set(PS2X_VU0_CATALOG_DIR "${TARZAN_ROOT}/runtime/vu0-catalog" CACHE PATH "Captured VU0 catalogs")
-set(PS2X_VU0_GENERATOR "${TARZAN_ROOT}/tools/vu1recomp/vu1recomp.py" CACHE FILEPATH "VU static generator")
+set(PS2X_VU0_GENERATOR "${TARZAN_ROOT}/tools/vu/vu1recomp.py" CACHE FILEPATH "VU static generator" FORCE)
 set(PS2X_VU0GEN_DIR "${TARZAN_ROOT}/generated/vu0-native" CACHE PATH "Native VU0 source directory")
 set(PS2X_VU1GEN_DIR "${TARZAN_ROOT}/generated/vu1-disc-native" CACHE PATH "Disc-derived guarded VU1 source directory")
 add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
@@ -60,13 +62,13 @@ if(TARZAN_VU1GEN_SELECTED STREQUAL TARZAN_VU1GEN_CANONICAL)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     set(TARZAN_VU1GEN_STAMP "${CMAKE_CURRENT_BINARY_DIR}/vu1-disc-native-generated.stamp")
     add_custom_command(OUTPUT "${TARZAN_VU1GEN_STAMP}"
-        COMMAND "${Python3_EXECUTABLE}" "${TARZAN_ROOT}/scripts/configure-local.py" --vu1-only
+        COMMAND "${Python3_EXECUTABLE}" "${TARZAN_ROOT}/tools/disc.py" --vu1-only
         COMMAND "${CMAKE_COMMAND}" -E touch "${TARZAN_VU1GEN_STAMP}"
         DEPENDS "${TARZAN_ROOT}/extracted/disc/SLES_503.50"
-                "${TARZAN_ROOT}/scripts/configure-local.py"
-                "${TARZAN_ROOT}/scripts/extract-vu-microcode.py"
-                "${TARZAN_ROOT}/tools/vu1recomp/vu1recomp.py"
-                "${TARZAN_ROOT}/tools/vu1recomp/vu1decode.py"
+                "${TARZAN_ROOT}/tools/disc.py"
+                "${TARZAN_ROOT}/tools/vu/extract-vu-microcode.py"
+                "${TARZAN_ROOT}/tools/vu/vu1recomp.py"
+                "${TARZAN_ROOT}/tools/vu/vu1decode.py"
         BYPRODUCTS "${PS2X_VU1GEN_DIR}/vu1rec_guarded.cpp"
         VERBATIM)
     add_custom_target(tarzan_generate_disc_vu1 DEPENDS "${TARZAN_VU1GEN_STAMP}")

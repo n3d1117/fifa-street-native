@@ -10,7 +10,7 @@
 //
 // Usage: vu1_replay <catalog-dir> <snapshot-dir>[,<dir>...] [--fuzz N] [--no-ftz] [--live-exit mcs] [--poison N]
 //        vu1_replay <catalog-dir> <snapshot-dir> --dump-jr-targets <output-file>
-// Build: tools/vu1recomp/test/build.sh   (links against the local runtime sources
+// Build: tools/vu/test/build.sh   (links against the local runtime sources
 //        and the generated work/vu1gen/*.cpp; nothing disc-derived is in git)
 
 #include "runtime/ps2_memory.h"

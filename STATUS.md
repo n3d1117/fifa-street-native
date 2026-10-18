@@ -32,8 +32,8 @@ Upstream revisions are pinned in `deps.lock`; our changes to them are a
 builds `deps/<name>` (ignored local checkouts) from them and `export` writes
 commits made there back to `patches/`.
 
-Local sequence: `python3 tools/deps.py sync`; supply a supported PAL disc and run
-`extract-disc.py`; run `configure-local.py` to derive the symbol map/config;
+Local sequence: `./tz setup`; supply a supported PAL disc with `./tz disc <iso>` (derives
+the symbol map/config); then `./tz build` and `./tz test`. Older steps: 
 prepare the local toolchain under `tools/build` and dependencies; build the Metal
 bridge and game;
 generate the icon with `make-icon.sh`; package with `package-ps2-app.py`.

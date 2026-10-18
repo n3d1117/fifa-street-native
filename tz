@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""tz: thin sequencer over the repo's real commands. Run from anywhere in the repo.
+
+  tz setup                 deps sync, venv, toolchain bootstrap, tools/build-deps.sh
+  tz deps [sync|export|status]
+  tz disc <iso>            verify SHA-1s, extract, symbol map, config (tools/disc.py)
+  tz build                 recompiler if stale, generate if inputs changed, release build
+  tz test                  ctest --preset tests + VU1 replay corpus
+  tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
+  tz run | package | where   not yet implemented (Phase 5b)
+
+Full output goes to build/logs/<cmd>-<UTC>.log; -v streams it. Exit codes:
+0 pass, 1 check failed, 2 missing prerequisite (the message names the fix).
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def resolve_root():
+    root = Path(os.path.realpath(__file__)).parent
+    cache = root / "build/game-metal/CMakeCache.txt"
+    if cache.is_file():
+        for line in cache.read_text(errors="replace").splitlines():
+            if line.startswith("CMAKE_HOME_DIRECTORY"):
+                cached = Path(line.split("=", 1)[1])
+                if str(cached).casefold() == str(root).casefold():
+                    return cached
+                break
+    return root
+
+
+ROOT = resolve_root()
+os.chdir(ROOT)
+os.environ["TARZAN_ROOT"] = str(ROOT)
+CMAKE = ROOT / "tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
+CTEST = CMAKE.with_name("ctest")
+ELF = ROOT / "extracted/disc/SLES_503.50"
+GEN_CONFIG = ROOT / "config/SLES-50350.symbolmap-entry.toml"
+RECOMP_BIN = ROOT / "build/recompiler/ps2recomp/ps2xRecomp/ps2_recomp"
+STAMP = ROOT / "build/generate.stamp"
+ERROR_RE = re.compile(r"error:|\bFAILED\b|\*\*\*Failed|Traceback|fatal error|^FAIL|failed:|Errors? while running", re.I)
+
+
+class Missing(Exception):
+    """Missing prerequisite -> exit 2."""
+
+
+class Failed(Exception):
+    """Check failed -> exit 1."""
+
+
+class Run:
+    """One tz command: owns the log, the summary and build/last-run.json."""
+
+    def __init__(self, name, verbose):
+        self.name, self.verbose = name, verbose
+        self.start = time.monotonic()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.log_path = ROOT / "build/logs" / f"{name}-{stamp}.log"
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log = self.log_path.open("w")
+        self.failed = []
+        self.notes = []
+
+    def say(self, text):
+        self.log.write(text + "\n")
+        self.log.flush()
+        if self.verbose:
+            print(text, flush=True)
+
+    def sh(self, cmd, **kw):
+        """Run cmd, teeing output to the log; returns exit code."""
+        self.say("$ " + " ".join(str(c) for c in cmd))
+        proc = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, errors="replace", **kw)
+        for line in proc.stdout:
+            self.log.write(line)
+            if self.verbose:
+                sys.stdout.write(line)
+        proc.wait()
+        self.log.flush()
+        return proc.returncode
+
+    def must(self, cmd, label=None, **kw):
+        rc = self.sh(cmd, **kw)
+        if rc == 2 and "tools/disc.py" in " ".join(str(c) for c in cmd):
+            raise Missing(self.last_message() or "missing prerequisite")
+        if rc != 0:
+            self.failed.append(label or str(cmd[0]).split("/")[-1])
+            raise Failed(f"{label or cmd[0]} exited {rc}")
+
+    def last_message(self):
+        lines = self.log_path.read_text(errors="replace").strip().splitlines()
+        return lines[-1] if lines else ""
+
+    def finish(self, code, message=None):
+        elapsed = time.monotonic() - self.start
+        self.log.close()
+        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+        record = {"cmd": self.name, "exit": code, "duration_s": round(elapsed, 1), "failed": self.failed,
+                  "log": str(self.log_path.relative_to(ROOT)), "git_sha": sha}
+        tmp = ROOT / "build/last-run.json.tmp"
+        tmp.write_text(json.dumps(record, indent=2) + "\n")
+        os.replace(tmp, ROOT / "build/last-run.json")
+        word = "PASS" if code == 0 else "FAIL" if code == 1 else "MISSING"
+        print(f"{word} {self.name} {elapsed:.1f}s" + (f" - {message}" if message else ""))
+        for note in self.notes:
+            print(note)
+        if code == 1 and not self.verbose:
+            self.print_context()
+        print(f"log: {self.log_path.relative_to(ROOT)}")
+        return code
+
+    def print_context(self):
+        lines = self.log_path.read_text(errors="replace").splitlines()
+        for i, line in enumerate(lines):
+            if ERROR_RE.search(line):
+                for out in lines[max(0, i - 3):i + 17]:
+                    print("  " + out[:200])
+                return
+        for out in lines[-20:]:
+            print("  " + out[:200])
+
+
+def require(path, fix):
+    if not Path(path).exists():
+        raise Missing(f"{Path(path).relative_to(ROOT)} missing -> {fix}")
+
+
+def tool_python():
+    venv = ROOT / "tools/python/bin/python"
+    return str(venv) if venv.exists() else sys.executable
+
+
+def cmake():
+    require(CMAKE, "./tz setup")
+    return str(CMAKE)
+
+
+def configured(preset, build_dir):
+    return (ROOT / build_dir / "CMakeCache.txt").is_file()
+
+
+def cmake_build(run, preset, build_dir):
+    if not configured(preset, build_dir):
+        run.must([cmake(), "--preset", preset], f"configure {preset}")
+    run.must([cmake(), "--build", "--preset", preset], f"build {preset}")
+
+
+def sha256(path, h=None):
+    h = h or hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h
+
+
+def generate_inputs_hash():
+    h = hashlib.sha256()
+    for p in (ELF, ROOT / "config/SLES-50350.template.toml", GEN_CONFIG, ROOT / "config/SLES-50350.symbols-entry.csv",
+              RECOMP_BIN, ROOT / "tools/generate.py"):
+        h.update(p.name.encode())
+        sha256(p, h)
+    return h.hexdigest()
+
+
+def run_command(name, args, body):
+    run = Run(name, args.verbose)
+    try:
+        message = body(run)
+        return run.finish(0, message)
+    except Missing as e:
+        print(f"MISSING {name}: {e}")
+        run.log.close()
+        return 2
+    except Failed as e:
+        return run.finish(1, str(e))
+
+
+# ---- commands ---------------------------------------------------------------
+
+def cmd_deps(args):
+    sub = args.sub or "status"
+    py = sys.executable
+    run = Run("deps", args.verbose)
+    rc = run.sh([py, "tools/deps.py", sub])
+    out = run.log_path.read_text()
+    run.log.close()
+    print(out.split("\n", 1)[1].rstrip() if "\n" in out else out.rstrip())
+    return rc if rc in (0, 2) else 1
+
+
+def cmd_setup(args):
+    def body(run):
+        run.must([sys.executable, "tools/deps.py", "sync"], "deps sync")
+        py = tool_python()
+        probe = subprocess.run([py, "-c", "import pycdlib, capstone, elftools"], capture_output=True)
+        if probe.returncode != 0:
+            if not (ROOT / "tools/python/bin/python").exists():
+                run.must([sys.executable, "-m", "venv", "tools/python"], "venv")
+            run.must(["tools/python/bin/pip", "install", "-r", "requirements.txt"], "pip install")
+        if os.environ.get("TARZAN_LLVM") or (ROOT / "tools/build/llvm19").exists():
+            run.say("toolchain: present or TARZAN_LLVM set, skipping bootstrap")
+        else:
+            run.must(["bash", "toolchain/bootstrap.sh"], "toolchain bootstrap")
+        run.must(["bash", "tools/build-deps.sh"], "build-deps")
+        return "toolchain and dependencies ready; next: ./tz disc <iso>"
+    return run_command("setup", args, body)
+
+
+def cmd_disc(args):
+    def body(run):
+        if not args.iso:
+            raise Missing("usage: ./tz disc <path-to-your-iso> (bring your own disc)")
+        run.must([tool_python(), "tools/disc.py", args.iso], "disc")
+        return "disc verified, extracted and configured"
+    return run_command("disc", args, body)
+
+
+def cmd_build(args):
+    def body(run):
+        require(ELF, "./tz disc <iso>")
+        require(GEN_CONFIG, "./tz disc <iso>")
+        cmake_build(run, "recompiler", "build/recompiler")
+        want = generate_inputs_hash()
+        have = STAMP.read_text().strip() if STAMP.is_file() else ""
+        gen_dir = ROOT / "generated/SLES-50350-symbolmap-entry"
+        note = "generated code current"
+        if want != have or not gen_dir.is_dir():
+            run.must([tool_python(), "tools/generate.py"], "generate")
+            tmp = STAMP.with_suffix(".tmp")
+            tmp.write_text(want + "\n")
+            os.replace(tmp, STAMP)
+            note = "regenerated; " + run.last_message()
+        cmake_build(run, "release", "build/game-metal")
+        return note
+    return run_command("build", args, body)
+
+
+def parse_replay(text):
+    m = re.search(r"runs=(\d+) mismatch\(full\)=(\d+) mismatch\(fast\)=(\d+).*?skipped=(\d+)", text)
+    r = re.search(r"native-rejected=(\d+)", text)
+    if not m or not r:
+        return None
+    return int(m[1]), int(m[2]) + int(m[3]), int(r[1]), int(m[4])
+
+
+def cmd_test(args):
+    def body(run):
+        cmake_build(run, "tests", "build/tests")
+        rc = run.sh([str(CTEST), "--preset", "tests"])
+        text = run.log_path.read_text(errors="replace")
+        m = re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", text)
+        failed = re.findall(r"^\s*\d+ - (.+?) \(Failed\)|^\s*\d+ - (.+?) \((?:SEGFAULT|Subprocess aborted|Timeout|Exception)", text, re.M)
+        names = [a or b for a, b in failed]
+        summary = "ctest unparsed"
+        if m:
+            total, bad = int(m[3]), int(m[2])
+            summary = f"ctest {total - bad}/{total} passed"
+        if rc != 0:
+            run.failed += names or ["ctest"]
+            run.notes += [f"  failing: {n}" for n in names[:10]]
+            raise Failed(summary)
+        vu = ROOT / "generated/vu1-disc-native/vu1rec_guarded.cpp"
+        corpus = ROOT / "runtime/regression/vu1"
+        if vu.is_file() and (corpus / "catalog").is_dir():
+            env = dict(os.environ, PS2X_VU1GEN_DIR=str(vu.parent), PS2X_VU1TEST_OUT=str(ROOT / "build/vu1-replay"))
+            run.must(["bash", "tools/vu/test/build.sh"], "build vu1_replay", env=env)
+            dirs = [str(p) for p in sorted(corpus.glob("snapshots")) + sorted(corpus.glob("live-*/snapshots"))]
+            run.sh(["build/vu1-replay/vu1_replay", str(corpus / "catalog"), ",".join(dirs), "--guarded"])
+            result = parse_replay(run.log_path.read_text(errors="replace"))
+            if result is None:
+                run.failed.append("vu1_replay")
+                raise Failed(f"{summary}; vu1 replay produced no result")
+            runs, mismatches, rejected, skipped = result
+            if runs != 1106 or mismatches or rejected or skipped:
+                run.failed.append("vu1_replay")
+                raise Failed(f"{summary}; vu1 replay runs={runs} mismatch={mismatches} rejected={rejected} skipped={skipped}")
+            return f"{summary}; vu1 replay runs={runs} mismatch=0 rejected=0"
+        return f"{summary}; vu1 replay skipped (generated/vu1-disc-native or runtime/regression/vu1 missing)"
+    return run_command("test", args, body)
+
+
+FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_runtime\w*\.h|ps2_syscalls\.h|ps2_stubs\.h|ps2_recompiled_\w*\.h)")
+
+
+def cmd_check(args):
+    def body(run):
+        mode = "--tracked" if args.tracked else "--staged"
+        run.must([sys.executable, "scripts/check-repo-hygiene.py", mode], "hygiene")
+        if not args.tracked:
+            staged = subprocess.run(["git", "diff", "--cached", "--name-only", "--", "patches"],
+                                    capture_output=True, text=True).stdout.split()
+            hits = set()
+            for f in staged:
+                diff = subprocess.run(["git", "diff", "--cached", "-U0", "--", f], capture_output=True, text=True).stdout
+                hits.update(FULL_REBUILD.search(l).group(1) for l in diff.splitlines()
+                            if l.startswith("+diff --git") and FULL_REBUILD.search(l))
+            if hits:
+                run.notes.append("  WARNING: staged patches touch " + ", ".join(sorted(hits)) +
+                                 " -> full generated-code rebuild (long)")
+        rc = run.sh([sys.executable, "tools/deps.py", "status"])
+        status = run.log_path.read_text()
+        bad = [l for l in status.splitlines() if re.search(r"UNEXPORTED|\bdirty\b|no tarzan branch|not synced", l)]
+        if rc != 0 or bad:
+            run.failed.append("deps status")
+            run.notes += ["  " + l for l in bad]
+            raise Failed("deps unexported or dirty -> ./tz deps export (commit edits in deps/<x> first)")
+        return f"hygiene ({mode[2:]}) and deps clean"
+    return run_command("check", args, body)
+
+
+def cmd_stub(args):
+    print(f"tz {args.cmd}: not yet implemented (Phase 5b)", file=sys.stderr)
+    return 2
+
+
+def main():
+    p = argparse.ArgumentParser(prog="tz", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = p.add_subparsers(dest="cmd", required=True)
+    sp.add_parser("setup").set_defaults(fn=cmd_setup)
+    d = sp.add_parser("deps")
+    d.add_argument("sub", nargs="?", choices=["sync", "export", "status"])
+    d.set_defaults(fn=cmd_deps)
+    d = sp.add_parser("disc")
+    d.add_argument("iso", nargs="?")
+    d.set_defaults(fn=cmd_disc)
+    sp.add_parser("build").set_defaults(fn=cmd_build)
+    sp.add_parser("test").set_defaults(fn=cmd_test)
+    c = sp.add_parser("check")
+    c.add_argument("--tracked", action="store_true")
+    c.set_defaults(fn=cmd_check)
+    for name in ("run", "package", "where"):
+        s = sp.add_parser(name)
+        s.add_argument("rest", nargs="*")
+        s.set_defaults(fn=cmd_stub)
+    argv = sys.argv[1:]
+    verbose = any(a in ("-v", "--verbose") for a in argv)
+    args, _extra = p.parse_known_args([a for a in argv if a not in ("-v", "--verbose")])
+    args.verbose = verbose
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

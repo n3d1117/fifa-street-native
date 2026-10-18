@@ -6,12 +6,12 @@ Current: first-mission gameplay reached on macOS. EE code is statically recompil
 
 ```text
 host/              Cocoa window/input/audio + Metal GS adapter + CMake
-scripts/           BYOD extraction/generation, builds, packaging, diagnostics
+scripts/           packaging, probes, diagnostics (tz is the entry point; see `tz --help`)
 patches/           Pinned upstream source changes and dependency manifest
 config/            Portable template; generated/local config stays untracked
 tests/             Focused native/runtime regression checks
 docs/              Performance evidence and research
-tools/vu1recomp/   VU1 translation utility (GPL-3.0, upstream credited)
+tools/vu/   VU1 translation utility (GPL-3.0, upstream credited)
 STATUS.md          Verified behavior, open issues, validation scope
 THIRD_PARTY.md     Upstream provenance and licenses
 ```

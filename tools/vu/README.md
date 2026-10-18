@@ -1,6 +1,6 @@
 # VU1 static recompiler tools
 
-These scripts are derived from the RoadTripRecomp VU1 recompiler tools, distributed under GPL-3.0-or-later. Upstream: https://github.com/catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS/tree/86fa998f201f9abe634097eff2d625bf99360be8/tools/vu1recomp; see the accompanying `LICENSE` file.
+These scripts are derived from the RoadTripRecomp VU1 recompiler tools, distributed under GPL-3.0-or-later. Upstream: https://github.com/catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS/tree/86fa998f201f9abe634097eff2d625bf99360be8/tools/vu; see the accompanying `LICENSE` file.
 
 `vu1decode.py` and `vu1recomp.py` decode captured VU microcode and generate native C++ implementations. The default `--unit vu1` mode handles 16 KiB VU1 images. `--unit vu0` handles 4 KiB VU0 images with a guarded subset: reachable lower instructions must be LQI or NOP, and upper instructions must be supported FMAC, ACC, or NOP operations. Other reachable instructions fail generation so the runtime can use the interpreter.
 
@@ -51,7 +51,7 @@ each distinct `start_pc` and its observed call count from the trace log. Generat
 `vu0rec_<hash>.cpp` files with:
 
 ```sh
-python3 tools/vu1recomp/vu1recomp.py --unit vu0 \
+python3 tools/vu/vu1recomp.py --unit vu0 \
   --catalog runtime/vu0-catalog --out generated/vu0-native
 ```
 

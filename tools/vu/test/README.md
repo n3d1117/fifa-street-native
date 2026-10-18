@@ -7,23 +7,25 @@ The macOS build script defaults to the active Metal runtime at `deps/ps2recomp/p
 Build after CMake has generated at least one `vu1rec_*.cpp`:
 
 ```sh
-tools/vu1recomp/test/build.sh
+tools/vu/test/build.sh
 ```
 
-Capture snapshots from the runtime with `PS2X_VU1_CAPTURE=runtime/vu1-snapshots`. The catalog goes in `runtime/vu1-catalog` via `PS2X_VU1_CATALOG`; generated code should use `generated/vu1-native`. Then replay:
+Capture snapshots from the runtime with `PS2X_VU1_CAPTURE=runtime/regression/vu1/snapshots`. The catalog goes in `runtime/regression/vu1/catalog` via `PS2X_VU1_CATALOG`; generated code should use `generated/vu1-native`. Then replay:
 
 ```sh
-build/vu1-replay/vu1_replay runtime/vu1-catalog runtime/vu1-snapshots
+build/vu1-replay/vu1_replay runtime/regression/vu1/catalog runtime/regression/vu1/snapshots
 ```
 
 If a generated JR/JALR reaches a destination the static decoder could not infer, collect the observed destinations by stepping the interpreter over the snapshots, then regenerate:
 
 ```sh
-build/vu1-replay/vu1_replay runtime/vu1-catalog runtime/vu1-snapshots \
-  --dump-jr-targets runtime/vu1-catalog/jr_targets.txt
-python3 tools/vu1recomp/vu1recomp.py --catalog runtime/vu1-catalog \
-  --out generated/vu1-native --jr-targets runtime/vu1-catalog/jr_targets.txt
-tools/vu1recomp/test/build.sh
+build/vu1-replay/vu1_replay runtime/regression/vu1/catalog runtime/regression/vu1/snapshots \
+  --dump-jr-targets runtime/regression/vu1/catalog/jr_targets.txt
+python3 tools/vu/vu1recomp.py --catalog runtime/regression/vu1/catalog \
+  --out generated/vu1-native --jr-targets runtime/regression/vu1/catalog/jr_targets.txt
+tools/vu/test/build.sh
 ```
 
 The build is incremental, so unchanged runtime and generated translation units are reused. For additional edge coverage, pass `--fuzz 20`; pass `--no-ftz` to disable flush-to-zero. The interpreter/oracle uses `-O2 -fno-fast-math -ffp-contract=off`; generated native code uses `-O2 -ffp-contract=off -frounding-math`. Neither path enables compiler contraction, so the comparison checks the interpreter's explicit arithmetic behavior rather than hiding mismatches behind forced FMA.
+
+The canonical regression corpus lives in `runtime/regression/vu1/` (`catalog/` plus `snapshots/` and `live-20012*/snapshots/`); `./tz test` replays all of it against `generated/vu1-disc-native` and expects runs=1106, 0 mismatches, 0 rejected.

@@ -65,4 +65,4 @@ done
 compile_if_stale "$HERE/vu1_stubs.cpp" "$OUT/stubs.o" -O2
 "$CXX" -arch arm64 -isysroot "$SDKROOT" -stdlib=libc++ -L"$LLVM_ROOT/lib" -Wl,-rpath,"$LLVM_ROOT/lib" "${objects[@]}" "$OUT/stubs.o" -o "$OUT/vu1_replay"
 echo "Built $OUT/vu1_replay"
-echo "Run: $OUT/vu1_replay $ROOT/runtime/vu1-catalog $ROOT/runtime/vu1-snapshots"
+echo "Run: $OUT/vu1_replay $ROOT/runtime/regression/vu1/catalog $ROOT/runtime/regression/vu1/snapshots"
