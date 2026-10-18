@@ -287,11 +287,48 @@ def cmd_disc(args):
     return run_command("disc", args, body)
 
 
+# Out-of-tree dependency products: stamp inputs are git tree hashes of the relevant subpaths
+# (plus the HEAD diff for uncommitted edits), so unrelated commits do not trigger rebuilds.
+DEP_PRODUCTS = {
+    "bridge": (["build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"],
+               [("pcsx2", None), ("fukami", "tools/pcsx2-gs-bridge")]),
+    "spu2": (["build/spu2-backend/librrv_pcsx2_spu2.a"],
+             [("fukami", "tools/pcsx2-spu2"), ("pcsx2", "pcsx2/SPU2"), ("pcsx2", "3rdparty/soundtouch")]),
+}
+
+
+def dep_inputs_hash(sources):
+    h = hashlib.sha256()
+    for dep, sub in sources:
+        base = ["git", "-C", f"deps/{dep}"]
+        spec = [] if sub is None else ["--", sub]
+        rev = f"HEAD:{sub}" if sub else "HEAD"
+        h.update(subprocess.run(base + ["rev-parse", rev], capture_output=True, text=True).stdout.encode())
+        h.update(subprocess.run(base + ["diff", "HEAD", *spec], capture_output=True).stdout)
+    return h.hexdigest()
+
+
+def rebuild_stale_deps(run):
+    stale = []
+    for name, (outputs, sources) in DEP_PRODUCTS.items():
+        stamp = ROOT / f"build/deps-{name}.stamp"
+        want = dep_inputs_hash(sources)
+        have = stamp.read_text().strip() if stamp.is_file() else ""
+        if want != have or not all((ROOT / o).exists() for o in outputs):
+            stale.append((name, stamp, want))
+    for name, stamp, want in stale:
+        run.say(f"dependency {name} inputs changed: rebuilding")
+        run.must(["bash", "tools/build-deps.sh"], f"build-deps {name}", env=dict(os.environ, TARZAN_FORCE=name))
+        stamp.write_text(want + "\n")
+    return [n for n, _, _ in stale]
+
+
 def cmd_build(args):
     def body(run):
         require(ELF, "./tz disc <iso>")
         require(GEN_CONFIG, "./tz disc <iso>")
         check_trees(run, args.reconfigure)
+        rebuilt = rebuild_stale_deps(run)
         cmake_build(run, "recompiler")
         want = generate_inputs_hash()
         have = STAMP.read_text().strip() if STAMP.is_file() else ""
@@ -304,7 +341,7 @@ def cmd_build(args):
             os.replace(tmp, STAMP)
             note = "regenerated; " + run.last_message()
         cmake_build(run, "release", reconfigure=not game_configured())
-        return note
+        return note + (f"; rebuilt deps: {', '.join(rebuilt)}" if rebuilt else "")
     return run_command("build", args, body)
 
 
@@ -394,12 +431,11 @@ def cmd_check(args):
         lint(run)
         rc = run.sh([sys.executable, "tools/deps.py", "status"])
         status = run.log_path.read_text()
-        bad = [l for l in status.splitlines() if re.search(r"UNEXPORTED|no tarzan branch|not synced", l)]
-        run.notes += ["  WARNING (uncommitted edits in deps): " + l.strip() for l in status.splitlines() if re.search(r"\bdirty\b", l)]
+        bad = [l for l in status.splitlines() if re.search(r"UNEXPORTED|no tarzan branch|not synced|\bdirty\b", l)]
         if rc != 0 or bad:
             run.failed.append("deps status")
             run.notes += ["  " + l for l in bad]
-            raise Failed("deps commits unexported -> ./tz deps export (commit edits in deps/<x> first)")
+            raise Failed("deps dirty or unexported -> commit in deps/<x> and `./tz deps export`")
         return f"hygiene ({mode[2:]}) and deps clean"
     return run_command("check", args, body)
 
