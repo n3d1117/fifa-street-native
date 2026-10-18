@@ -71,6 +71,12 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 | 15 | Differential testers: EE function vs. a reference R5900 interpreter; capture/replay for hand-ported functions | correctness | M | none |
 | 16 | Movie audio rate control (+-0.5% Hermite, jitter-driven, off by default) | later-movie sync | S-M | low |
 | 17 | Busy-wait yield-spin skip, only for proven pure polls | CPU, loading | M | medium |
+| 18 | Inline cycle budget at generated checkpoints: generated code decrements a context budget by its static cost and enters `EeScheduler::checkpointDue` only when it crosses zero or an event is pending; timers and IOP advance by the accumulated sum, so totals are identical (verify mode compares `m_eeCycle`, timer counters and event order) | CPU (profile: cycle accounting plus checkpoints are the top two entries) | M | medium (event latency bounded by the budget) |
+| 19 | No `thread_local` on the guest hot path: Darwin arm64 TLS goes through a `tlv_get_addr` call; the EE executor is one thread, so `g_ps2GuestUnwinding`, the wall-clock state and the dispatch history become executor members (or one hoisted pointer per loop) | CPU (profile: TLS is a top-five entry) | S | none |
+| 20 | Deterministic replay gate: per-field pad input recorded, EE RAM and GS output hashed every N fields with the wall clock off; identical hashes prove an optimization changed no behavior, and a replay of the same build twice tests determinism itself | correctness of every CPU item | M | none |
+| 21 | Screen-space presented-frame interpolation between two guest frames in the Metal presenter (opt-in; one field of latency, HUD ghosting) as the alternative to raising the guest rate; per-object interpolation needs the game's matrix setup hooked (L) | smooth 50/60 Hz image at 25 FPS logic | M | medium (artifacts) |
+| 22 | User-supplied texture packs through PCSX2's GS hash-based replacement (dump, then load from the user's own folder; nothing shipped) | blurry tutorial cards, HD UI | S-M | low |
+| 23 | PGO for the runtime and host only (generated units unchanged; FP flags unchanged; profile is a local build product) | CPU | S-M | low |
 
 ### Tooling, power and build track
 
@@ -113,7 +119,11 @@ Keep SoundTouch (audio stretcher). Recompiler-only deps (nlohmann_json, toml11, 
 
 ### iOS / tvOS track
 
-Feasible, and the ahead-of-time design is the key advantage: no JIT anywhere (no `mmap`/`PROT_EXEC`/`MAP_JIT`), and the VU and IOP fallbacks are interpreters. Landscape only; GitHub sideload distribution. It is a device-validation project, not a recompile. Blockers: toolchain (macOS 11 tops out near Xcode 13.2.1 / iOS 15 SDK, unverified; device work needs a newer or remote Mac), memory (jetsam limits with upscaled GS textures).
+Feasible, and the ahead-of-time design is the key advantage: no JIT anywhere (no `mmap`/`PROT_EXEC`/`MAP_JIT`), and the VU and IOP fallbacks are interpreters. Landscape only; GitHub sideload distribution. It is a device-validation project, not a recompile. Blockers: memory (jetsam limits with upscaled GS textures) and the port work below.
+
+Toolchain on macOS 11.2 (verified to the SDK level): Xcode 12.5.1 runs on macOS 11.0+ and carries the iPhoneOS/AppleTVOS 14.5 SDKs and the Metal 2.3 compiler. Expand the `.xip` with `xip -x` anywhere (no `/Applications` install), accept its license once (`sudo DEVELOPER_DIR=<Xcode.app>/Contents/Developer xcodebuild -license accept`), and point `DEVELOPER_DIR` at it. Native code is built by our LLVM 19 (`-target arm64-apple-ios14.0` / `arm64-apple-tvos14.0`, `-isysroot` the SDK, `ld64.lld`, which the bootstrap does not build yet); Xcode supplies `metal`/`metallib` (`-std=ios-metal2.3`) and `actool` (tvOS layered icons). Newer xcodes CLI releases need macOS 12; Apple ID downloads go through the browser.
+
+Planned `tz ipa --platform ios|tvos [--developer-dir PATH]`: preflight (SDK, Metal tools, lld; exit 2 naming the missing piece), cross-build engine and dependencies per platform, compile shaders and assets, audit the bundle (no disc data, no Downloads paths), zip `Payload/Tarzan.app` as `Tarzan-<platform>-unsigned.ipa`. Signing is the user's (Sideloadly/AltStore with their Apple ID).
 
 | Step | Work | Effort |
 |---|---|---|
