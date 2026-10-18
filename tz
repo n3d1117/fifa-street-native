@@ -258,16 +258,15 @@ def cmd_deps(args):
 def cmd_setup(args):
     def body(run):
         run.must([sys.executable, "tools/deps.py", "sync"], "deps sync")
+        # Bootstrap first: it fetches the pinned CMake/Ninja that building capstone from sdist needs.
+        run.must(["bash", "toolchain/bootstrap.sh"], "toolchain bootstrap")
         py = tool_python()
         probe = subprocess.run([py, "-c", "import pycdlib, capstone, elftools"], capture_output=True)
         if probe.returncode != 0:
             if not (ROOT / "tools/python/bin/python").exists():
                 run.must([sys.executable, "-m", "venv", "tools/python"], "venv")
-            run.must(["tools/python/bin/pip", "install", "-r", "requirements.txt"], "pip install")
-        if os.environ.get("TARZAN_LLVM") or (ROOT / "tools/build/llvm19").exists():
-            run.say("toolchain: present or TARZAN_LLVM set, skipping bootstrap")
-        else:
-            run.must(["bash", "toolchain/bootstrap.sh"], "toolchain bootstrap")
+            env = dict(os.environ, PATH=f"{CMAKE.parent}{os.pathsep}{os.environ.get('PATH', '')}")
+            run.must(["tools/python/bin/pip", "install", "-r", "requirements.txt"], "pip install", env=env)
         run.must(["bash", "tools/build-deps.sh"], "build-deps")
         run.must(["git", "config", "core.hooksPath", ".githooks"], "enable pre-commit hook")
         return "toolchain and dependencies ready; next: ./tz disc <iso>"
