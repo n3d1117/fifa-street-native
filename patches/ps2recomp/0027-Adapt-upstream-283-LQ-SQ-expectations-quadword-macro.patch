@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 17:29:35 +0200
+Subject: [PATCH 27/27] Adapt upstream #283 LQ/SQ expectations: quadword macros
+ mask the address (#319)
+
+
+diff --git a/ps2xTest/src/r5900_general_instruction_tests.cpp b/ps2xTest/src/r5900_general_instruction_tests.cpp
+index 1cf98360ffe63318240be02356271e956cc95151..2524735614cbff363ba6aac1e1c59e19355b14e3 100644
+--- a/ps2xTest/src/r5900_general_instruction_tests.cpp
++++ b/ps2xTest/src/r5900_general_instruction_tests.cpp
+@@ -690,30 +690,30 @@ void register_r5900_general_instruction_tests()
+             writeRam<uint64_t>(rdram, kDataAddress + 16u, kLo);
+             writeRam<uint64_t>(rdram, kDataAddress + 24u, kHi);
+             setGpr(*ctx, 1, kDataAddress);
+-            PS2X_EXEC_EMITTED(t, lq, SET_GPR_VEC(ctx, 2, READ128(ADD32(GPR_U32(ctx, 1), 16) & ~0xFu)););
++            PS2X_EXEC_EMITTED(t, lq, SET_GPR_VEC(ctx, 2, READ128(ADD32(GPR_U32(ctx, 1), 16))););
+             expectGpr(t, *ctx, 2, kLo, "lq low 64 bits");
+             expectU64(t, gprHi(*ctx, 2), kHi, "lq high 64 bits");
+ 
+             setGpr(*ctx, 1, kDataAddress + 5u); // effective address 0x2015 is silently aligned to 0x2010
+             setGpr(*ctx, 2, 0u, 0u);
+-            PS2X_EXEC_EMITTED(t, lq, SET_GPR_VEC(ctx, 2, READ128(ADD32(GPR_U32(ctx, 1), 16) & ~0xFu)););
++            PS2X_EXEC_EMITTED(t, lq, SET_GPR_VEC(ctx, 2, READ128(ADD32(GPR_U32(ctx, 1), 16))););
+             expectGpr(t, *ctx, 2, kLo, "lq ignores the low four address bits (low half)");
+             expectU64(t, gprHi(*ctx, 2), kHi, "lq ignores the low four address bits (high half)");
+ 
+             fillRam(rdram, kDataAddress + 32u, 32u);
+             setGpr(*ctx, 1, kDataAddress + 16u + 7u); // effective address 0x2027 is silently aligned to 0x2020
+             setGpr(*ctx, 2, kHi, kLo);
+-            PS2X_EXEC_EMITTED(t, sq, WRITE128(ADD32(GPR_U32(ctx, 1), 16) & ~0xFu, GPR_VEC(ctx, 2)););
++            PS2X_EXEC_EMITTED(t, sq, WRITE128(ADD32(GPR_U32(ctx, 1), 16), GPR_VEC(ctx, 2)););
+             expectU64(t, readRam<uint64_t>(rdram, kDataAddress + 32u), kHi, "sq low 64 bits land at the aligned address");
+             expectU64(t, readRam<uint64_t>(rdram, kDataAddress + 40u), kLo, "sq high 64 bits land at the aligned address");
+             t.IsTrue(ramUntouched(rdram, kDataAddress + 48u, 16u), "sq must not spill past the aligned quadword");
+ 
+             // $zero reads as an all-zero quadword and is never written.
+             setGpr(*ctx, 1, kDataAddress);
+-            PS2X_EXEC_EMITTED(t, decode(encodeI(OPCODE_SQ, 1, 0, 32)), WRITE128(ADD32(GPR_U32(ctx, 1), 32) & ~0xFu, GPR_VEC(ctx, 0)););
++            PS2X_EXEC_EMITTED(t, decode(encodeI(OPCODE_SQ, 1, 0, 32)), WRITE128(ADD32(GPR_U32(ctx, 1), 32), GPR_VEC(ctx, 0)););
+             expectU64(t, readRam<uint64_t>(rdram, kDataAddress + 32u), 0u, "sq $zero stores zeros (low)");
+             expectU64(t, readRam<uint64_t>(rdram, kDataAddress + 40u), 0u, "sq $zero stores zeros (high)");
+-            PS2X_EXEC_EMITTED(t, decode(encodeI(OPCODE_LQ, 1, 0, 16)), SET_GPR_VEC(ctx, 0, READ128(ADD32(GPR_U32(ctx, 1), 16) & ~0xFu)););
++            PS2X_EXEC_EMITTED(t, decode(encodeI(OPCODE_LQ, 1, 0, 16)), SET_GPR_VEC(ctx, 0, READ128(ADD32(GPR_U32(ctx, 1), 16))););
+             expectGpr(t, *ctx, 0, 0u, "lq $zero leaves $zero at zero");
+             expectU64(t, gprHi(*ctx, 0), 0u, "lq $zero leaves the upper half of $zero at zero");
+         });
