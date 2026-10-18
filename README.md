@@ -1,20 +1,58 @@
-# Tarzan Freeride — native Apple port
+# Tarzan: Freeride, native for Apple Silicon
 
-Goal: a faithful, complete native ARM64 port of **Disney’s Tarzan: Freeride (PS2 PAL, SLES-50350)**, with Metal graphics, stable audio/saves/input, and smooth performance. Bring your own disc; no game files are distributed.
+A static recompilation of *Disney's Tarzan: Freeride* (PS2, PAL, SLES-50350) into a native arm64 macOS app with Metal graphics.
+You supply your own disc. This repository contains no game code, data or assets.
 
-Current: first-mission gameplay reached on macOS. EE code is statically recompiled; 9,801 mapped functions are translated and 370 use native runtime bindings. Captured VU1 programs have native paths; captured VU0 skinning also runs natively, with interpreter fallbacks; IOP remains interpreted. This is recompilation, not recovered original source. Whole-game correctness and 50 FPS remain under validation; iOS/tvOS are future targets.
+## Status
 
-```text
-host/              Cocoa window/input/audio + Metal GS adapter + CMake
-tools/probe/       native run probe, window capture/OCR helpers (`tz run`)
-tools/package/     app bundle, icon, install and bundle audit (`tz package`)
-patches/           Pinned upstream source changes and dependency manifest
-config/            Portable template; generated/local config stays untracked
-tests/             Focused native/runtime regression checks
-docs/              Performance evidence and research
-tools/vu/   VU1 translation utility (GPL-3.0, upstream credited)
-STATUS.md          Verified behavior, open issues, validation scope
-THIRD_PARTY.md     Upstream provenance and licenses
+- Boots, plays movies with sound, and reaches first-mission gameplay at the original 25 FPS.
+- Later missions, full progression and every save path are not yet tested.
+- EE code is recompiled ahead of time. VU1 and known VU0 programs run natively with an interpreter fallback. The IOP is interpreted.
+- Options, off by default: internal resolution up to 4x, 16:9, 60/120 FPS targets, logo skip, remember language, and the game's own cheats.
+
+Details: [docs/STATUS.md](docs/STATUS.md).
+
+## Requirements
+
+- Apple Silicon Mac, macOS 11 or later, and Xcode Command Line Tools (`xcode-select --install`).
+- Python 3.9 or later.
+- LLVM 19 with libc++:
+  - macOS 13 and later: `brew install llvm@19`, then `export TARZAN_LLVM=$(brew --prefix llvm@19)`.
+  - Older macOS: `./tz setup` builds it into `tools/build` (about an hour, once).
+- Your own PAL disc as an ISO:
+  - ISO SHA-1 `6efdf922e38e757ce0494d27ead2bf7df491d51f`
+  - `SLES_503.50` SHA-1 `fcb6d2ef522512ee4f08d0a415b2013248a37c44`
+
+## Build and run
+
+```sh
+git clone https://github.com/n3d1117/tarzan-freeride-native.git
+cd tarzan-freeride-native
+./tz setup                      # upstream checkouts (deps.lock + patches/), Python venv, toolchain, FFmpeg/SDL3/PCSX2 deps (once)
+./tz disc ~/path/to/Tarzan.iso  # verify and extract your disc, derive symbols and config
+./tz build                      # generate the game code and build build/game-metal
+./tz test                       # optional: quick test tier (no disc needed)
+./tz run                        # play from the build tree
+./tz package --install          # optional: /Applications/Tarzan Freeride PS2.app
 ```
 
-Upstream trees are prepared locally from pinned revisions and source patches. Disc images, extracted assets, generated game code/symbol maps, dependencies, toolchains, builds, app bundles, captures, and saves stay outside Git. `.gitignore` uses an allowlist; the staged-file check rejects binary/oversized artifacts. `toolchain/bootstrap.sh` and `tools/build-deps.sh` populate `tools/` and `build/` from pinned, hash-checked sources; `TARZAN_LLVM` points at an existing LLVM 19. The compiler and build tools remain BYOD and are not checked into Git. See `STATUS.md` for current reproducibility limits and checks, and [TODO](docs/TODO.md) for priorities.
+Saves and settings live in `~/Library/Application Support/TarzanFreeridePS2`.
+Controls: keyboard (remap in Settings, Keyboard) or any SDL-supported gamepad.
+`./tz --help` lists every command.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `host/` | macOS app: window, input, audio, Metal GS adapter, settings, game hooks |
+| `deps.lock`, `patches/` | pinned PS2Recomp, PCSX2 and fukami revisions and our changes to them; `./tz setup` checks them out into `deps/` |
+| `tools/` | disc extraction, code generation, VU compiler, packaging, probes |
+| `config/` | recompiler configuration for SLES-50350 |
+| `tests/`, `cmake/` | host tests, CMake modules |
+| `docs/` | `STATUS.md` (state and roadmap), `internals.md` (mechanisms) |
+
+Local only, never committed: `deps/`, `disc/`, `extracted/`, `generated/`, `build/`, `runtime/`, `dist/`.
+
+## License
+
+GPL-3.0-or-later. Upstream components: [THIRD_PARTY.md](THIRD_PARTY.md).

@@ -1,0 +1,137 @@
+# Status
+
+Experimental static recompilation, not a decompilation and not a verified complete port. Coverage figures and first-mission evidence are never whole-game claims.
+
+| Area | Works | Open |
+|---|---|---|
+| EE recompile | 10,171 functions mapped: 9,801 translated, 370 HLE-bound, none skipped | 33 configured HLE names map to unimplemented handlers |
+| Gameplay | Boot, story movie, first mission | Later missions, full progression, ending |
+| Audio / movies | Startup and first story movie in sync, no clipping; movie PES accepted packet by packet | Later movies; startup pre-roll vs. hardware; occasional 64-multiple underrun count on title boots |
+| VU1 | Native, guarded, generated from the disc; no fallbacks in first mission; replay corpus 1,106 runs, 0 mismatches | Programs only seen in later missions |
+| VU0 | Captured skinning program native, others interpreted | Capture later-level programs |
+| IOP | Interpreted | |
+| Saves | Card save/reload for one slot | All checkpoints, multiple slots |
+| Input | Keyboard remapping, SDL gamepads | Real PS5/Xbox pad testing |
+| Video | Native to 4x internal resolution, 16:9, optional sharpening, UI half-pixel coverage fix | Blurry tutorial text at higher scale |
+| Performance | Original 25 FPS; 60/120 targets reach about 26-29 in gameplay; gameplay is CPU-bound | Guest render/culling CPU cost; high-FPS throughput dropped after the FPU semantics batches (B14) |
+| Process | One app process; one build tree `build/game-metal`; settings in one plist | Settings window and fullscreen not scriptable, unverified after the in-process change |
+| Platforms | macOS arm64 | iOS/tvOS: feasibility only, see "iOS / tvOS track" |
+
+## Next
+
+1. Play every mission; log crashes, hangs, audio/video issues.
+2. Audit the 33 unimplemented HLE handlers against what the game calls.
+3. Cut guest render/culling CPU time without changing timing.
+4. Reach 60/120 FPS in gameplay without changing game speed.
+5. Faster mission loading (guest texture conversion/initialization, not disk reads).
+6. Metal pipeline cache so shaders are not rebuilt each launch.
+7. Blurry tutorial/challenge cards at higher internal resolution.
+8. Verify guarded VU1 against later missions; keep full cross-program flag and pipeline state, and enable flag elision only with an open-program liveness proof.
+9. Extend audio acceptance to later movies and transitions (listening plus timing); compare the startup pre-roll with original playback.
+10. Recheck keyboard/gamepad, focus changes, settings window close/reopen and backgrounding before each release.
+
+## Backlog (all opt-in, default off, via the game's own mechanisms)
+
+- Built-in FPS display (show guest frames and presents separately).
+- Shader warm-up: record the Metal pipelines Tarzan uses, ship the compressed list, precompile at first launch behind a skippable progress screen.
+- Bijective input remap: binding an action swaps with the action that held that key or button.
+- Unlock all missions through the original unlock/menu path, preserving progress and saves.
+- Invincibility (no damage or life loss); verify enemies, hazards, instant-death surfaces and retry.
+- Unlock Jane, Porter, Terk and the Ground Tumble (world 1 Terk challenges), Scarecrow (world 2) and Corkscrew (world 3) tricks via the original unlock paths.
+- Audit atomic settings/save publication and verified disc import, especially for mobile containers; add loading caches only after measuring read/decompression cost.
+- Profile Metal queue/submission ownership; keep resource synchronization intact until a measured stall justifies a change.
+- Extend the SPU inline/worker equivalence test to long transitions, underruns and pause/resume.
+- iOS/tvOS later: engine behind a small C API, overlay window for menus, staged disc import (verify, swap when stopped, roll back on failure).
+
+## Roadmap
+
+Ranked by expected value divided by effort and risk. Every item needs checking against our code, re-measuring on Tarzan, a kill-switch and a verify mode, and runs through the AGENTS.md loop.
+
+### Technical roadmap
+
+| # | Item | Targets | Effort | Risk |
+|---|---|---|---|---|
+| 1 | Further upstream PS2Recomp PR batches (FPU semantics and recompiler batches are in; remaining IOP/HLE/runtime fixes) | correctness everywhere | M | low (batched, verified) |
+| 2 | EE cycle-charge scale by VBlank period: a frame over one VBlank's estimated cycles no longer spans two VBlanks when the host finished early | 60/120 FPS stuck at 26-29 | S | low, if game-speed parity is proven |
+| 3 | Scheduler fixed-cost trims: atomic idle check, lazy EE timers (verify mode), division-free timer math, skip the DMAC-drain lock when idle, scratchpad fast path, IOP idle fast path, no `getenv` in hot loops | CPU-bound gameplay | S-M | none |
+| 4 | Audit FP/MMI/VU0 against known bugs: SQRT/RSQRT operands, CVT.W.S, LQ/SQ alignment, PMEXEW/PEXEH/PMULTH/PMFHL lanes, VU0 macro flags, VF0 write-protect | later-mission correctness | S | none |
+| 5 | IOP/HLE fixes: `WaitSema`/`WaitEventFlag` outside IOP threads run the scheduler; `sceSifGetOtherData` copies; `sceSifSetDmaIntr` callback; LWL/LWR load-delay; `sceMpegIsEnd` on `000001B7`/`000001B9`; synchronous MPEG audio callbacks on a private copy | hangs, movie sync | S | low |
+| 6 | PCSX2 sprite-coverage patch (snapped edges plus coverage-weighted 4-tap for point-sampled sprites above 1x) | upscaled tutorial text blur | S-M | low |
+| 7 | `jalr` resumes only at its return address, plus a resume-switch guard | CPU-bound gameplay | S | medium (checkable) |
+| 8 | PSMT4/paletted texture upload and decode by row runs (address-identical) | loading, texture conversion | S-M | none |
+| 9 | Shader warm-up pack (record pipelines, precompile at first launch) | first-encounter stutter | M | none |
+| 10 | Recompiler-emitted direct access for constant-address EE timer, DMA and GS display registers | CPU | S-M | low |
+| 11 | VIF1/VU1/GIF worker thread with barriers; the EE wakes on GS FINISH; IOP/SPU2 thread | CPU-bound gameplay | M-L | medium |
+| 12 | Codegen: GPRs as locals, `pc` stored only where read, tail jumps followed in place | CPU | L | medium |
+| 13 | VU1 AOT dead MAC/status-flag elimination with a liveness proof | VU1 cost | M | low (replay-gated) |
+| 14 | Hot guest routines native with an exact batched cycle clock; hot IOP routines native on an exact word match | CPU, IOP | M-L | low |
+| 15 | Differential testers: EE function vs. a reference R5900 interpreter; capture/replay for hand-ported functions | correctness | M | none |
+| 16 | Movie audio rate control (+-0.5% Hermite, jitter-driven, off by default) | later-movie sync | S-M | low |
+| 17 | Busy-wait yield-spin skip, only for proven pure polls | CPU, loading | M | medium |
+
+### Tooling, power and build track
+
+| # | Item | Why | Effort |
+|---|---|---|---|
+| T1 | **Mission jump.** Unlock-all through the game's own cheat parser (same route as the 99-lives cheat), plus `tz run --save <fixture>` booting from a local unlocked memory-card save in `runtime/regression/saves/` | reach any mission in seconds; multi-mission regression routes | S-M |
+| T2 | **Deadline sleep instead of spinning** in the host/VBlank wait: sleep to about 0.5 ms before the boundary, then spin | biggest power/heat win, no game-speed change | S |
+| T3 | **Thread QoS per role** (game/render `USER_INTERACTIVE`, workers `UTILITY`); App Nap off while playing; thermal-state observer that drops the internal scale or FPS target at `.serious` | pacing stability, thermals | S |
+| T4 | **Build speed.** ccache with PCH (`CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime`, `-Xclang -fno-pch-timestamp`) and stable sorted unity batches; one `-ftime-trace` pass for slow TUs; `-g0`/`-gline-tables-only` for generated code; try `-fuse-ld=lld` | rebuild time | S-M |
+| T5 | **ps2autotests** (EE CPU/FPU/MMI test ELFs with hardware-captured expected output) recompiled and run as a `tz test --hw` suite | catches R5900 semantic bugs before later missions do | M |
+| T6 | **`MTLBinaryArchive` pipeline cache** keyed by OS build, plus precompiling the recorded pipeline set on a utility thread at boot (merges with shader warm-up) | no compile hitches, lower launch CPU | M |
+| T7 | **PCSX2 as an oracle:** PINE client to read guest RAM at the same frame; converter from PCSX2 `.p2m2` input recordings to frame-counted pad scripts; replay of PCSX2 savestate GS/VIF chains | first-divergence debugging | M |
+| T8 | **Join Core Audio's workgroup** (`os_workgroup_join` via `kAudioDevicePropertyIOThreadOSWorkgroup`) from the SPU2/stretcher thread | fewer underruns under CPU load | M |
+| T9 | **Present pacing via the layer:** `maximumDrawableCount=2`, `presentDrawable:afterMinimumDuration:`; verify against the bridge's existing pacer first | smoother 25/50 Hz on 60/120 Hz displays | S-M |
+| T10 | **Recompiler emission shrink:** cold paths outlined as `[[gnu::cold]] noinline`; shared helpers instead of expanded macros; locals instead of redundant `ctx` stores; each step diff-tested for identical behavior | compile time, code size, CPU | M-L |
+
+### Build, dependencies and test time
+
+Reference measurements (8-core M1, 8 GiB): generated code is about 91% of game-build CPU (318 unity batches); `vu1rec_guarded.cpp` is the serial floor (about 143 s); touching `ps2_runtime.h`, `ps2_syscalls.h` or `ps2_stubs.h` rebuilds the PCH and every batch; the runner is about 89 MB and the bridge dylib 16 MB. Regenerate with `./tz build -v` and `-ftime-trace`.
+
+| # | Item | Effect | Effort | State |
+|---|---|---|---|---|
+| B1 | Path casing at the source (`tz` resolves the on-disk root) | quiet logs | S | done |
+| B2 | Drop raylib/GLFW/rlImGui/ImGui from the Metal build (conditional FetchContent and `ps2_host_backend` link; debug panel behind an option; no OpenGL/Carbon links) | smaller runner, faster configure | S-M | open |
+| B3 | Minimal FFmpeg: `--disable-everything --enable-decoder=mpeg2video --enable-parser=mpegvideo`, avcodec/avutil/swscale only; PSS frames must stay bit-identical | smaller runner, FFmpeg build under 1 min | S | open |
+| B4 | Drop pkgconf: `find_library` the FFmpeg `.a` files plus frameworks | one dependency fewer | S | open |
+| B5 | ccache or a content-keyed wrapper for unity batches with stable batch membership | rebuild after unchanged regen in about a minute | S | open |
+| B6 | Host-derived parallelism with a Ninja job pool for heavy TUs (`tools/jobs.py`, `TZ_JOBS`) | no swapping | S | done |
+| B7 | Split `vu1rec_guarded.cpp` into 4+ TUs at emit time, or start it first | removes the serial tail | S-M | open |
+| B8 | One runtime library shared by game and tests; one build tree | fewer CPU-s per build | M | done |
+| B9 | Split the PCH: generated function headers out of the runtime PCH, plus a stable `ps2_runtime_fwd.h` | runtime header edits stop rebuilding all batches | M | open |
+| B10 | Bridge without vixl (unused ARM64 JIT), ImGui/FullscreenUI/screenshot code; then drop png/jpeg/webp/freetype/harfbuzz/plutosvg/rapidyaml, libcurl/libpcap links | about 100 CPU-s, 170 MB of deps | M-L | open |
+| B11 | Replace SDL3 with GameController.framework + CoreAudio (about 160 lines of gamepad code); aligns with iOS | one dependency fewer | M | open |
+| B12 | Fast test loop: quick tier vs `--full`, parallel ctest | faster loop | S-M | done |
+| B13 | Trial unity batch size 64 | unknown, measure first | S | open |
+| B14 | High-FPS throughput dropped (about 40 to 37 gameplay DISPFB2 at the 60 target) after the upstream FPU batches and the hook move. A/B the same route: pre-batch build vs FPU result semantics (exact flush/clamp on about 9.1k ADD/SUB/MUL.S sites) vs hook dispatch. Keep semantics; optimize the fast path if FPU is the cause. Default 25 FPS is unaffected | restore high-FPS headroom | S-M | open |
+| B15 | Investigate a 64-multiple steady underrun count on some non-silent title boots (seen in a remember-language second boot); suspected late logo flush under load. Reproduce 5 times on a quiet machine before changing the classifier or audio | trustworthy audio gate | S | open |
+
+Keep SoundTouch (audio stretcher). Recompiler-only deps (nlohmann_json, toml11, libdwarf, rabbitizer, elfio, fmt) are not in the shipped runner. Not recommended: VideoToolbox or libmpeg2 instead of FFmpeg.
+
+### iOS / tvOS track
+
+Feasible, and the ahead-of-time design is the key advantage: no JIT anywhere (no `mmap`/`PROT_EXEC`/`MAP_JIT`), and the VU and IOP fallbacks are interpreters. Landscape only; GitHub sideload distribution. It is a device-validation project, not a recompile. Blockers: toolchain (macOS 11 tops out near Xcode 13.2.1 / iOS 15 SDK, unverified; device work needs a newer or remote Mac), memory (jetsam limits with upscaled GS textures).
+
+| Step | Work | Effort |
+|---|---|---|
+| 1 | Host-agnostic core (also simplifies macOS): Cocoa behind a `HostSurface` interface in `host/metal-host.mm`; C API `tarzan_core_start`, `set_paths`, `pad_state`, `pause`, `stop` (the in-process `tarzan_run`/`tarzan_stop` in `host/tarzan-app.hpp` are the start); no `getenv("HOME")` | M |
+| 2 | Cross-build `arm64-apple-ios` and simulator static libs: GS bridge, SoundTouch, sse2neon, movies-only FFmpeg; measure generated-code compile time and binary size early | M |
+| 3 | PCSX2 GS Metal on iOS (about 8 small fixes, below) | M |
+| 4 | UIKit host: `CAMetalLayer` view, lifecycle, audio-session interruptions, GameController input (SDL stays on macOS) | M |
+| 5 | Disc import: document picker, verify hashes, copy into the container (staged, swap on activate); saves in Application Support; never bundle game data | M |
+| 6 | Touch HUD | M+S |
+| 7 | Device validation: start at 1x, check memory vs. jetsam, thermals, pacing, movies; no speed-up to inflate FPS | L |
+| 8 | tvOS: controller required, import via a LAN upload page, focus-engine menus, `Caches` can be purged | M |
+
+PCSX2 Metal renderer on iOS (about 85% confidence for iOS, 60% for tvOS): ARMSX2 (GPL-3.0, `platforms/ios/`) ships it; upstream Metal code is iOS-aware. Our bridge needs no JIT (static AOT software rasterizer functions), so no `allow-jit`. Fixes in `deps/pcsx2` `pcsx2/GS/Renderers/Metal/*` and the bridge, using ARMSX2's diffs as the template:
+- View: retain the caller's `CAMetalLayer` instead of an `NSView`; iOS surface kind in `metal_surface_adapter.mm` (S-M).
+- Gate `setDisplaySyncEnabled` behind `#if !TARGET_OS_IPHONE`; `MTLCreateSystemDefaultDevice` instead of `MTLCopyAllDevices`; drop the `MTLFeatureSet_macOS` check; stub IOKit power assertions and CocoaTools.
+- `texture_barrier = false` on iOS (Apple GPUs cannot order RT reads inside a pass); keep `framebuffer_fetch`. This is the one fix needing gameplay validation of blending and depth.
+- BC textures from `supportsBCTextureCompression`; `m_use_present_drawable = Always`.
+- Shaders: compile the same `.metal` sources (`xcrun -sdk iphoneos metal -std=ios-metal2.3 -target air64-apple-ios14.0` to `Metal23.metallib`, simulator equivalent) and ship them in the bundle. Upstream passes `-ffast-math` to the shader compiler; decide deliberately, it conflicts with our arithmetic rule (GPU side only).
+- Build: PCSX2 has no iOS toolchain; use `CMAKE_SYSTEM_NAME=iOS`, `CMAKE_OSX_SYSROOT`, Vulkan/OpenGL/Qt/tests off, cross-build zstd, lz4, png, freetype (M-L).
+- tvOS: same Metal surface, MetalFX disabled, cache-only storage, A10X or newer.
+
+Prototype order (1-2 days each): compile the Metal GS files plus shaders for the simulator; simulator bridge with a `CAMetalLayer` harness; replay a captured GS dump; device build (free signing, no JIT) comparing pixels against macOS; a live Tarzan scene checking pacing and thermals; validate the barrier fallback on A14/A15/M1. Then a minimal iOS app with the bridge at 1x measuring memory, generated-code link under Xcode, sustained thermals on an A14-class device.
+
+Touch HUD: a custom `UIView` overlay with GameController as the primary path (`GCVirtualController` is only a stopgap: no drag, resize or per-control opacity). Two sticks, D-pad, 4 face buttons, L1/L2/R1/R2, Start/Select, pause; L3/R3 only if the game reads them (check which buttons Tarzan uses; the right stick may be camera). Edit mode (drag, resize, per-control opacity, hide, snap, reset), haptics, auto-hide when a controller connects, safe-area anchoring. Layout: versioned JSON per device class in Application Support, e.g. `{"version":1,"device":"iphone","controls":[{"id":"cross","anchor":"br","x":-96,"y":-64,"scale":1.0,"opacity":0.7,"hidden":false}]}`.

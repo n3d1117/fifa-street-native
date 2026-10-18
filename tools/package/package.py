@@ -240,7 +240,7 @@ def main():
         raise RuntimeError("custom icon is missing; run without --icon to generate it: " + str(args.icon))
     runner = args.runner.resolve()
     if not args.prepare_only and not runner.is_file():
-        raise RuntimeError("Metal runner is not ready at the expected path; build it or pass --runner. Legacy build/game is never used.")
+        raise RuntimeError("Metal runner is not ready at the expected path; build it or pass --runner.")
     if args.prepare_only and args.runner and runner.exists():
         print("Scaffold mode requested; runner and game assets will not be staged.")
 
@@ -257,7 +257,7 @@ def main():
     copy_fresh(args.icon, resources / "AppIcon.icns")
 
     manifest = {"bundle": str(app), "app_icon_sha256": sha256(resources / "AppIcon.icns"),
-                "release_qualification": "not established by packaging; requires actual Metal capability and gameplay reports"}
+                "release_readiness": "not established by packaging; requires actual Metal capability and gameplay reports"}
     if args.prepare_only:
         (resources / "PACKAGE_INCOMPLETE.txt").write_text(
             "Scaffold only. No game ELF or runner is bundled. This is not a runnable or release-approved app.\n",
@@ -274,7 +274,7 @@ def main():
             raise RuntimeError("runner and bridge must contain arm64 Mach-O slices")
         runner_deps = dependencies(runner)
         if not any(BRIDGE_NAME in dep for dep in runner_deps):
-            raise RuntimeError("runner does not link the PCSX2 GS Metal bridge; refusing the legacy runner")
+            raise RuntimeError("runner does not link the PCSX2 GS Metal bridge; refusing a runner without the Metal bridge")
         imports = run(["nm", "-u", runner], capture=True).stdout
         if "rrv_pcsx2_gs_bridge_create" not in imports:
             raise RuntimeError("runner does not import the PCSX2 GS bridge create API")
@@ -345,7 +345,7 @@ def main():
         stream.write("\n")
     run(["codesign", "--force", "--strict", "--sign", "-", app])
     run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", app])
-    print("Prepared scaffold (incomplete)" if args.prepare_only else "Built Metal-linked app bundle; runtime qualification remains pending")
+    print("Prepared scaffold (incomplete)" if args.prepare_only else "Built Metal-linked app bundle")
     print(output)
     problems = [] if args.prepare_only else audit_bundle(output)
     for problem in problems:

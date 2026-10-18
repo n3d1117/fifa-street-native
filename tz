@@ -185,7 +185,7 @@ def stale_trees():
 def check_trees(run, reconfigure):
     for tree in LEGACY_TREES:
         if (ROOT / tree).exists():
-            run.say(f"removing retired build tree {tree}")
+            run.say(f"removing obsolete build tree {tree}")
             shutil.rmtree(ROOT / tree)
     stale = stale_trees()
     if not stale:

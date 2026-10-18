@@ -77,8 +77,8 @@ int main() {
         Settings loaded = tarzan::load_settings_file(dir);
         assert(!loaded.highFps && loaded.targetFps == 60 && loaded.renderScale == 1);
         assert(loaded.hdWidescreen && loaded.rememberLanguage && loaded.lastLanguage == -1);
-        NSDictionary* legacy = @{@"hdWidescreen": @YES};
-        assert([legacy writeToFile:path atomically:YES]);
+        NSDictionary* oldFormat = @{@"hdWidescreen": @YES};
+        assert([oldFormat writeToFile:path atomically:YES]);
         assert(tarzan::load_settings_file(dir).renderScale == 2);
 
         // Debug overrides apply on top of the file.

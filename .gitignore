@@ -4,7 +4,6 @@
 !/.gitignore
 !/deps.lock
 !/README.md
-!/STATUS.md
 !/LICENSE
 !/THIRD_PARTY.md
 !/host/
