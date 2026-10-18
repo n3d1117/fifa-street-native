@@ -9,7 +9,7 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Audio / movies | Startup and first story movie in sync, no clipping; movie PES accepted packet by packet | Later movies; startup pre-roll vs. hardware; occasional 64-multiple underrun count on title boots |
 | VU1 | Native, guarded, generated from the disc; no fallbacks in first mission; replay corpus 1,106 runs, 0 mismatches | Programs only seen in later missions |
 | VU0 | Captured skinning program native, others interpreted | Capture later-level programs |
-| IOP | Interpreted | |
+| IOP | Interpreted; LWL/LWR pairs forward pending load values | |
 | Saves | Card save/reload for one slot | All checkpoints, multiple slots |
 | Input | Keyboard remapping, SDL gamepads | Real PS5/Xbox pad testing |
 | Video | Native to 4x internal resolution, 16:9, optional sharpening, UI half-pixel coverage fix | Blurry tutorial text at higher scale |
@@ -55,7 +55,7 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 | 2 | EE cycle-charge scale by VBlank period: a frame over one VBlank's estimated cycles no longer spans two VBlanks when the host finished early | 60/120 FPS stuck at 26-29 | S | low, if game-speed parity is proven |
 | 3 | Scheduler fixed-cost trims: atomic idle check, lazy EE timers (verify mode), division-free timer math, skip the DMAC-drain lock when idle, scratchpad fast path, IOP idle fast path, no `getenv` in hot loops | CPU-bound gameplay | S-M | none |
 | 4 | Audit FP/MMI/VU0 against known bugs: SQRT/RSQRT operands, CVT.W.S, LQ/SQ alignment, PMEXEW/PEXEH/PMULTH/PMFHL lanes, VU0 macro flags, VF0 write-protect | later-mission correctness | S | none |
-| 5 | IOP/HLE fixes: `WaitSema`/`WaitEventFlag` outside IOP threads run the scheduler; `sceSifGetOtherData` copies; `sceSifSetDmaIntr` callback; LWL/LWR load-delay; `sceMpegIsEnd` on `000001B7`/`000001B9`; synchronous MPEG audio callbacks on a private copy | hangs, movie sync | S | low |
+| 5 | IOP/HLE fixes: `WaitSema`/`WaitEventFlag` outside IOP threads run the scheduler; `sceSifGetOtherData` copies; `sceSifSetDmaIntr` callback; `sceMpegIsEnd` on `000001B7`/`000001B9`; synchronous MPEG audio callbacks on a private copy | hangs, movie sync | S | low |
 | 6 | PCSX2 sprite-coverage patch (snapped edges plus coverage-weighted 4-tap for point-sampled sprites above 1x) | upscaled tutorial text blur | S-M | low |
 | 7 | `jalr` resumes only at its return address, plus a resume-switch guard | CPU-bound gameplay | S | medium (checkable) |
 | 8 | PSMT4/paletted texture upload and decode by row runs (address-identical) | loading, texture conversion | S-M | none |

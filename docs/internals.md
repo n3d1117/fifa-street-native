@@ -12,6 +12,10 @@ Mechanisms, invariants and constants. Read the section for the area you touch. C
 - Framebuffer changes (DISPFB2), guest updates and displayed presents are different metrics. `fps_dispfb2` in the `tz run` summary is the first; gameplay is 25/s, movies 50/s.
 - Gameplay is CPU-bound (GPU about 3.5 ms per 20 ms field, no GPU readbacks). Guest render/culling (`HIE_fn_vSendBufferedCharacterToViewport` and its VIF/MFIFO/VU1 children) dominates samples. Metal drawable waits only matter at 120 Hz without the upstream display-rate throttle, which is enabled.
 
+## IOP load delay
+
+- LWL/LWR merge with the pending load value when its destination matches `rt`; otherwise they merge with `gpr[rt]`. The merged result still has a load delay. Address calculation, ALU operands and stores read the committed registers; a direct register write in the delay slot still supersedes the pending load. `./tz test` covers both pair orders, unaligned offsets and ordinary load-delay behavior.
+
 ## Audio and movies
 
 - The guest audio callback returns zero when its destination ring cannot take a complete PES payload. The MPEG shim must then leave the PES in the input ring and report only accepted bytes to the calling guest thread; erasing it shifts later data and corrupts ADPCM. Demux stops at the first registered audio PES; incomplete and wrapped packets are assembled from both ring sides before parsing; CD/EOF accounting follows accepted bytes. Never mask a symptom with mute, gain reduction or a limiter. Code: `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp`, `processPssBuffer` (leaves a rejected PES in the ring) and the `onComplete` callback in `dispatchGuestStreamCallback` (a zero result re-presents it on the next `sceMpegDemuxPssRing`).
