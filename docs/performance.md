@@ -10,7 +10,7 @@ Follow-up for this A/B: verify the flag value at runtime in both phases and comp
 
 ## Capture analyzer
 
-`scripts/analyze-gs-profile.py` reads the actual `RRV_GATE4_GS_COUNTERS` v1 text rows emitted by `source/deps/pcsx2-gs-bridge-metal/bridge.cpp:558-575,700-723`. Example:
+`scripts/analyze-gs-profile.py` reads the actual `RRV_GATE4_GS_COUNTERS` v1 text rows emitted by `deps/fukami/tools/pcsx2-gs-bridge/bridge.cpp:558-575,700-723`. Example:
 
 ```sh
 python3 scripts/analyze-gs-profile.py /path/to/gs-counters.txt --from-field 500 --to-field 900

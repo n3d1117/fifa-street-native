@@ -4,7 +4,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 native_root="${TARZAN_NATIVE_TOOLS_ROOT:-$root}"
-pcsx2="$root/source/deps/pcsx2-2.8.2-bridge"
+pcsx2="$root/deps/pcsx2"
 base="$root/tools/metal-deps"
 src="$base/src"
 prefix="$base/prefix"

@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 13:32:02 +0200
+Subject: [PATCH 3/3] Group FFmpeg framework link options so tests link
+
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 1b03d177a970205cafa33fd87d26c359cfa08634..114fd97c21ca0ef70acc6f70d8d35c758be68d39 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -347,6 +347,33 @@ else()
+         libswresample
+         libswscale
+     )
++    if(APPLE)
++        # Keep each `-framework <name>` pair intact. CMake de-duplicates
++        # INTERFACE_LINK_OPTIONS, which can otherwise collapse repeated
++        # `-framework` flags into `-framework CoreFoundation CoreVideo ...`.
++        get_target_property(_ffmpeg_link_options PkgConfig::FFMPEG INTERFACE_LINK_OPTIONS)
++        if(_ffmpeg_link_options)
++            set(_ffmpeg_grouped_link_options)
++            set(_ffmpeg_expect_framework_name FALSE)
++            foreach(_ffmpeg_option IN LISTS _ffmpeg_link_options)
++                if(_ffmpeg_expect_framework_name)
++                    list(APPEND _ffmpeg_grouped_link_options "SHELL:-framework ${_ffmpeg_option}")
++                    set(_ffmpeg_expect_framework_name FALSE)
++                elseif(_ffmpeg_option STREQUAL "-framework")
++                    set(_ffmpeg_expect_framework_name TRUE)
++                elseif(_ffmpeg_option MATCHES "^-framework[ \t]+(.+)$")
++                    list(APPEND _ffmpeg_grouped_link_options "SHELL:-framework ${CMAKE_MATCH_1}")
++                else()
++                    list(APPEND _ffmpeg_grouped_link_options "${_ffmpeg_option}")
++                endif()
++            endforeach()
++            if(_ffmpeg_expect_framework_name)
++                list(APPEND _ffmpeg_grouped_link_options "-framework")
++            endif()
++            set_property(TARGET PkgConfig::FFMPEG PROPERTY INTERFACE_LINK_OPTIONS
++                "${_ffmpeg_grouped_link_options}")
++        endif()
++    endif()
+ 
+     add_library(ffmpeg INTERFACE)
+     target_link_libraries(ffmpeg INTERFACE PkgConfig::FFMPEG)

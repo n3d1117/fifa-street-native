@@ -2,7 +2,7 @@
 """Extract contiguous VIF MPG microcode uploads from a local MIPS ELF.
 
 The packet recognition follows the documented approach in
-source/fukami/tools/vu-aot/vu_aot_gen.py (GPL-3.0, see source/fukami/LICENSE):
+deps/fukami/tools/vu-aot/vu_aot_gen.py (GPL-3.0, see deps/fukami/LICENSE):
 an aligned VIF NOP, an MPG tag, and its inline VU words. This script is an
 independent, bounds-checked parser and writes only local .vu1 files.
 """

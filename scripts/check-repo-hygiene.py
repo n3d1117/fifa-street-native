@@ -18,7 +18,7 @@ def main():
     command = ('diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR') if args.staged else ('ls-files', '-z')
     names = [n.decode() for n in git(*command).split(b'\0') if n]
     allowed_roots = {'integration', 'scripts', 'tests', 'patches', 'tools', 'config', 'docs', '.githooks', '.github'}
-    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'STATUS.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes'}
+    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'STATUS.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', 'deps.lock'}
     allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml'}
     problems = []
     total = 0
@@ -31,11 +31,11 @@ def main():
             reason = 'unexpected root file'
         elif len(path.parts) > 1 and path.parts[0] not in allowed_roots:
             reason = 'data/build/vendor directory'
-        elif path.suffix not in allowed_extensions and path.name not in {'LICENSE', 'CMakeLists.txt', 'pre-commit', '.gitignore', '.gitattributes'}:
+        elif path.suffix not in allowed_extensions and path.name not in {'deps.lock', 'LICENSE', 'CMakeLists.txt', 'pre-commit', '.gitignore', '.gitattributes'}:
             reason = 'unexpected extension or binary/media artifact'
         elif path.parts[0] == 'config' and name != 'config/SLES-50350.template.toml':
             reason = 'local/game-derived configuration'
-        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu1recomp/', 'tools/patches/', 'tools/metal-deps/compat/')):
+        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu1recomp/', 'tools/metal-deps/compat/')) and name != 'tools/deps.py':
             reason = 'dependency/toolchain output'
         elif size > 1024 * 1024:
             reason = 'file exceeds 1 MiB'

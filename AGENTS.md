@@ -1,7 +1,7 @@
 Keep this repository bring-your-own-disc: never track discs, extracted game data,
 generated game code, symbols, binaries, build products, saves, or captures.
 Use the allowlist and run `python3 scripts/check-repo-hygiene.py --staged` before
-each commit. Export changed upstream patches with `scripts/snapshot-upstreams.py`.
+each commit. Change upstream code in deps/<name> as commits, then `python3 tools/deps.py export`.
 
 Commit only reviewable checkpoints after checks appropriate to the change.
 Immediately push every commit to the private origin and verify the push succeeded.

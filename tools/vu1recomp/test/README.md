@@ -2,7 +2,7 @@
 
 This replays MSCAL snapshots through Tarzan's VU1 interpreter and both generated native variants. It compares GIF packets, VF/VI/ACC/Q/P/I/R/PC, selected flags, all VU1 data memory, and cycle counts. Generated sources and snapshots are game-derived local artifacts; keep them out of version control.
 
-The macOS build script defaults to the active Metal runtime at `source/PS2Recomp-metal/ps2xRuntime`, the local LLVM 19 toolchain at `tools/build/llvm19`, SSE2NEON from `build/game-metal/_deps/sse2neon-src`, generated code in `generated/vu1-native`, and its executable in `build/vu1-replay`. Override these with `PS2X_VU1_RUNTIME`, `PS2X_LLVM19_ROOT`, `PS2X_LIBCXX_INCLUDE`, `PS2X_SSE2NEON_DIR`, `PS2X_VU1GEN_DIR`, and `PS2X_VU1TEST_OUT` as needed.
+The macOS build script defaults to the active Metal runtime at `deps/ps2recomp/ps2xRuntime`, the local LLVM 19 toolchain at `tools/build/llvm19`, SSE2NEON from `build/game-metal/_deps/sse2neon-src`, generated code in `generated/vu1-native`, and its executable in `build/vu1-replay`. Override these with `PS2X_VU1_RUNTIME`, `PS2X_LLVM19_ROOT`, `PS2X_LIBCXX_INCLUDE`, `PS2X_SSE2NEON_DIR`, `PS2X_VU1GEN_DIR`, and `PS2X_VU1TEST_OUT` as needed.
 
 Build after CMake has generated at least one `vu1rec_*.cpp`:
 

@@ -1,3 +1,9 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <edoardo@shapegames.com>
+Date: Sun, 18 Oct 2026 14:47:30 +0200
+Subject: [PATCH] GS bridge target, Metal fixes, macOS 11 SDK
+
+
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 index b0c394591ce8863d7b12dbb09b9df5ede18453f2..5e325f3ac036921597a435829d7e49b2e7a8cbbd 100644
 --- a/CMakeLists.txt

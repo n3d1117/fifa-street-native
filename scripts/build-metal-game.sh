@@ -45,10 +45,9 @@ LINK_FLAGS="-L$LLVM/lib -Wl,-rpath,$LLVM/lib -stdlib=libc++"
   -DTARZAN_NATIVE_TOOLS_ROOT="$NATIVE" \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DPKG_CONFIG_ARGN=--static \
-  -DTARZAN_PS2RECOMP_SOURCE_DIR="$ROOT/source/PS2Recomp-metal" \
+  -DTARZAN_PS2RECOMP_SOURCE_DIR="$ROOT/deps/ps2recomp" \
   -DTARZAN_GENERATED_DIR="$GENERATED" \
   -DTARZAN_USE_METAL=ON \
-  -DFETCHCONTENT_SOURCE_DIR_RAYLIB="$ROOT/source/deps/raylib" \
   2>&1 | tee "$LOG_DIR/metal-game-configure.log"
 
 "$NINJA" -C "$BUILD" -j2 tarzanMetalHostSmoke \

@@ -1,3 +1,9 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 13:23:45 +0200
+Subject: [PATCH 1/3] Tarzan runtime, Metal host and test changes
+
+
 diff --git a/ps2xIOP/include/ps2x/iop/iop_host_spu2.h b/ps2xIOP/include/ps2x/iop/iop_host_spu2.h
 new file mode 100644
 index 0000000000000000000000000000000000000000..b6b2a67207143a63575da1cb0b3c0fb0ca00af79
@@ -2456,44 +2462,10 @@ index 509fd07b0a2f07788e9f62e961001f79fd649c23..8d86252dbdc62d8a3a7d9c579690f63b
                             (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0);
      }
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..114fd97c21ca0ef70acc6f70d8d35c758be68d39 100644
+index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..1b03d177a970205cafa33fd87d26c359cfa08634 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
-@@ -347,6 +347,33 @@ else()
-         libswresample
-         libswscale
-     )
-+    if(APPLE)
-+        # Keep each `-framework <name>` pair intact. CMake de-duplicates
-+        # INTERFACE_LINK_OPTIONS, which can otherwise collapse repeated
-+        # `-framework` flags into `-framework CoreFoundation CoreVideo ...`.
-+        get_target_property(_ffmpeg_link_options PkgConfig::FFMPEG INTERFACE_LINK_OPTIONS)
-+        if(_ffmpeg_link_options)
-+            set(_ffmpeg_grouped_link_options)
-+            set(_ffmpeg_expect_framework_name FALSE)
-+            foreach(_ffmpeg_option IN LISTS _ffmpeg_link_options)
-+                if(_ffmpeg_expect_framework_name)
-+                    list(APPEND _ffmpeg_grouped_link_options "SHELL:-framework ${_ffmpeg_option}")
-+                    set(_ffmpeg_expect_framework_name FALSE)
-+                elseif(_ffmpeg_option STREQUAL "-framework")
-+                    set(_ffmpeg_expect_framework_name TRUE)
-+                elseif(_ffmpeg_option MATCHES "^-framework[ \t]+(.+)$")
-+                    list(APPEND _ffmpeg_grouped_link_options "SHELL:-framework ${CMAKE_MATCH_1}")
-+                else()
-+                    list(APPEND _ffmpeg_grouped_link_options "${_ffmpeg_option}")
-+                endif()
-+            endforeach()
-+            if(_ffmpeg_expect_framework_name)
-+                list(APPEND _ffmpeg_grouped_link_options "-framework")
-+            endif()
-+            set_property(TARGET PkgConfig::FFMPEG PROPERTY INTERFACE_LINK_OPTIONS
-+                "${_ffmpeg_grouped_link_options}")
-+        endif()
-+    endif()
- 
-     add_library(ffmpeg INTERFACE)
-     target_link_libraries(ffmpeg INTERFACE PkgConfig::FFMPEG)
-@@ -393,6 +420,8 @@ add_library(ps2_runtime STATIC
+@@ -393,6 +393,8 @@ add_library(ps2_runtime STATIC
      src/lib/vu/ps2_vu1_core.cpp
      src/lib/vu/ps2_vu1_upper.cpp
      src/lib/vu/ps2_vu1_lower.cpp
@@ -2502,7 +2474,7 @@ index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..114fd97c21ca0ef70acc6f70d8d35c75
      src/lib/games_database.cpp
  )
  
-@@ -512,6 +541,36 @@ target_link_libraries(ps2EntryRunner
+@@ -512,6 +514,36 @@ target_link_libraries(ps2EntryRunner
      ps2_runtime
  )
  
@@ -2539,7 +2511,7 @@ index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..114fd97c21ca0ef70acc6f70d8d35c75
  if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
      target_sources(ps2EntryRunner PRIVATE
          src/lib/ps2_debug_panel.cpp
-@@ -608,3 +667,28 @@ endif()
+@@ -608,3 +640,28 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -10084,7 +10056,7 @@ index 0000000000000000000000000000000000000000..d48aa4e4e634ae65e6500c236b7947a8
 +    m_lastStatsTime = t;
 +}
 diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
-index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64 100644
+index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4afccc3aa42ab5090a6314cf8b57bc4a3e388960 100644
 --- a/ps2xTest/CMakeLists.txt
 +++ b/ps2xTest/CMakeLists.txt
 @@ -29,6 +29,7 @@ add_library(ps2_test_lib STATIC
@@ -10095,87 +10067,8 @@ index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4c113c3fe142e1f7f6fc0d134fc0e0c2
      src/ps2_vu1_tests.cpp
      src/ps2_vu_tests.cpp
      src/ps2_gs_tests.cpp
-@@ -39,6 +40,12 @@ add_library(ps2_test_lib STATIC
-     src/ps2_runtime_expansion_tests.cpp
- )
- 
-+# Exercise native VU helpers with the shipping arithmetic contract.
-+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-+    set_source_files_properties(src/ps2_vu_tests.cpp PROPERTIES
-+        COMPILE_OPTIONS "-O2;-ffp-contract=off;-frounding-math;-fno-fast-math")
-+endif()
-+
- target_include_directories(ps2_test_lib PRIVATE
-     ${CMAKE_CURRENT_SOURCE_DIR}/include
-     ${CMAKE_SOURCE_DIR}/ps2xRecomp/include
-diff --git a/ps2xTest/include/MiniTest.h b/ps2xTest/include/MiniTest.h
-index 9fc510b8dc45059794ec83bcdf7ee517dbd0a727..8dae012ffb01ad626e15a18ce93c35f29b7c955f 100644
---- a/ps2xTest/include/MiniTest.h
-+++ b/ps2xTest/include/MiniTest.h
-@@ -5,6 +5,7 @@
- #include <map>
- #include <iostream>
- #include <exception>
-+#include <cstdlib>
- 
- class TestCase;
- using TestRunnerCallback = std::function<void(TestCase&)>;
-@@ -120,8 +121,31 @@ public:
-         m_beforeEach = fn;
-     }
- 
-+    static bool MatchesFilter(const std::string &testName, const char *filter)
-+    {
-+        if (!filter || !*filter)
-+            return true;
-+
-+        const std::string filterList(filter);
-+        size_t start = 0;
-+        while (start <= filterList.size())
-+        {
-+            const size_t comma = filterList.find(',', start);
-+            const size_t end = comma == std::string::npos ? filterList.size() : comma;
-+            const std::string token = filterList.substr(start, end - start);
-+            if (!token.empty() && testName.find(token) != std::string::npos)
-+                return true;
-+            if (comma == std::string::npos)
-+                break;
-+            start = comma + 1;
-+        }
-+        return false;
-+    }
-+
-     static int Run()
-     {
-+        const char *filter = std::getenv("MINITEST_FILTER");
-+        const bool filterActive = filter && *filter;
-         int failedCount = 0;
-         int totalTests = 0;
- 
-@@ -144,6 +168,8 @@ public:
-             {
-                 const std::string& testName = cc.first;
-                 const TestRunnerCallback& testFn = cc.second;
-+                if (!MatchesFilter(testName, filter))
-+                    continue;
- 
-                 totalTests++;
-                 testCase.ClearFailures();
-@@ -200,6 +226,12 @@ public:
-             }
-         }
- 
-+        if (filterActive && totalTests == 0)
-+        {
-+            std::cerr << "MINITEST_FILTER matched no test names: " << filter << std::endl;
-+            failedCount++;
-+        }
-+
-         std::cout << "\n========================================" << std::endl;
-         std::cout << "Total Tests: " << totalTests << std::endl;
-         std::cout << "Passed: " << (totalTests - failedCount) << std::endl;
 diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
-index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528f757a5a9 100644
+index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f08696e100cce 100644
 --- a/ps2xTest/src/code_generator_tests.cpp
 +++ b/ps2xTest/src/code_generator_tests.cpp
 @@ -5,6 +5,9 @@
@@ -10218,7 +10111,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528
      tc.Run("SYSCALL publishes its continuation before entering the runtime", [](TestCase &t) {
          Function func;
          func.name = "syscall_resume";
-@@ -1020,6 +1046,98 @@ void register_code_generator_tests()
+@@ -1020,6 +1046,95 @@ void register_code_generator_tests()
              t.IsTrue(ctc1Code.find("ignored") == std::string::npos, "CTC1 FCR31 should not be ignored");
          });
  
@@ -10227,7 +10120,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528
 +            Instruction rsqrt{};
 +            rsqrt.opcode = OPCODE_COP1;
 +            rsqrt.rs = COP1_S;
-+            rsqrt.rt = 5; // Ft; also aliases Fd
++            rsqrt.rt = 5; // Ft
 +            rsqrt.rd = 0; // Fs
 +            rsqrt.sa = 5; // Fd
 +            rsqrt.function = COP1_S_RSQRT;
@@ -10240,7 +10133,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528
 +            t.IsTrue(generated.find("fabsf(ctx->f[5])") != std::string::npos,
 +                     "RSQRT.S denominator must use abs(Ft)");
 +            t.IsTrue(generated.find("copysignf(0x1.fffffep+127f, ctx->f[5])") != std::string::npos,
-+                     "zero/denormal result sign must come from Ft, including -0");
++                     "RSQRT.S zero/denormal result sign must come from Ft");
 +            t.IsTrue(generated.find("FPU_DIV_S(rsqrtFs, FPU_SQRT_S(rsqrtFt))") != std::string::npos,
 +                     "RSQRT.S must divide Fs by sqrt(Ft)");
 +        });
@@ -10262,9 +10155,6 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528
 +                     "SQRT.S must produce signed zero for either zero operand");
 +            t.IsTrue(generated.find("FPU_SQRT_S(fabsf(sqrtFt))") != std::string::npos,
 +                     "SQRT.S must take sqrt(abs(Ft)) for negative inputs");
-+
-+            // PCSX2's SQRT_S reference cases: +9 and -9 both yield +3;
-+            // +0 and -0 preserve their respective zero sign.
 +            t.IsTrue(std::sqrt(std::fabs(-9.0f)) == 3.0f && std::sqrt(9.0f) == 3.0f,
 +                     "SQRT.S normal positive/negative numerical cases");
 +            t.IsTrue(std::signbit(-0.0f) && !std::signbit(0.0f),
@@ -10317,35 +10207,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528
          tc.Run("VU CFC2/CTC2 access VI registers directly", [](TestCase& t)
              {
                  CodeGenerator gen({}, {});
-@@ -1087,6 +1205,27 @@ void register_code_generator_tests()
-                 t.IsTrue(ctc2Code.find("Unimplemented") == std::string::npos, "CTC2 FBRST should be implemented");
-         });
- 
-+        tc.Run("VCALLMSR reads CMSAR0 without indexing the VI array", [](TestCase& t) {
-+            CodeGenerator gen({}, {});
-+            Instruction call{};
-+            call.opcode = OPCODE_COP2;
-+            call.rs = COP2_CO;
-+            call.function = VU0_S1_VCALLMSR;
-+            call.rd = VU0_CR_CMSAR0;
-+            call.raw = (static_cast<uint32_t>(VU0_CR_CMSAR0) << 11) |
-+                       (static_cast<uint32_t>(VU0_S1_VCALLMSR));
-+
-+            const std::string code = gen.translateInstruction(call);
-+            t.IsTrue(code.find("ctx->vu0_cmsar0 & 0x1FF") != std::string::npos,
-+                     "VCALLMSR must use the CMSAR0 instruction index");
-+            t.IsTrue(code.find("ctx->vu0_tpc = instr_index") != std::string::npos,
-+                     "VCALLMSR must publish the architectural TPC in instruction units");
-+            t.IsTrue(code.find("vu0StartMicroProgram(rdram, ctx, target_byte_addr)") != std::string::npos,
-+                     "VCALLMSR must start the microprogram at the corresponding byte address");
-+            t.IsTrue(code.find("ctx->vi[27]") == std::string::npos,
-+                     "CMSAR0 control register 27 must never index the 16-entry VI array");
-+        });
-+
-         tc.Run("scalar logical immediates emit low64 operations", [](TestCase &t) {
-             CodeGenerator gen({}, {});
- 
-@@ -1443,25 +1582,46 @@ void register_code_generator_tests()
+@@ -1443,25 +1558,46 @@ void register_code_generator_tests()
              t.IsTrue(out.find("ctx->vu0_vf[22]") == std::string::npos, "S2 must not use rs(format) as register index");
          });
  
@@ -10698,17 +10560,25 @@ index 0458a8cc8665efa376aa5764f5d08027c0e90533..1907bdc919f846aceb28485680b51bf3
                                      "sceGsResetGraph should free its temporary GIF packet");
          });
 diff --git a/ps2xTest/src/ps2_memory_tests.cpp b/ps2xTest/src/ps2_memory_tests.cpp
-index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d71b1a70c 100644
+index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f67380ab726f 100644
 --- a/ps2xTest/src/ps2_memory_tests.cpp
 +++ b/ps2xTest/src/ps2_memory_tests.cpp
-@@ -1,5 +1,6 @@
- #include "MiniTest.h"
- #include "runtime/ps2_memory.h"
-+#include "runtime/ee_scheduler.h"
- #include "runtime/gs/gs_frontend.h"
- #include "runtime/gs/ps2_gs_psmct32.h"
- #include "ps2_runtime.h"
-@@ -410,6 +411,105 @@ void register_ps2_memory_tests()
+@@ -40,12 +40,12 @@ namespace
+         std::memcpy(dst.data() + pos, &value, sizeof(uint64_t));
+     }
+ 
+-    uint64_t makeDmaTag(uint16_t qwc, uint8_t id, uint32_t addr, bool irq = false)
++    uint64_t makeDmaTag(uint16_t qwc, uint8_t id, uint32_t addr, bool irq = false, bool spr = false)
+     {
+         return static_cast<uint64_t>(qwc) |
+                (static_cast<uint64_t>(id & 0x7u) << 28) |
+                (irq ? (1ull << 31) : 0ull) |
+-               (static_cast<uint64_t>(addr & 0x7FFFFFFFu) << 32);
++               (static_cast<uint64_t>((addr & 0x7FFFFFFFu) | (spr ? 0x80000000u : 0u)) << 32);
+     }
+ 
+     void writeDmaTag(uint8_t *rdram, uint32_t tagAddr, uint64_t tagLo)
+@@ -410,6 +410,105 @@ void register_ps2_memory_tests()
              t.IsTrue(matches, "MPG num=0 should copy 2048 bytes into VU1 code memory");
          });
  
@@ -10814,15 +10684,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
          tc.Run("VIF UNPACK num zero uploads 256 vectors", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -418,6 +518,7 @@ void register_ps2_memory_tests()
-             // UNPACK V4_32: opcode 0x6C (vn=3, vl=0), num=0 => 256 vectors, 16 bytes each.
-             std::vector<uint8_t> packet;
-             packet.reserve(4u + 4096u);
-+            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
-             appendU32(packet, makeVifCmd(0x6Cu, 0u, 0u));
-             for (uint32_t i = 0; i < 4096u; ++i)
-             {
-@@ -440,6 +541,126 @@ void register_ps2_memory_tests()
+@@ -440,6 +539,126 @@ void register_ps2_memory_tests()
              t.IsTrue(matches, "UNPACK num=0 should copy 256 V4_32 vectors (4096 bytes)");
          });
  
@@ -10949,31 +10811,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
          tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -490,6 +711,7 @@ void register_ps2_memory_tests()
-             const uint16_t comps[4] = {0xFF80u, 0x0001u, 0x7FFFu, 0x8001u};
- 
-             std::vector<uint8_t> signPacket;
-+            appendU32(signPacket, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
-             appendU32(signPacket, makeVifCmd(0x6Du, 1u, 0x0000u)); // sign-extend
-             for (uint16_t c : comps)
-             {
-@@ -512,6 +734,7 @@ void register_ps2_memory_tests()
- 
-             // Same UNPACK with imm bit14 set => zero-extend.
-             std::vector<uint8_t> zeroPacket;
-+            appendU32(zeroPacket, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
-             appendU32(zeroPacket, makeVifCmd(0x6Du, 1u, 0x4000u)); // zero-extend
-             for (uint16_t c : comps)
-             {
-@@ -657,6 +880,7 @@ void register_ps2_memory_tests()
-             std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
- 
-             std::vector<uint8_t> packet;
-+            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
-             appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
-             appendU32(packet, 10u);
-             appendU32(packet, 20u);
-@@ -1370,6 +1594,45 @@ void register_ps2_memory_tests()
+@@ -1370,6 +1589,45 @@ void register_ps2_memory_tests()
              t.IsTrue(ct32Ok, "all CT32 pixels should survive a preceding paletted upload in the same GIF DMA chain");
          });
  
@@ -11019,7 +10857,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
          tc.Run("VIF1 DMA DIRECT forwards payload to GIF callback and clears channel", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1418,6 +1681,256 @@ void register_ps2_memory_tests()
+@@ -1418,6 +1676,259 @@ void register_ps2_memory_tests()
              t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u, "VIF1 QWC should be cleared after drain");
          });
  
@@ -11072,6 +10910,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
 +            const uint32_t codes[] = {0x82000000u, 0x81001234u}; // NOP-I, then STCYCL-I.
 +            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(codes), sizeof(codes));
++
 +            t.Equals(mem.vif1_regs.code, codes[0], "VIF1_CODE must retain the first IRQ command while stalled");
 +            t.IsTrue((mem.vif1_regs.stat & (1u << 11u)) != 0u, "completed NOP-I should set STAT.INT");
 +            t.IsTrue((mem.vif1_regs.stat & (1u << 10u)) != 0u, "non-MARK IRQ should set STAT.VIS");
@@ -11082,16 +10921,17 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
 +            t.Equals(firstIrq.size(), static_cast<size_t>(1u), "NOP-I should queue one VIF1 INTC interrupt");
 +            if (!firstIrq.empty())
 +                t.Equals(static_cast<uint32_t>(firstIrq[0]), 5u, "VIF1 INTC cause should be 5");
++
 +            t.IsTrue(mem.writeIORegister(0x10003C10u, 0x8u), "FBRST.STC should resume the stalled VIF parser");
 +            t.Equals(mem.vif1_regs.code, codes[1], "STC should then parse the next queued VIF command");
 +            t.Equals(mem.vif1_regs.cycle, 0x1234u, "resumed STCYCL should take effect");
 +            t.Equals(mem.readIORegister(0x10003C80u), codes[1], "VIF1_CODE MMIO should advance after STC");
 +            t.Equals(mem.readIORegister(0x10003C00u), mem.vif1_regs.stat, "VIF1_STAT MMIO should track resumed parser state");
-+            t.Equals(mem.takeCompletedIntcInterrupts().size(), static_cast<size_t>(1u),
-+                     "resumed STCYCL-I should queue the next interrupt");
++            const auto secondIrq = mem.takeCompletedIntcInterrupts();
++            t.Equals(secondIrq.size(), static_cast<size_t>(1u), "resumed STCYCL-I should queue the next interrupt");
 +        });
 +
-+        tc.Run("VIF1 MMIO reads live scalar and ROW/COL registers", [](TestCase &t)
++        tc.Run("VIF1 MMIO reads live scalar and spaced ROW/COL registers", [](TestCase &t)
 +        {
 +            PS2Memory mem;
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
@@ -11156,7 +10996,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
 +            PS2Memory mem;
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
 +            t.IsTrue(mem.writeIORegister(0x10003C20u, 1u), "set VIF1_ERR.MII");
-+            const uint32_t codes[] = {0x82000000u, 0x01005678u};
++            const uint32_t codes[] = {0x82000000u, 0x01005678u}; // masked NOP-I, STCYCL.
 +            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(codes), sizeof(codes));
 +            t.Equals(mem.vif1_regs.code, codes[1], "MII-masked IRQ should not leave VIF stalled");
 +            t.Equals(mem.vif1_regs.cycle, 0x5678u, "command after masked NOP-I should execute");
@@ -11171,11 +11011,12 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
 +            PS2Memory mem;
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
 +            uint8_t first[20]{};
-+            const uint32_t directI = 0xD0000002u;
++            const uint32_t directI = 0xD0000002u; // DIRECT-I, two QWC.
 +            std::memcpy(first, &directI, sizeof(directI));
-+            mem.processVIF1Data(first, sizeof(first));
++            mem.processVIF1Data(first, sizeof(first)); // First payload QWC only.
 +            t.Equals(mem.takeCompletedIntcInterrupts().size(), static_cast<size_t>(0u),
 +                     "DIRECT-I must wait for all payload QWC before interrupting");
++
 +            uint8_t finalQwc[16]{};
 +            mem.processVIF1Data(finalQwc, sizeof(finalQwc));
 +            t.IsTrue((mem.vif1_regs.stat & (1u << 11u)) != 0u, "completed DIRECT-I should set STAT.INT");
@@ -11276,7 +11117,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
          tc.Run("VIF1 DMA chain preserves compact tag high bytes for DIRECT packets", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1912,6 +2425,73 @@ void register_ps2_memory_tests()
+@@ -1912,6 +2423,116 @@ void register_ps2_memory_tests()
              }
          });
  
@@ -11347,96 +11188,6 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
 +                t.Equals(causes[0], 1u, "REFE should complete through VIF1 DMAC cause 1");
 +        });
 +
-         tc.Run("DMAC SPR_FROM copies scratchpad to RDRAM and completes channel 8", [](TestCase &t)
-         {
-             PS2Memory mem;
-@@ -1947,6 +2527,132 @@ void register_ps2_memory_tests()
-                 t.Equals(causes[0], 8u, "SPR_FROM completion should use DMAC cause 8");
-         });
- 
-+        tc.Run("DMAC SPR_FROM chain writes scratchpad data across MFIFO ring wrap", [](TestCase &t)
-+        {
-+            PS2Memory mem;
-+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
-+            constexpr uint32_t kSpr = 0x1000D000u;
-+            constexpr uint32_t kDctrl = 0x1000E000u;
-+            constexpr uint32_t kRingBase = 0x00030000u;
-+            constexpr uint32_t kRingMask = 0x30u;
-+            constexpr uint32_t kTagSadr = 0x3FF0u;
-+            auto putTag = [&](uint32_t scratchAddr, uint32_t id, uint32_t qwc, uint32_t madr)
-+            {
-+                const uint64_t tag = (static_cast<uint64_t>(madr) << 32u) |
-+                                     (static_cast<uint64_t>(id) << 28u) | qwc;
-+                std::memcpy(mem.getScratchpad() + scratchAddr, &tag, sizeof(tag));
-+            };
-+            putTag(kTagSadr, 0u, 2u, kRingBase + kRingMask);
-+            for (uint32_t i = 0; i < 32u; ++i)
-+                mem.getScratchpad()[i] = static_cast<uint8_t>(0xA0u + i);
-+            putTag(32u, 7u, 0u, kRingBase);
-+            mem.writeIORegister(kDctrl, 0x29u); // DMAE + STS_fromSPR + MFD_VIF1
-+            mem.writeIORegister(0x1000E050u, kRingBase);
-+            mem.writeIORegister(0x1000E040u, kRingMask);
-+            mem.writeIORegister(kSpr + 0x10u, kRingBase + kRingMask);
-+            mem.writeIORegister(kSpr + 0x20u, 0u);
-+            mem.writeIORegister(kSpr + 0x30u, kTagSadr);
-+            mem.writeIORegister(kSpr + 0x80u, kTagSadr);
-+            t.IsTrue(mem.writeIORegister(kSpr, 0x104u), "start SPR_FROM chain should succeed");
-+            bool copied = true;
-+            for (uint32_t i = 0; i < 16u; ++i)
-+                copied = copied && mem.getRDRAM()[kRingBase + kRingMask + i] == static_cast<uint8_t>(0xA0u + i);
-+            for (uint32_t i = 0; i < 16u; ++i)
-+                copied = copied && mem.getRDRAM()[kRingBase + i] == static_cast<uint8_t>(0xB0u + i);
-+            t.IsTrue(copied, "MFIFO writes should wrap at RBSR while reading the scratchpad ring");
-+            t.Equals(mem.readIORegister(kSpr + 0x10u), kRingBase, "SPR_FROM MADR should reflect the END tag destination");
-+            t.Equals(mem.readIORegister(kSpr + 0x80u), 48u, "SPR_FROM SADR should advance across scratchpad tag and payload");
-+            t.Equals(mem.readIORegister(0x1000E060u), kRingBase + 16u, "CNTS should update STADR after its payload");
-+            t.IsTrue((mem.readIORegister(kSpr) & 0x100u) == 0u, "END tag should complete SPR_FROM");
-+            t.IsTrue((mem.readIORegister(0x1000E010u) & (1u << 8u)) != 0u, "SPR_FROM chain should raise channel 8 status");
-+        });
-+
-+        tc.Run("VIF1 MFIFO resumes when producer data is available at nonzero RBOR", [](TestCase &t)
-+        {
-+            PS2Memory mem;
-+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
-+            constexpr uint32_t kVif = 0x10009000u;
-+            constexpr uint32_t kSpr = 0x1000D000u;
-+            constexpr uint32_t kRingBase = 0x00034000u;
-+            constexpr uint32_t kRingMask = 0x30u;
-+            auto putTag = [&](uint32_t address, uint32_t id, uint32_t qwc, uint32_t madr)
-+            {
-+                const uint64_t tag = (static_cast<uint64_t>(madr) << 32u) |
-+                                     (static_cast<uint64_t>(id) << 28u) | qwc;
-+                std::memcpy(mem.getScratchpad() + address, &tag, sizeof(tag));
-+            };
-+            mem.writeIORegister(0x1000E000u, 9u); // DMAE + MFD_VIF1
-+            mem.writeIORegister(0x1000E050u, kRingBase);
-+            mem.writeIORegister(0x1000E040u, kRingMask);
-+            mem.writeIORegister(kSpr + 0x10u, kRingBase + 0x30u); // producer and consumer initially meet
-+            mem.writeIORegister(kVif + 0x10u, kRingBase + 0x30u);
-+            mem.writeIORegister(kVif + 0x20u, 0u);
-+            mem.writeIORegister(kVif + 0x30u, kRingBase + 0x30u);
-+            t.IsTrue(mem.writeIORegister(kVif, 0x105u), "start VIF1 chain consumer should succeed");
-+            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "empty MFIFO read should preserve active VIF1 STR");
-+            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "repeated empty MFIFO reads should keep VIF1 waiting");
-+
-+            putTag(0u, 1u, 1u, kRingBase);
-+            mem.writeIORegister(kSpr + 0x20u, 1u); // publish only the CNT tag
-+            mem.writeIORegister(kSpr + 0x80u, 0u);
-+            t.IsTrue(mem.writeIORegister(kSpr, 0x100u), "SPR_FROM should publish the partial MFIFO stream");
-+            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "partial CNT payload should leave VIF1 active");
-+            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "repeated partial MFIFO reads should preserve STR");
-+
-+            std::memset(mem.getScratchpad() + 16u, 0, 16u); // VIF NOP stream
-+            putTag(32u, 7u, 0u, kRingBase);
-+            mem.writeIORegister(kSpr + 0x10u, kRingBase);
-+            mem.writeIORegister(kSpr + 0x20u, 2u); // payload and END tag
-+            mem.writeIORegister(kSpr + 0x80u, 16u);
-+            t.IsTrue(mem.writeIORegister(kSpr, 0x100u), "SPR_FROM should publish the remaining MFIFO stream");
-+            t.IsTrue((mem.readIORegister(kVif) & 0x100u) == 0u, "END tag should clear STR after producer resumes VIF1");
-+            t.Equals(mem.readIORegister(kVif + 0x30u), kRingBase + 32u, "VIF1 TADR should advance across wrapped tag and payload");
-+            t.IsTrue((mem.readIORegister(0x1000E010u) & (1u << 1u)) != 0u, "VIF1 completion should raise channel 1 status");
-+        });
-+
 +        tc.Run("VIF1 MFIFO accepts chains longer than 4096 zero-length CNT tags", [](TestCase &t)
 +        {
 +            PS2Memory mem;
@@ -11480,18 +11231,10 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
 +                t.Equals(causes[0], 1u, "long MFIFO chain should use VIF1 DMAC cause 1");
 +        });
 +
-         tc.Run("DMAC SPR_TO copies RDRAM to scratchpad and completes channel 9", [](TestCase &t)
+         tc.Run("DMAC SPR_FROM copies scratchpad to RDRAM and completes channel 8", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -2034,6 +2740,7 @@ void register_ps2_memory_tests()
-             R5900Context ctx{};
-             setRegU32(ctx, 4, 1u); // sceDmaGetChan(1) / VIF1
-             setRegU32(ctx, 5, kTag);
-+            runtime.eeScheduler().reset(rdram, ctx);
-             ps2_stubs::sceDmaSend(rdram, &ctx, &runtime);
- 
-             t.Equals(static_cast<int32_t>(::getRegU32(&ctx, 2)), 0,
-@@ -2138,7 +2845,7 @@ void register_ps2_memory_tests()
+@@ -2138,7 +2759,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -11500,7 +11243,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d
              appendU64(packet, makeGifTag(1u, GIF_FMT_IMAGE, 0u, true));
              appendU64(packet, 0ull);
              for (uint32_t i = 0; i < 16u; ++i)
-@@ -2187,7 +2894,7 @@ void register_ps2_memory_tests()
+@@ -2187,7 +2808,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -12616,7 +12359,7 @@ index 0000000000000000000000000000000000000000..85fc95ad27450c90950410673c99b38a
 +    });
 +}
 diff --git a/ps2xTest/src/ps2_vu1_tests.cpp b/ps2xTest/src/ps2_vu1_tests.cpp
-index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..2f5dd3ed299a12ec20f23f6ff60aea9ed36a4cef 100644
+index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5d241c35c 100644
 --- a/ps2xTest/src/ps2_vu1_tests.cpp
 +++ b/ps2xTest/src/ps2_vu1_tests.cpp
 @@ -4,6 +4,7 @@
@@ -12627,150 +12370,7 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..2f5dd3ed299a12ec20f23f6ff60aea9e
  
  #include <cmath>
  #include <cstdint>
-@@ -211,6 +212,50 @@ namespace
-     {
-         std::memcpy(values, data + qwordIndex * 16u, sizeof(float) * 4u);
-     }
-+
-+    constexpr uint32_t kGuardedVu1Entry = 0x3F00u;
-+    constexpr uint64_t kGuardedVu1ExpectedWord = 0x1122334455667788ull;
-+    const uint8_t *gGuardedVu1ExpectedCode = nullptr;
-+    uint32_t gGuardedVu1FastCalls = 0u;
-+    uint32_t gGuardedVu1FullCalls = 0u;
-+
-+    void runGuardedVu1TestImage(Vu1RecContext &ctx, uint32_t entryPc)
-+    {
-+        uint64_t currentWord = 0u;
-+        const bool codePointerMatches = ctx.code != nullptr && ctx.code == gGuardedVu1ExpectedCode;
-+        if (codePointerMatches)
-+            std::memcpy(&currentWord, ctx.code + entryPc, sizeof(currentWord));
-+
-+        if (codePointerMatches && entryPc == kGuardedVu1Entry &&
-+            currentWord == kGuardedVu1ExpectedWord)
-+        {
-+            ctx.state->vi[3] = 77;
-+            ctx.state->pc = entryPc + 8u;
-+            ctx.cycle += 2u;
-+            return;
-+        }
-+
-+        ctx.state->vi[3] = 1234;
-+        ctx.data[7] = 0xCCu;
-+        ctx.cycle += 100u;
-+        const uint8_t packet[16] = {0u, 0x80u};
-+        if (ctx.sink)
-+            ctx.sink(ctx.sinkUser, packet, sizeof(packet));
-+        ctx.failed = true;
-+        ctx.failPc = entryPc;
-+    }
-+
-+    void guardedVu1FastForTest(Vu1RecContext &ctx, uint32_t entryPc)
-+    {
-+        ++gGuardedVu1FastCalls;
-+        runGuardedVu1TestImage(ctx, entryPc);
-+    }
-+
-+    void guardedVu1FullForTest(Vu1RecContext &ctx, uint32_t entryPc)
-+    {
-+        ++gGuardedVu1FullCalls;
-+        runGuardedVu1TestImage(ctx, entryPc);
-+    }
- }
- 
- void register_ps2_vu1_tests()
-@@ -1202,6 +1247,91 @@ void register_ps2_vu1_tests()
-             }
-         });
- 
-+        tc.Run("XGKICK packet storage can be reused after reset", [](TestCase &t)
-+        {
-+            Vu1Fixture fx;
-+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
-+
-+            std::vector<std::vector<uint8_t>> captured;
-+            fx.mem.setGifPacketCallback([&](const uint8_t *packet, uint32_t sizeBytes)
-+            {
-+                captured.emplace_back(packet, packet + sizeBytes);
-+            });
-+
-+            writeVuInstructionPair(
-+                fx.code, 0u,
-+                makeVuLowerSpecial(0x6Cu, 1u),
-+                kVuUpperNop);
-+
-+            const uint64_t longTag = makeGifTag(8u, GIF_FMT_IMAGE, 0u, true);
-+            std::memcpy(fx.data, &longTag, sizeof(longTag));
-+            std::memset(fx.data + 8u, 0, 8u);
-+            for (uint32_t i = 0; i < 8u * 16u; ++i)
-+                fx.data[16u + i] = static_cast<uint8_t>(0x20u + i);
-+
-+            std::vector<uint8_t> expectedLong(16u + 8u * 16u);
-+            std::memcpy(expectedLong.data(), fx.data, expectedLong.size());
-+
-+            VU1Interpreter vu1;
-+            vu1.state().vi[1] = 0;
-+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
-+                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
-+                        0u, 0u, 0u, 64u);
-+            t.Equals(captured.size(), size_t{1},
-+                     "the long XGKICK packet should finish before reset");
-+            if (captured.size() == 1u)
-+                t.IsTrue(captured[0] == expectedLong,
-+                         "the long packet should preserve every transferred byte");
-+
-+            vu1.reset();
-+            const uint64_t shortTag = makeGifTag(1u, GIF_FMT_IMAGE, 0u, true);
-+            std::memcpy(fx.data, &shortTag, sizeof(shortTag));
-+            std::memset(fx.data + 8u, 0, 8u);
-+            for (uint32_t i = 0; i < 16u; ++i)
-+                fx.data[16u + i] = static_cast<uint8_t>(0xD0u + i);
-+
-+            std::vector<uint8_t> expectedShort(32u);
-+            std::memcpy(expectedShort.data(), fx.data, expectedShort.size());
-+            vu1.state().vi[1] = 0;
-+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
-+                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
-+                        0u, 0u, 0u, 16u);
-+            t.Equals(captured.size(), size_t{2},
-+                     "the short packet should follow the reset without stale output");
-+            if (captured.size() == 2u)
-+                t.IsTrue(captured[1] == expectedShort,
-+                         "the short packet should have exactly its new tag and payload");
-+
-+            vu1.reset();
-+            const uint64_t oversizedTag = makeGifTag(0x7FFFu, GIF_FMT_IMAGE, 0u, true);
-+            std::memcpy(fx.data, &oversizedTag, sizeof(oversizedTag));
-+            std::memset(fx.data + 8u, 0, 8u);
-+            vu1.state().vi[1] = 0;
-+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
-+                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
-+                        0u, 0u, 0u, 8u);
-+            t.Equals(captured.size(), size_t{2},
-+                     "an oversized packet must fail without emitting partial output");
-+
-+            vu1.reset();
-+            std::memcpy(fx.data, &shortTag, sizeof(shortTag));
-+            std::memset(fx.data + 8u, 0, 8u);
-+            for (uint32_t i = 0; i < 16u; ++i)
-+                fx.data[16u + i] = static_cast<uint8_t>(0x70u + i);
-+            std::vector<uint8_t> expectedAfterOversized(32u);
-+            std::memcpy(expectedAfterOversized.data(), fx.data,
-+                        expectedAfterOversized.size());
-+            vu1.state().vi[1] = 0;
-+            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
-+                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
-+                        0u, 0u, 0u, 16u);
-+            t.Equals(captured.size(), size_t{3},
-+                     "the valid packet after oversized-transfer reset should be the only new output");
-+            if (captured.size() == 3u)
-+                t.IsTrue(captured[2] == expectedAfterOversized,
-+                         "oversized-transfer state must not leak into the next packet");
-+        });
-+
-         tc.Run("XGKICK observes stores committed before a future PATH1 qword", [](TestCase &t)
-         {
-             PS2Memory mem;
-@@ -1690,6 +1820,85 @@ void register_ps2_vu1_tests()
+@@ -1690,6 +1691,85 @@ void register_ps2_vu1_tests()
                       "the underflowing product should set sticky Z and U");
          });
  
@@ -12856,262 +12456,3 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..2f5dd3ed299a12ec20f23f6ff60aea9e
          tc.Run("reserved opcodes stop before executing or corrupting state", [](TestCase &t)
          {
              Vu1Fixture fx;
-@@ -1712,5 +1921,78 @@ void register_ps2_vu1_tests()
-             t.Equals(vu1.state().vi[1], 0,
-                      "instruction following a reserved opcode must not execute");
-         });
-+
-+        tc.Run("guarded VU image validates only executed code and stages failures", [](TestCase &t)
-+        {
-+            Vu1Fixture fx;
-+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
-+            std::memcpy(fx.code + kGuardedVu1Entry, &kGuardedVu1ExpectedWord,
-+                        sizeof(kGuardedVu1ExpectedWord));
-+
-+            uint64_t codeHash = 1469598103934665603ull;
-+            for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
-+                codeHash = (codeHash ^ fx.code[i]) * 1099511628211ull;
-+            t.IsTrue(vu1recFind(codeHash) == nullptr,
-+                     "the test bank must not have an exact whole-bank image");
-+
-+            static const uint32_t entries[] = {kGuardedVu1Entry};
-+            Vu1RecImage image;
-+            image.hash = codeHash;
-+            image.entries = entries;
-+            image.entryCount = 1u;
-+            image.fast = &guardedVu1FastForTest;
-+            image.full = &guardedVu1FullForTest;
-+            image.guarded = true;
-+            vu1recRegister(image);
-+
-+            gGuardedVu1ExpectedCode = fx.code;
-+            gGuardedVu1FastCalls = 0u;
-+            gGuardedVu1FullCalls = 0u;
-+
-+            VU1Interpreter vu1;
-+            Vu1NativeDispatcher native;
-+            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
-+                     "unknown whole-bank hashes should dispatch through the guarded image");
-+            t.Equals(gGuardedVu1FullCalls, 1u,
-+                     "guarded images must use the full-flag native variant");
-+            t.Equals(gGuardedVu1FastCalls, 0u,
-+                     "guarded images must not use the fast native variant");
-+            t.Equals(vu1.state().vi[3], 77,
-+                     "the guarded callback should execute when its current word matches");
-+
-+            fx.code[0x2F00u] = 0xA5u; // Not reached by this test image.
-+            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
-+                     "mutating an unexecuted code word must not reject the guarded image");
-+            t.Equals(gGuardedVu1FullCalls, 2u,
-+                     "the guarded full variant should receive the second dispatch");
-+            t.Equals(gGuardedVu1FastCalls, 0u,
-+                     "the guarded fast variant should remain unused");
-+
-+            vu1.state().vi[3] = 42;
-+            vu1.state().pc = 0x2580u;
-+            vu1.setCycleCount(17u);
-+            fx.data[7] = 0x55u;
-+            const uint64_t gifBefore = fx.mem.gifCopyCount();
-+            const uint64_t changedWord = kGuardedVu1ExpectedWord ^ 1u;
-+            std::memcpy(fx.code + kGuardedVu1Entry, &changedWord, sizeof(changedWord));
-+
-+            t.IsTrue(!native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
-+                     "changing an executed code word must fail the guarded image");
-+            t.Equals(gGuardedVu1FullCalls, 3u,
-+                     "the changed executed word should reach the full guard");
-+            t.Equals(gGuardedVu1FastCalls, 0u,
-+                     "failed guarded dispatch must not use the fast variant");
-+            t.Equals(vu1.state().vi[3], 42,
-+                     "a guarded failure must preserve the input registers");
-+            t.Equals(vu1.state().pc, 0x2580u,
-+                     "a guarded failure must preserve the input PC");
-+            t.Equals(vu1.cycleCount(), uint64_t(17u),
-+                     "a guarded failure must preserve guest cycles");
-+            t.Equals(fx.data[7], uint8_t(0x55u),
-+                     "a guarded failure must discard staged data writes");
-+            t.Equals(fx.mem.gifCopyCount(), gifBefore,
-+                     "a guarded failure must discard staged GIF packets");
-+            gGuardedVu1ExpectedCode = nullptr;
-+        });
-     });
- }
-diff --git a/ps2xTest/src/ps2_vu_tests.cpp b/ps2xTest/src/ps2_vu_tests.cpp
-index b96befe6566f5187c30246e4b431c14b07433634..932d210ba17f19b12d031b29fb6d823f94c64218 100644
---- a/ps2xTest/src/ps2_vu_tests.cpp
-+++ b/ps2xTest/src/ps2_vu_tests.cpp
-@@ -5,10 +5,15 @@
- #include "Kernel/Stubs/VU.h"
- 
- #include <cmath>
-+#include <cfenv>
- #include <cstdint>
- #include <cstring>
- #include <vector>
- 
-+#if defined(__aarch64__)
-+#include "runtime/ps2_vu1_recomp_support.h"
-+#endif
-+
- namespace
- {
-     constexpr float kEps = 1e-4f;
-@@ -75,6 +80,29 @@ namespace
-         m[10] = 1.0f;
-         m[15] = 1.0f;
-     }
-+
-+#if defined(__aarch64__)
-+    uint32_t floatBits(float value)
-+    {
-+        uint32_t bits;
-+        std::memcpy(&bits, &value, sizeof(bits));
-+        return bits;
-+    }
-+
-+    float bitsFloat(uint32_t bits)
-+    {
-+        float value;
-+        std::memcpy(&value, &bits, sizeof(value));
-+        return value;
-+    }
-+
-+    struct FenvRestore
-+    {
-+        fenv_t saved{};
-+        FenvRestore() { std::fegetenv(&saved); }
-+        ~FenvRestore() { std::fesetenv(&saved); }
-+    };
-+#endif
- }
- 
- void register_ps2_vu_tests()
-@@ -97,6 +125,129 @@ void register_ps2_vu_tests()
-                      "MulVector should multiply lanes component-wise");
-         });
- 
-+#if defined(__aarch64__)
-+        tc.Run("FmacOverride_matches_scalar_exact_all_rounding_modes", [](TestCase &t)
-+        {
-+            FenvRestore restore;
-+            constexpr int roundingModes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
-+            constexpr uint32_t edgeBits[] = {
-+                0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u,
-+                0x007FFFFFu, 0x807FFFFFu, 0x00800000u, 0x80800000u,
-+                0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u,
-+                0x7FC00001u, 0xFFC12345u, 0x3F800000u, 0xBF800000u,
-+                0x4B000001u, 0xCB000001u, 0x7EFFFFFFu, 0xFEFFFFFFu,
-+                0x33800000u, 0xB3800000u, 0x00800001u, 0x80800001u
-+            };
-+            struct InputBits
-+            {
-+                uint32_t acc[4];
-+                uint32_t s[4];
-+                uint32_t t[4];
-+            };
-+            constexpr InputBits boundaryVectors[] = {
-+                // Exact positive and negative cancellation for both add and subtract.
-+                {{0x3F800000u, 0x3F800000u, 0xBF800000u, 0xBF800000u},
-+                 {0xBF800000u, 0x3F800000u, 0x3F800000u, 0xBF800000u},
-+                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
-+                // Tiny exact values plus immediately below/above the minimum normal boundary.
-+                {{0x00000000u, 0x00000000u, 0x00800000u, 0x00800000u},
-+                 {0x00000001u, 0x80000001u, 0x80000001u, 0x00000001u},
-+                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
-+                // Rounded overflow must clamp to signed FLT_MAX; also exercise the exact boundary.
-+                {{0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F7FFFFFu, 0xFF7FFFFFu},
-+                 {0x7F7FFFFFu, 0xFF7FFFFFu, 0xFF7FFFFFu, 0x7F7FFFFFu},
-+                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
-+                {{0x00000000u, 0x00000000u, 0x7F7FFFFFu, 0xFF7FFFFFu},
-+                 {0x7F7FFFFFu, 0xFF7FFFFFu, 0x00000000u, 0x00000000u},
-+                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}}
-+            };
-+            auto checkInputs = [&](const float *acc, const float *s, const float *v)
-+            {
-+                const float32x4_t va = vld1q_f32(acc);
-+                const float32x4_t vs = vld1q_f32(s);
-+                const float32x4_t vv = vld1q_f32(v);
-+                const float32x4_t product = vmulq_f32(vs, vv);
-+                const float32x4_t roundedAdd = vaddq_f32(va, product);
-+                const float32x4_t roundedSub = vsubq_f32(va, product);
-+                const float32x4_t addActual = vr_madd(va, vs, vv);
-+                const float32x4_t subActual = vr_msub(va, vs, vv);
-+                const float32x4_t addOverride = vr_fmac_override(roundedAdd, va, vs, vv, false);
-+                const float32x4_t subOverride = vr_fmac_override(roundedSub, va, vs, vv, true);
-+                float addOut[4], subOut[4], addDirect[4], subDirect[4];
-+                vst1q_f32(addOut, addActual);
-+                vst1q_f32(subOut, subActual);
-+                vst1q_f32(addDirect, addOverride);
-+                vst1q_f32(subDirect, subOverride);
-+                for (unsigned lane = 0; lane < 4; ++lane)
-+                {
-+                    const float expectedAdd = vr_fmac_exact_override(roundedAdd[lane], acc[lane], s[lane], v[lane], false);
-+                    const float expectedSub = vr_fmac_exact_override(roundedSub[lane], acc[lane], s[lane], v[lane], true);
-+                    if (floatBits(addOut[lane]) != floatBits(expectedAdd) ||
-+                        floatBits(addDirect[lane]) != floatBits(expectedAdd) ||
-+                        floatBits(subOut[lane]) != floatBits(expectedSub) ||
-+                        floatBits(subDirect[lane]) != floatBits(expectedSub))
-+                        return false;
-+                }
-+                return true;
-+            };
-+
-+            bool matches = true;
-+            for (int mode : roundingModes)
-+            {
-+                if (std::fesetround(mode) != 0)
-+                {
-+                    matches = false;
-+                    break;
-+                }
-+                for (const InputBits &input : boundaryVectors)
-+                {
-+                    float acc[4], s[4], v[4];
-+                    for (unsigned lane = 0; lane < 4; ++lane)
-+                    {
-+                        acc[lane] = bitsFloat(input.acc[lane]);
-+                        s[lane] = bitsFloat(input.s[lane]);
-+                        v[lane] = bitsFloat(input.t[lane]);
-+                    }
-+                    matches = checkInputs(acc, s, v);
-+                    if (!matches)
-+                        break;
-+                }
-+                for (size_t i = 0; i < sizeof(edgeBits) / sizeof(edgeBits[0]) && matches; i += 4)
-+                {
-+                    float acc[4], s[4], v[4];
-+                    for (unsigned lane = 0; lane < 4; ++lane)
-+                    {
-+                        acc[lane] = bitsFloat(edgeBits[(i + lane) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
-+                        s[lane] = bitsFloat(edgeBits[(i + lane + 7) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
-+                        v[lane] = bitsFloat(edgeBits[(i + lane + 13) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
-+                    }
-+                    matches = checkInputs(acc, s, v);
-+                }
-+
-+                uint32_t state = 0x9E3779B9u;
-+                auto nextBits = [&state]()
-+                {
-+                    state ^= state << 13;
-+                    state ^= state >> 17;
-+                    state ^= state << 5;
-+                    return state;
-+                };
-+                for (unsigned sample = 0; sample < 10000u && matches; ++sample)
-+                {
-+                    float acc[4], s[4], v[4];
-+                    for (unsigned lane = 0; lane < 4; ++lane)
-+                    {
-+                        acc[lane] = bitsFloat(nextBits());
-+                        s[lane] = bitsFloat(nextBits());
-+                        v[lane] = bitsFloat(nextBits());
-+                    }
-+                    matches = checkInputs(acc, s, v);
-+                }
-+            }
-+            t.IsTrue(matches, "NEON FMAC override must match scalar exact handling bit-for-bit for all rounding modes");
-+        });
-+#endif
-+
-         tc.Run("ScaleVectorXYZ_scales_xyz", [](TestCase &t)
-         {
-             VuEnv env;

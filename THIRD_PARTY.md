@@ -5,7 +5,7 @@ the included GPL text is in `LICENSE`. Retain upstream notices in reused files.
 
 | Component | Source / role |
 |---|---|
-| PS2Recomp | [ran-j/PS2Recomp](https://github.com/ran-j/PS2Recomp), compiler/runtime; exact revisions and local patches in `patches/upstreams.json`. |
+| PS2Recomp | [ran-j/PS2Recomp](https://github.com/ran-j/PS2Recomp), compiler/runtime; exact revision in `deps.lock`, local patches in `patches/ps2recomp/`. |
 | Fukami | [danisandoval/fukami](https://github.com/danisandoval/fukami), standalone Metal GS and SPU2 bridges; GPL-3.0 notices retained. |
 | PCSX2 | [PCSX2/pcsx2](https://github.com/PCSX2/pcsx2), GS/Metal/SPU2 cores; pinned v2.8.2 source and resource provenance are checked locally. |
 | VU1 tooling | [catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS](https://github.com/catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS), adapted native VU compiler; copied license/provenance in `tools/vu1recomp`. |

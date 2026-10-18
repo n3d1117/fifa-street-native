@@ -28,7 +28,7 @@ def main():
     directory = ROOT / "logs" / (stamp + "-validation")
     directory.mkdir(parents=True)
     steps = [
-        ("metal-diff", ["git", "-C", "source/PS2Recomp-metal", "diff", "--check"]),
+        ("metal-diff", ["git", "-C", "deps/ps2recomp", "diff", "--check"]),
         ("diagnostic-selftest", [sys.executable, "scripts/test-diagnostics.py"]),
         # Catch host/API/link errors before paying for translated game compilation.
         ("host-build", [str(NINJA), "-C", "build/game-metal", "-j2",

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$ROOT}"
-SRC="$ROOT/source/PS2Recomp-metal"
+SRC="$ROOT/deps/ps2recomp"
 BUILD="$ROOT/build/recompiler"
 PREFIX="$NATIVE/tools/build/llvm19"
 CMAKE="$NATIVE/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"

@@ -36,12 +36,9 @@ def run(*args: str) -> str:
 
 
 def main() -> int:
-    deps = ROOT / "source/deps"
     archive_dir = ROOT / "build/metal-bridge"
     resource_dir = archive_dir / "pcsx2-2.8.2-resources"
-    source_dir = deps / "pcsx2-2.8.2"
     archive_dir.mkdir(parents=True, exist_ok=True)
-    deps.mkdir(parents=True, exist_ok=True)
 
     # Establish asset identity from GitHub's immutable-release API before using bytes.
     req = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "tarzan-metal-bridge-preparer"})
@@ -103,18 +100,8 @@ def main() -> int:
     }
     (archive_dir / "metal-resources-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
-    if source_dir.exists():
-        got = run("git", "-C", str(source_dir), "rev-parse", "HEAD") if (source_dir / ".git").exists() else ""
-        if got != PIN or run("git", "-C", str(source_dir), "status", "--porcelain"):
-            raise SystemExit(f"Existing source checkout is not clean at {PIN}: {source_dir}")
-    else:
-        subprocess.run(["git", "clone", "--filter=blob:none", "--no-checkout", "https://github.com/PCSX2/pcsx2.git", str(source_dir)], check=True)
-        subprocess.run(["git", "-C", str(source_dir), "checkout", "--detach", PIN], check=True)
-    if run("git", "-C", str(source_dir), "rev-parse", "HEAD") != PIN:
-        raise SystemExit(f"PCSX2 checkout does not match locked commit {PIN}")
     print(f"verified resources: {resource_dir}")
     print(f"release provenance: {archive_dir / 'metal-resources-manifest.json'}")
-    print(f"clean pinned PCSX2 source: {source_dir} ({PIN})")
     return 0
 
 

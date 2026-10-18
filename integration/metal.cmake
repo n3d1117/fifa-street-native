@@ -52,9 +52,9 @@ if(TARZAN_USE_METAL)
         "${CMAKE_CURRENT_LIST_DIR}/metal-gs-adapter.cpp")
     target_include_directories(tarzanMetalHost PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}"
-        "${TARZAN_ROOT}/source/fukami/tools/pcsx2-gs-bridge"
-        "${TARZAN_ROOT}/source/fukami/tools/pcsx2-spu2"
-        "${TARZAN_ROOT}/source/deps/pcsx2-2.8.2/3rdparty/soundtouch/soundtouch"
+        "${TARZAN_ROOT}/deps/fukami/tools/pcsx2-gs-bridge"
+        "${TARZAN_ROOT}/deps/fukami/tools/pcsx2-spu2"
+        "${TARZAN_ROOT}/deps/pcsx2/3rdparty/soundtouch/soundtouch"
         "${TARZAN_PS2RECOMP_SOURCE_DIR}/ps2xIOP/include")
     target_compile_features(tarzanMetalHost PRIVATE cxx_std_20)
     target_compile_options(tarzanMetalHost PRIVATE
@@ -78,12 +78,12 @@ if(TARZAN_USE_METAL)
     target_link_libraries(tarzanMetalHost PRIVATE "${TARZAN_SOUNDTOUCH_LIBRARY}")
     enable_testing()
     add_executable(tarzanAudioStretcherTest
-        "${TARZAN_ROOT}/source/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
+        "${TARZAN_ROOT}/deps/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/audio-stretcher-test.cpp")
     target_include_directories(tarzanAudioStretcherTest PRIVATE
         "${CMAKE_CURRENT_LIST_DIR}"
-        "${TARZAN_ROOT}/source/fukami/tools/pcsx2-spu2"
-        "${TARZAN_ROOT}/source/deps/pcsx2-2.8.2/3rdparty/soundtouch/soundtouch")
+        "${TARZAN_ROOT}/deps/fukami/tools/pcsx2-spu2"
+        "${TARZAN_ROOT}/deps/pcsx2/3rdparty/soundtouch/soundtouch")
     target_compile_definitions(tarzanAudioStretcherTest PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
     target_compile_features(tarzanAudioStretcherTest PRIVATE cxx_std_20)
     target_link_options(tarzanAudioStretcherTest PRIVATE -stdlib=libc++)

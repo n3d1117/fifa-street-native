@@ -9,8 +9,8 @@ NINJA="$NATIVE/tools/build/ninja-1.13.1/ninja"
 SDK="$(xcrun --show-sdk-path)"
 BUILD="$ROOT/build/spu2-backend"
 LOG="$ROOT/logs/spu2-backend-build.log"
-PCSX2="$ROOT/source/deps/pcsx2-2.8.2"
-SOURCE="$ROOT/source/fukami/tools/pcsx2-spu2"
+PCSX2="$ROOT/deps/pcsx2"
+SOURCE="$ROOT/deps/fukami/tools/pcsx2-spu2"
 
 for tool in "$CMAKE" "$NINJA" "$LLVM/bin/clang++"; do
     if [ ! -x "$tool" ]; then

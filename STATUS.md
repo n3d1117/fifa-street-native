@@ -27,13 +27,12 @@ completed source decompilation or a verified complete game port.
 
 This source-only repository excludes original disc images, extracted files,
 generated game code/maps, dependencies, tools, binaries, captures and user data.
-Pinned upstream revisions and working-tree source patches are snapshotted by
-`scripts/snapshot-upstreams.py`; `scripts/restore-upstreams.py` restores missing
-checkouts without overwriting existing work. `patches/upstreams.json` is the
-lock/patch manifest. Legacy standalone patches are historical, not cumulative
-instructions to apply over the snapshot.
+Upstream revisions are pinned in `deps.lock`; our changes to them are a
+`git format-patch` stack in `patches/<name>/`. `python3 tools/deps.py sync`
+builds `deps/<name>` (ignored local checkouts) from them and `export` writes
+commits made there back to `patches/`.
 
-Local sequence: restore upstreams; supply a supported PAL disc and run
+Local sequence: `python3 tools/deps.py sync`; supply a supported PAL disc and run
 `extract-disc.py`; run `configure-local.py` to derive the symbol map/config;
 prepare the local toolchain under `tools/build` and dependencies; build the Metal
 bridge and game;

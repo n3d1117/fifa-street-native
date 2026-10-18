@@ -2,6 +2,7 @@
 # it is explicitly listed below; game inputs and generated outputs stay local.
 /*
 !/.gitignore
+!/deps.lock
 !/README.md
 !/STATUS.md
 !/LICENSE
@@ -51,13 +52,16 @@
 !/tests/**/*.m
 !/tests/**/*.txt
 
-# Portable source patches only.
+# Pinned upstream list and our per-dependency format-patch stacks (deps/ stays ignored).
+!/deps.lock
 /patches/*
-!/patches/*.patch
-!/patches/*.diff
+!/patches/*/
+/patches/*/*
+!/patches/*/*.patch
 
 # Keep only the small, maintained VU1 recompilation utility in tools/.
 /tools/*
+!/tools/deps.py
 !/tools/vu1recomp/
 /tools/vu1recomp/*
 !/tools/vu1recomp/*.py
@@ -108,6 +112,7 @@
 /mc0/
 /mc1/
 /source/
+/deps/
 /config/
 /saves/
 /captures/
@@ -127,16 +132,6 @@
 !/config/
 /config/*
 !/config/SLES-50350.template.toml
-!/patches/upstreams.json
-!/patches/upstreams/
-/patches/upstreams/**
-!/patches/upstreams/**/
-!/patches/upstreams/**/*.cpp
-!/patches/upstreams/**/*.h
-!/patches/upstreams/**/*.hpp
-!/tools/patches/
-/tools/patches/*
-!/tools/patches/*.patch
 !/tools/metal-deps/
 /tools/metal-deps/*
 !/tools/metal-deps/compat/

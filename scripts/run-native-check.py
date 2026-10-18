@@ -24,11 +24,11 @@ def fingerprint(path):
 def source_snapshot():
     paths = ("integration/launcher.cpp", "integration/metal-gs-adapter.cpp",
              "integration/spu2-host.cpp", "integration/spu2-host.hpp",
-             "source/PS2Recomp-metal/ps2xRuntime/include/ps2_runtime.h",
-             "source/PS2Recomp-metal/ps2xRuntime/include/runtime/ps2_host_arena.h",
-             "source/PS2Recomp-metal/ps2xRuntime/src/lib/ps2_runtime.cpp",
-             "source/PS2Recomp-metal/ps2xIOP/src/emulator/iop_emulator.cpp",
-             "source/PS2Recomp-metal/ps2xIOP/src/emulator/services/iop_rpc.cpp")
+             "deps/ps2recomp/ps2xRuntime/include/ps2_runtime.h",
+             "deps/ps2recomp/ps2xRuntime/include/runtime/ps2_host_arena.h",
+             "deps/ps2recomp/ps2xRuntime/src/lib/ps2_runtime.cpp",
+             "deps/ps2recomp/ps2xIOP/src/emulator/iop_emulator.cpp",
+             "deps/ps2recomp/ps2xIOP/src/emulator/services/iop_rpc.cpp")
     return {name: fingerprint(ROOT / name) for name in paths if (ROOT / name).is_file()}
 
 

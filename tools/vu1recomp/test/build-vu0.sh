@@ -3,7 +3,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-RUNTIME="${PS2X_VU0_RUNTIME:-$ROOT/source/PS2Recomp-metal/ps2xRuntime}"
+RUNTIME="${PS2X_VU0_RUNTIME:-$ROOT/deps/ps2recomp/ps2xRuntime}"
 GEN="${PS2X_VU0GEN_DIR:-$ROOT/generated/vu0-native}"
 OUT="${PS2X_VU0TEST_OUT:-$ROOT/build/vu0-replay}"
 SSE2NEON="${PS2X_SSE2NEON_DIR:-$ROOT/build/game-metal/_deps/sse2neon-src}"
