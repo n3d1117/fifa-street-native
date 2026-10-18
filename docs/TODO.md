@@ -101,3 +101,18 @@ Reference: [Fukami](https://github.com/danisandoval/fukami), reviewed at
 - Add an off-by-default cheat that prevents damage and resulting life loss.
   Prefer the original cheat path; verify normal enemies, hazards, instant-death
   surfaces, and checkpoint/retry behavior without changing the default game.
+
+## Experimental backlog — Built-in FPS display and unlocks
+
+- Expose the game's built-in framerate display as an off-by-default option;
+  verify what it counts against measured frame presentation without altering
+  game timing.
+- Add optional automatic character unlocks for Jane, Porter and Terk in the
+  skiing/surfing challenges, using the original unlock paths.
+- Add optional trick unlocks: Ground Tumble (world 1 Terk challenges),
+  Scarecrow (world 2), and Corkscrew (world 3). Character rewards correspond
+  to world 1 (Jane), world 2 (Porter), and all Terk challenges (Terk).
+- Verify these built-in paths and rewards in the PAL PS2 version, including
+  character selection and trick execution; the supplied reference also lists
+  GameCube rewards. Keep options off by default and preserve earned progress
+  and existing saves.
