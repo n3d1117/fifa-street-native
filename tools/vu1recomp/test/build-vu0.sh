@@ -7,7 +7,7 @@ RUNTIME="${PS2X_VU0_RUNTIME:-$ROOT/source/PS2Recomp-metal/ps2xRuntime}"
 GEN="${PS2X_VU0GEN_DIR:-$ROOT/generated/vu0-native}"
 OUT="${PS2X_VU0TEST_OUT:-$ROOT/build/vu0-replay}"
 SSE2NEON="${PS2X_SSE2NEON_DIR:-$ROOT/build/game-metal/_deps/sse2neon-src}"
-LLVM_ROOT="${PS2X_LLVM19_ROOT:-$ROOT/../tarzan-native/tools/build/llvm19}"
+LLVM_ROOT="${PS2X_LLVM19_ROOT:-$ROOT/tools/build/llvm19}"
 CXX="${CXX:-$LLVM_ROOT/bin/clang++}"
 LIBCXX_INCLUDE="${PS2X_LIBCXX_INCLUDE:-$LLVM_ROOT/include/c++/v1}"
 

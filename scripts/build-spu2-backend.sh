@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$(dirname "$ROOT")/tarzan-native}"
+NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$ROOT}"
 LLVM="$NATIVE/tools/build/llvm19"
 CMAKE="$NATIVE/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 NINJA="$NATIVE/tools/build/ninja-1.13.1/ninja"

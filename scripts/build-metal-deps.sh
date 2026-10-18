@@ -3,7 +3,7 @@
 # Version URLs and SHA-256 values are from that pinned source's official macOS CI recipe.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-native_root="${TARZAN_NATIVE_TOOLS_ROOT:-$(dirname "$root")/tarzan-native}"
+native_root="${TARZAN_NATIVE_TOOLS_ROOT:-$root}"
 pcsx2="$root/source/deps/pcsx2-2.8.2-bridge"
 base="$root/tools/metal-deps"
 src="$base/src"

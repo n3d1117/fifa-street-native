@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-NATIVE = Path(os.environ.get("TARZAN_NATIVE_TOOLS_ROOT", ROOT.parent / "tarzan-native"))
+NATIVE = Path(os.environ.get("TARZAN_NATIVE_TOOLS_ROOT") or ROOT)
 RUNNER_DEFAULT = ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner"
 BRIDGE_DEFAULT = ROOT / "build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
 BRIDGE_RESOURCES_DEFAULT = BRIDGE_DEFAULT.parent / "resources"

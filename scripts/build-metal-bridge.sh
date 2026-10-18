@@ -2,7 +2,7 @@
 # Build only the pinned PCSX2 GS + Fukami's native Metal bridge, in an isolated copy.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-native_root="${TARZAN_NATIVE_TOOLS_ROOT:-$(dirname "$root")/tarzan-native}"
+native_root="${TARZAN_NATIVE_TOOLS_ROOT:-$root}"
 pcsx2="$root/source/deps/pcsx2-2.8.2"
 patched="$root/source/deps/pcsx2-2.8.2-bridge"
 build="$root/build/metal-bridge/pcsx2"

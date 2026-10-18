@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$(dirname "$ROOT")/tarzan-native}"
+NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$ROOT}"
 BUILD="$ROOT/build/game-metal"
 LLVM="$NATIVE/tools/build/llvm19"
 PKGCONF="$ROOT/tools/pkgconf/bin"
@@ -42,6 +42,7 @@ LINK_FLAGS="-L$LLVM/lib -Wl,-rpath,$LLVM/lib -stdlib=libc++"
   -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
   -DCMAKE_PREFIX_PATH="$LLVM;$ROOT/tools/metal-deps/prefix" \
+  -DTARZAN_NATIVE_TOOLS_ROOT="$NATIVE" \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
   -DPKG_CONFIG_ARGN=--static \
   -DTARZAN_PS2RECOMP_SOURCE_DIR="$ROOT/source/PS2Recomp-metal" \

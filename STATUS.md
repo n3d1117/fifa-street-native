@@ -35,12 +35,20 @@ instructions to apply over the snapshot.
 
 Local sequence: restore upstreams; supply a supported PAL disc and run
 `extract-disc.py`; run `configure-local.py` to derive the symbol map/config;
-prepare the native toolchain/dependencies; build the Metal bridge and game;
+prepare the local toolchain under `tools/build` and dependencies; build the Metal
+bridge and game;
 generate the icon with `make-icon.sh`; package with `package-ps2-app.py`.
 Build tooling is preserved, but a fresh-machine end-to-end rebuild is not yet
-qualified. Current native toolchain defaults to a sibling `tarzan-native` folder
-and can be overridden with `TARZAN_NATIVE_TOOLS_ROOT`. No toolchain or game is
-uploaded. Build the canonical target in `build/game-metal`.
+qualified. Build helpers default to `tools/build` inside this checkout and can
+use another local toolchain root through `TARZAN_NATIVE_TOOLS_ROOT`. Toolchains
+remain BYOD and are not checked into Git; no game data is uploaded. Build the
+canonical target in `build/game-metal`.
+
+Local tools migration verified with the obsolete sibling folder unavailable:
+LLVM 19 C++20 compile/link/run, complete Metal game rebuild, hardware Metal
+smoke, six SPU2 tests, signed packaging, installed title-screen startup and
+normal quit passed. Repeating Ninja reports no work. Small legacy saves and
+compiler recipes are retained only in ignored `local-archive/`.
 
 Use focused tests and actual window captures. Shader/readback captures change
 timing; do not use them as clean performance benchmarks. Coverage figures and

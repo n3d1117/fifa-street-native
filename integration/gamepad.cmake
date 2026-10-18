@@ -4,10 +4,10 @@ get_filename_component(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 if(DEFINED ENV{TARZAN_NATIVE_TOOLS_ROOT} AND NOT "$ENV{TARZAN_NATIVE_TOOLS_ROOT}" STREQUAL "")
     set(_tarzan_native_tools_default "$ENV{TARZAN_NATIVE_TOOLS_ROOT}")
 else()
-    get_filename_component(_tarzan_native_tools_default "${TARZAN_ROOT}/../tarzan-native" ABSOLUTE)
+    set(_tarzan_native_tools_default "${TARZAN_ROOT}")
 endif()
 set(TARZAN_NATIVE_TOOLS_ROOT "${_tarzan_native_tools_default}" CACHE PATH
-    "Root of the local tarzan-native toolchain checkout")
+    "Root of the local compiler and build tools")
 
 if(NOT TARGET tarzanMetalHost)
     message(FATAL_ERROR "gamepad.cmake must be included after tarzanMetalHost")

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$(dirname "$ROOT")/tarzan-native}"
+NATIVE="${TARZAN_NATIVE_TOOLS_ROOT:-$ROOT}"
 SRC="$ROOT/source/PS2Recomp"
 BUILD="$ROOT/build/recompiler"
 PREFIX="$NATIVE/tools/build/llvm19"

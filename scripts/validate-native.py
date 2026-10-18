@@ -8,12 +8,14 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-NINJA = ROOT.parent / "tarzan-native/tools/build/ninja-1.13.1/ninja"
+TOOLS_ROOT = Path(os.environ.get("TARZAN_NATIVE_TOOLS_ROOT") or ROOT)
+NINJA = TOOLS_ROOT / "tools/build/ninja-1.13.1/ninja"
 
 
 def main():
