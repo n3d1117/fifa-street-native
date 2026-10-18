@@ -44,4 +44,18 @@ if(TARZAN_GAME_READY)
     target_compile_options(tarzanFileIoGuestTest PRIVATE -fno-fast-math -ffp-contract=off)
     target_link_libraries(tarzanFileIoGuestTest PRIVATE ps2_runtime tarzanTestMetalSeam)
     add_test(NAME fileio_guest COMMAND tarzanFileIoGuestTest)
+
+    add_executable(tarzanRpcPacketGuestTest
+        "${TARZAN_ROOT}/tests/rpc-packet-guest-test.cpp"
+        "${TARZAN_GENERATED_DIR}/_sceRpcFreePacket_0x223eb8.cpp"
+        "${TARZAN_GENERATED_DIR}/_sceRpcGetFPacket_0x223ed8.cpp"
+        "${TARZAN_GENERATED_DIR}/_sceRpcGetFPacket2_0x223f08.cpp"
+        $<TARGET_OBJECTS:ps2_test_function_table>)
+    target_include_directories(tarzanRpcPacketGuestTest PRIVATE "${TARZAN_GENERATED_DIR}"
+        $<TARGET_PROPERTY:ps2x_tests,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(tarzanRpcPacketGuestTest PRIVATE
+        $<TARGET_PROPERTY:ps2x_tests,COMPILE_DEFINITIONS>)
+    target_compile_options(tarzanRpcPacketGuestTest PRIVATE -fno-fast-math -ffp-contract=off)
+    target_link_libraries(tarzanRpcPacketGuestTest PRIVATE ps2_runtime tarzanTestMetalSeam)
+    add_test(NAME rpc_packet_guest COMMAND tarzanRpcPacketGuestTest)
 endif()
