@@ -24,6 +24,14 @@ Mechanisms, invariants and constants. Read the section for the area you touch. C
 - SPU host issues `Sync(t)` only (it processes through `t` and returns events); a preceding `Advance(t)` was redundant. An inline/threaded equivalence fixture compares events, core state, output PCM hash and frame count.
 - `TARZAN_AUDIO_STRETCH=0` disables time stretching for SPU2 backend tests.
 
+## EE FPU and VU0 macro flags
+
+- SQRT.S and RSQRT.S clear current FCR31 I/D causes before setting the operation's exception, retaining sticky flags and unrelated fields. Negative nonzero Ft sets I/SI; zero or denormal Ft sets D/SD for RSQRT. Flag classification precedes the destination write so Fd may alias Ft. The existing arithmetic helpers retain their operand and signed-zero behavior.
+- VU0 macro FMAC computes masked Z/S/U/O and sticky status eagerly. A local underflow mask survives result flushing and a tiny multiply feeding a zero-ACC MADD/MSUB; integer SIMD classifies flags without extra context state. No flag liveness or lazy-read optimization is assumed. FDIV operations update only I/D and their sticky copies, treating exponent-zero operands as zero.
+- VI0 discards integer arithmetic, transfer and load destinations at translation time. VCLIPw compares signed float bit patterns against absolute Ft.w; an exponent-zero bound becomes the largest denormal bit pattern, excluding all denormal Fs lanes. Clip history retains its low 24 bits.
+- The CLIP exponent-zero bound `0x007fffff` follows PCSX2 VUops.cpp `_vuCLIP`.
+- `./tz test` covers the translator and runtime edge regressions; `./tz test --full` adds native VU replay. These checks do not establish later-mission behavior.
+
 ## VU0 and VU1 native paths
 
 - **VU1.** `tools/vu/vu1recomp.py` generates guarded native code from the disc's VU1 microcode (extracted by `tools/vu/extract-vu-microcode.py`) plus validated light/material patch writers; no captured banks or jump traces are compiler inputs. All 2,048 instruction slots are represented. A native run executes only when the exact executed microcode words match (guards); unsupported pairs/entries and rejected runs fall back to the interpreter transactionally (state untouched). The guarded translation unit is the longest compile (own Ninja pool `heavy`); Ninja regenerates it incrementally when inputs change.

@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 22:29:48 +0200
+Subject: [PATCH 35/35] Compare VCLIP bounds with PS2 integer bit semantics
+
+The emitter regression failed because VCLIPw used host floating comparisons. Compare signed float bit patterns against absolute Ft.w, replacing an exponent-zero bound with 0x007fffff so denormal Fs lanes never clip. Preserve all 24 history bits. Reference: PCSX2 VUops.cpp _vuCLIP; regress hardware ps2autotests vu/upper/clip.expected normal, signed-zero and MAX/MIN cases plus denormal and exponent-255 mantissa edges. ./tz test passes 54/54; full replay and route validation follow in the batch export.
+
+diff --git a/ps2xRecomp/src/lib/vu_translator.cpp b/ps2xRecomp/src/lib/vu_translator.cpp
+index 25fa2b7545214d15c24797519abaef4b8b367778..7ff645b8c8386fae9580c51fd4520c9ee58644ea 100644
+--- a/ps2xRecomp/src/lib/vu_translator.cpp
++++ b/ps2xRecomp/src/lib/vu_translator.cpp
+@@ -346,25 +346,7 @@ namespace ps2recomp
+                         inst.rt, inst.rt);
+                 }
+                 case VU0_S2_VCLIPw:
+-                {
+-                    uint8_t field = inst.function & 0x3;
+-                    std::string shuffle_pattern = fmt::format("_MM_SHUFFLE({},{},{},{})", field, field, field, field);
+-
+-                    return fmt::format(
+-                        "{{ __m128 fs = ctx->vu0_vf[{}]; "
+-                        // Judge fs.xyz against |ft.w|: bit 0 = +x, 1 = -x, 2 = +y, 3 = -y, 4 = +z, 5 = -z.
+-                        "__m128 ft = _mm_and_ps(_mm_shuffle_ps(ctx->vu0_vf[{}], ctx->vu0_vf[{}], {}), _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF))); "
+-                        "__m128 neg_ft = _mm_xor_ps(ft, _mm_castsi128_ps(_mm_set1_epi32(0x80000000))); "
+-                        "__m128 gt = _mm_cmpgt_ps(fs, ft); "
+-                        "__m128 lt = _mm_cmplt_ps(fs, neg_ft); "
+-                        "uint32_t gt_mask = (uint32_t)_mm_movemask_ps(gt); "
+-                        "uint32_t lt_mask = (uint32_t)_mm_movemask_ps(lt); "
+-                        "uint32_t flags = ((gt_mask & 0x1) << 0) | ((lt_mask & 0x1) << 1) | "
+-                        "((gt_mask & 0x2) << 1) | ((lt_mask & 0x2) << 2) | "
+-                        "((gt_mask & 0x4) << 2) | ((lt_mask & 0x4) << 3); "
+-                        "ctx->vu0_clip_flags = ((ctx->vu0_clip_flags << 6) | (flags & 0x3F)) & 0xFFFFFF; }}",
+-                        inst.rd, inst.rt, inst.rt, shuffle_pattern);
+-                }
++                    return fmt::format("ctx->vu0_clip_flags = ps2_vu0_clip(ctx->vu0_clip_flags, ctx->vu0_vf[{}], ctx->vu0_vf[{}]);", inst.rd, inst.rt);
+                 case VU0_S2_VNOP:
+                     return fmt::format("// NOP operation, no action needed for VU0");
+                 case VU0_S2_VRNEXT:
+diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
+index 51f281e9a9c9f0b6578c5be1adcf76bc9c5b4af6..2b7999e203e959181c00b0446298facffcbe9175 100644
+--- a/ps2xRuntime/include/ps2_runtime_macros.h
++++ b/ps2xRuntime/include/ps2_runtime_macros.h
+@@ -1477,6 +1477,18 @@ static inline void ps2_vu0_set_mac(R5900Context *ctx, __m128 result, uint32_t de
+ }
+ #define PS2_VU0_SET_MAC(ctx_ptr, result, dest, ...) ps2_vu0_set_mac((ctx_ptr), (result), (dest) __VA_OPT__(,) __VA_ARGS__)
+ 
++inline uint32_t ps2_vu0_clip(uint32_t history, __m128 fs, __m128 ft)
++{
++    const uint32_t w = static_cast<uint32_t>(PS2_EXTRACT_EPI32_3(_mm_castps_si128(ft)));
++    // A zero/denormal bound excludes every denormal Fs, including signed ones.
++    const __m128i bound = _mm_set1_epi32((w & 0x7f800000u) ? (w & 0x7fffffffu) : 0x007fffffu);
++    const __m128i bits = _mm_castps_si128(fs);
++    const uint32_t pos = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(bits, bound))));
++    const uint32_t neg = static_cast<uint32_t>(_mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(_mm_xor_si128(bits, _mm_set1_epi32(0x80000000u)), bound))));
++    const uint32_t flags = (pos & 1u) | ((neg & 1u) << 1) | ((pos & 2u) << 1) | ((neg & 2u) << 2) | ((pos & 4u) << 2) | ((neg & 4u) << 3);
++    return ((history << 6) | flags) & 0x00ffffffu;
++}
++
+ enum class Ps2Vu0Fdiv { Div, Sqrt, Rsqrt };
+ 
+ template <Ps2Vu0Fdiv Op>
+diff --git a/ps2xTest/src/ps2_vu0_fdiv_tests.cpp b/ps2xTest/src/ps2_vu0_fdiv_tests.cpp
+index 3fb18b406c4517c62111e06ed2e2b8a10bea4003..0bf9ac4ba3d4aeffb8f58cb608e1de005b457efa 100644
+--- a/ps2xTest/src/ps2_vu0_fdiv_tests.cpp
++++ b/ps2xTest/src/ps2_vu0_fdiv_tests.cpp
+@@ -120,6 +120,27 @@ void register_ps2_vu0_fdiv_tests()
+             t.Equals(static_cast<uint32_t>(ps2_vu0_fdiv_status<Ps2Vu0Fdiv::Rsqrt>(0, 1.0f, -4.0f)), 0x410u, "VRSQRT(1,-4) sets I");
+         });
+ 
++        tc.Run("VCLIP uses integer comparisons with denormal bounds", [](TestCase &t)
++        {
++            const auto code = translate(0x100000u, cop2Special2(0, 2, 1, VU0_S2_VCLIPw));
++            t.IsTrue(contains(code, "ps2_vu0_clip(ctx->vu0_clip_flags, ctx->vu0_vf[1], ctx->vu0_vf[2])"), "CLIP must use PS2 bit comparisons: " + code);
++        });
++
++        tc.Run("CLIP excludes denormals and compares exponent 255 by bits", [](TestCase &t)
++        {
++            const __m128 zero = _mm_setzero_ps();
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(runtimeBits(1u)), zero), 0u, "positive denormal vs zero has no +x");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(runtimeBits(0x807fffffu)), zero), 0u, "negative denormal vs zero has no negative bits");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(runtimeBits(0x00800000u)), _mm_set1_ps(runtimeBits(1u))), 0x15u, "minimum normal exceeds denormal bound");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(2.0f), _mm_set1_ps(-1.0f)), 0x15u, "hardware FULL POS x -1");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(-2.0f), _mm_set1_ps(-1.0f)), 0x2au, "hardware FULL NEG x -1");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(runtimeBits(0x7fffffffu)), zero), 0x15u, "hardware MAX x zero");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(runtimeBits(0xffffffffu)), zero), 0x2au, "hardware MIN x zero");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(runtimeBits(0x7fffffffu)), _mm_set1_ps(runtimeBits(0x7f800000u))), 0x15u, "exponent 255 compares mantissa");
++            t.Equals(ps2_vu0_clip(0, _mm_set1_ps(-0.0f), zero), 0u, "signed zeros do not clip");
++            t.Equals(ps2_vu0_clip(0xffffffffu, zero, zero), 0xffffc0u, "history shifts and retains 24 bits");
++        });
++
+         tc.Run("RSQRT is fs / sqrt(|ft|)", [](TestCase &t)
+         {
+             t.Equals(bits(ps2_vu_rsqrt(1.0f, 4.0f)), bits(0.5f), "1 / sqrt(4)");

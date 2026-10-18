@@ -17,6 +17,8 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Process | One app process; one build tree `build/game-metal`; settings in one plist | Settings window and fullscreen not scriptable, unverified after the in-process change |
 | Platforms | macOS arm64 | iOS/tvOS: feasibility only, see "iOS / tvOS track" |
 
+The FP/VU0 correctness batch covers macro FMAC Z/S/U/O and FDIV I/D status, FPU root exception flags, VI0 write protection and bitwise CLIP bounds. Existing regressions cover root operands, CVT.W.S, quadword alignment, MMI lanes and VF0 protection. The technical roadmap's FP/MMI/VU0 audit item is complete at this regression scope; later-mission gameplay remains unverified.
+
 ## Next
 
 1. Play every mission; log crashes, hangs, audio/video issues.
@@ -54,7 +56,6 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 | 1 | Further upstream PS2Recomp PR batches (FPU semantics and recompiler batches are in; remaining IOP/HLE/runtime fixes) | correctness everywhere | M | low (batched, verified) |
 | 2 | EE cycle-charge scale by VBlank period: a frame over one VBlank's estimated cycles no longer spans two VBlanks when the host finished early | 60/120 FPS stuck at 26-29 | S | low, if game-speed parity is proven |
 | 3 | Scheduler fixed-cost trims: atomic idle check, lazy EE timers (verify mode), division-free timer math, skip the DMAC-drain lock when idle, scratchpad fast path, IOP idle fast path, no `getenv` in hot loops | CPU-bound gameplay | S-M | none |
-| 4 | Audit FP/MMI/VU0 against known bugs: SQRT/RSQRT operands, CVT.W.S, LQ/SQ alignment, PMEXEW/PEXEH/PMULTH/PMFHL lanes, VU0 macro flags, VF0 write-protect | later-mission correctness | S | none |
 | 5 | IOP/HLE fixes: `WaitSema`/`WaitEventFlag` outside IOP threads run the scheduler; `sceSifGetOtherData` copies; `sceSifSetDmaIntr` callback; `sceMpegIsEnd` on `000001B7`/`000001B9`; synchronous MPEG audio callbacks on a private copy | hangs, movie sync | S | low |
 | 6 | PCSX2 sprite-coverage patch (snapped edges plus coverage-weighted 4-tap for point-sampled sprites above 1x) | upscaled tutorial text blur | S-M | low |
 | 7 | `jalr` resumes only at its return address, plus a resume-switch guard | CPU-bound gameplay | S | medium (checkable) |
