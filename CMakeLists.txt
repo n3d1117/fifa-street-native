@@ -13,6 +13,10 @@ set(TARZAN_GENERATED_DIR "${TARZAN_ROOT}/generated/SLES-50350-symbolmap-entry" C
 set(PS2X_DEFAULT_BOOT_ELF "extracted/disc/SLES_503.50" CACHE STRING
     "Default guest ELF, relative to the checkout (found at run time by walking up from the executable), or absolute")
 
+# Ninja job pools: translation units that take minutes and gigabytes are
+# serialised (JOB_POOL_COMPILE heavy) while the rest of the build runs at -j4.
+set_property(GLOBAL APPEND PROPERTY JOB_POOLS heavy=1)
+
 enable_testing()
 
 if(NOT TARZAN_BUILD_GAME)
@@ -79,6 +83,9 @@ if(TARZAN_VU1GEN_SELECTED STREQUAL TARZAN_VU1GEN_CANONICAL)
         set_property(SOURCE "${PS2X_VU1GEN_DIR}/vu1rec_guarded.cpp"
             TARGET_DIRECTORY ps2EntryRunner APPEND PROPERTY COMPILE_OPTIONS
             "-fno-slp-vectorize;-mllvm;-misched-regpressure=false")
+        # One compile of this TU takes minutes and gigabytes: never run two at once.
+        set_property(SOURCE "${PS2X_VU1GEN_DIR}/vu1rec_guarded.cpp"
+            TARGET_DIRECTORY ps2EntryRunner PROPERTY JOB_POOL_COMPILE heavy)
     endif()
 endif()
 

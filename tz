@@ -157,7 +157,9 @@ def configured(preset, build_dir):
 def cmake_build(run, preset, build_dir):
     if not configured(preset, build_dir):
         run.must([cmake(), "--preset", preset], f"configure {preset}")
-    run.must([cmake(), "--build", "--preset", preset], f"build {preset}")
+    sys.path.insert(0, str(ROOT / "tools"))
+    import jobs
+    run.must([cmake(), "--build", "--preset", preset, "--parallel", jobs.jobs()], f"build {preset}")
 
 
 def sha256(path, h=None):
