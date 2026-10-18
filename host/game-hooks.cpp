@@ -132,7 +132,9 @@ const Word kExpected[] = {
     {0x2DAE68, 0x24060001}, {0x35E2B0, 0x3C02004B}, {0x35E2B4, 0x24446460},
     {0x35E2C4, 0x0C0D8EAC}, {0x35E2C8, 0x70004628}, {0x4B6460, 0x6F676F4C},
     {0x34FCE0, 0x0C0D5B88}, {0x350350, 0x27BDFFB0}, {0x2CD48C, 0x7BBF0010},
-    {0x2C0E40, 0x24020001},
+    {0x2C0E40, 0x24020001}, {0x2DB810, 0x27BDFFC0}, {0x2C3E90, 0x27BDFED0},
+    {0x2C41DC, 0x0C0B6E04}, {0x2C43A4, 0x0C0B6E04}, {0x2C441C, 0x0C0B6E04},
+    {0x2C448C, 0x0C0B6E04}, {0x2C4634, 0x0C0B6E04}, {0x2C46CC, 0x0C0B6E04},
 };
 
 // The guest's two cheat-code strings (what the cheats hook injects).
@@ -140,6 +142,27 @@ const struct { uint32_t address; const char *text; } kCheatStrings[] = {
     {0x4B3210, "LURDDLURRDLUURDL"},
     {0x4B3230, "RLUDDURLLRDUUDLR"},
 };
+
+// Unlock all missions: CItemsInfos::IsItemActive (0x2db810) reports an item as
+// done. The map lock handler (ProcessMenuMessage_Locking, 0x2c3e90) calls it from
+// the six sites below to decide which map entries are shown and selectable. Only
+// those calls report true; every other caller (saving, completion, game flow) and
+// all stored progress are untouched.
+constexpr uint32_t kIsItemActive = 0x2DB810u;
+constexpr uint32_t kLockingReturns[] = {0x2C41E4u, 0x2C43ACu, 0x2C4424u, 0x2C4494u, 0x2C463Cu, 0x2C46D4u};
+PS2Runtime::RecompiledFunction g_isItemActive = nullptr;
+
+void isItemActiveUnlocked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+    const uint32_t ra = GPR_U32(ctx, 31);
+    const uint32_t found = GPR_U32(ctx, 8);
+    g_isItemActive(rdram, ctx, runtime);
+    for (const uint32_t site : kLockingReturns)
+        if (ra == site) {
+            SET_GPR_U32(ctx, 2, 1u);
+            WRITE8(found, 0u);
+            return;
+        }
+}
 
 bool readWord(const uint8_t *rdram, uint32_t address, uint32_t &value) {
     if (address > 0x02000000u - 4u) return false;
@@ -166,6 +189,13 @@ void install(PS2Runtime &runtime) {
             std::memcpy(&value, cheat.text + offset, sizeof(value));
             if (mismatch(rdram, cheat.address + offset, value)) return;
         }
+    if (tarzan_experiments_unlock_all_missions()) {
+        g_isItemActive = runtime.lookupFunction(kIsItemActive);
+        if (g_isItemActive && runtime.replaceFunction(kIsItemActive, isItemActiveUnlocked))
+            std::fprintf(stderr, "[game-hooks] unlock-all-missions active\n");
+        else
+            std::fprintf(stderr, "[game-hooks] unlock-all-missions: no IsItemActive function\n");
+    }
     unsigned installed = 0;
     for (const Hook &hook : kHooks) {
         if (runtime.registerInstructionHook(hook.address, hook.after, hook.fn)) ++installed;

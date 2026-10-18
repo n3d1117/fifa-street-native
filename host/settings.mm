@@ -50,6 +50,7 @@ Settings load_settings_file(const std::string& user_dir) {
         s.skipLogos = flag(plist, @"skipLogos");
         s.extraLives99 = flag(plist, @"extraLives99");
         s.unlimitedSpears = flag(plist, @"unlimitedSpears");
+        s.unlockAllMissions = flag(plist, @"unlockAllMissions");
         s.lastLanguage = s.rememberLanguage ? valid_language(plist[@"lastLanguage"]) : -1;
         id target = plist[@"targetFPS"];
         if (is_integer_number(target)) {
@@ -92,6 +93,7 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         plist[@"skipLogos"] = @(s.skipLogos);
         plist[@"extraLives99"] = @(s.extraLives99);
         plist[@"unlimitedSpears"] = @(s.unlimitedSpears);
+        plist[@"unlockAllMissions"] = @(s.unlockAllMissions);
         plist[@"rememberLanguage"] = @(s.rememberLanguage);
         if (s.rememberLanguage && s.lastLanguage >= 0 && s.lastLanguage <= 4)
             plist[@"lastLanguage"] = @(s.lastLanguage);

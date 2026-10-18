@@ -36,6 +36,7 @@ NSButton* s_rememberLanguageButton;
 NSButton* s_skipLogosButton;
 NSButton* s_extraLives99Button;
 NSButton* s_unlimitedSpearsButton;
+NSButton* s_unlockAllMissionsButton;
 NSPopUpButton* s_targetFPSPopup;
 NSPopUpButton* s_renderScalePopup;
 NSTextField* s_status;
@@ -48,6 +49,7 @@ constexpr NSInteger kRememberLanguageTag = 4;
 constexpr NSInteger kSkipLogosTag = 5;
 constexpr NSInteger kExtraLives99Tag = 6;
 constexpr NSInteger kUnlimitedSpearsTag = 7;
+constexpr NSInteger kUnlockAllMissionsTag = 8;
 
 void setStatus(NSString* value) {
     if (s_status) [s_status setStringValue:value ?: @""];
@@ -68,6 +70,8 @@ void refreshControls() {
         [s_extraLives99Button setState:s_pending.extraLives99 ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_unlimitedSpearsButton)
         [s_unlimitedSpearsButton setState:s_pending.unlimitedSpears ? NSControlStateValueOn : NSControlStateValueOff];
+    if (s_unlockAllMissionsButton)
+        [s_unlockAllMissionsButton setState:s_pending.unlockAllMissions ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_targetFPSPopup)
         [s_targetFPSPopup selectItemWithTag:s_pending.targetFps];
     if (s_renderScalePopup)
@@ -84,6 +88,7 @@ void updatePendingFromControl(NSButton* sender) {
     case kSkipLogosTag: s_pending.skipLogos = enabled; break;
     case kExtraLives99Tag: s_pending.extraLives99 = enabled; break;
     case kUnlimitedSpearsTag: s_pending.unlimitedSpears = enabled; break;
+    case kUnlockAllMissionsTag: s_pending.unlockAllMissions = enabled; break;
     }
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
@@ -264,6 +269,23 @@ void showWindowOnMain() {
     [spearsDetail setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:spearsDetail];
 
+    for (NSView* subview in [content subviews]) {
+        NSRect frame = [subview frame];
+        frame.origin.y += 54;
+        [subview setFrame:frame];
+    }
+
+    s_unlockAllMissionsButton = [NSButton checkboxWithTitle:@"Unlock all missions" target:s_actions action:@selector(settingChanged:)];
+    [s_unlockAllMissionsButton setTag:kUnlockAllMissionsTag];
+    [s_unlockAllMissionsButton setFrame:NSMakeRect(22, 152, 546, 24)];
+    [content addSubview:s_unlockAllMissionsButton];
+    NSTextField* unlockDetail = [NSTextField labelWithString:@"Show and allow every mission on the map. Saved progress is not changed."];
+    [unlockDetail setFrame:NSMakeRect(46, 132, 510, 20)];
+    [[unlockDetail cell] setWraps:YES];
+    [[unlockDetail cell] setLineBreakMode:NSLineBreakByWordWrapping];
+    [unlockDetail setTextColor:[NSColor secondaryLabelColor]];
+    [content addSubview:unlockDetail];
+
     s_status = [NSTextField labelWithString:@"Changes apply after restarting the game."];
     [s_status setFrame:NSMakeRect(22, 70, 420, 20)];
     [s_status setTextColor:[NSColor secondaryLabelColor]];
@@ -306,10 +328,10 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
     s_active = settings;
     s_pending = settings;
     std::fprintf(stderr, "[tarzan-settings] highFps=%d target=%d widescreen=%d scale=%d sharp=%d rememberLanguage=%d "
-                         "lastLanguage=%d skipLogos=%d lives99=%d spears=%d wallClock=%d\n",
+                         "lastLanguage=%d skipLogos=%d lives99=%d spears=%d unlockMissions=%d wallClock=%d\n",
                  settings.highFps, settings.targetFps, settings.hdWidescreen, settings.renderScale,
                  settings.sharperImage, settings.rememberLanguage, settings.lastLanguage, settings.skipLogos,
-                 settings.extraLives99, settings.unlimitedSpears, settings.wallClock);
+                 settings.extraLives99, settings.unlimitedSpears, settings.unlockAllMissions, settings.wallClock);
     s_savedLanguage.store(settings.lastLanguage, std::memory_order_relaxed);
 }
 
@@ -337,6 +359,7 @@ extern "C" int tarzan_experiments_saved_language() {
 extern "C" int tarzan_experiments_skip_logos() { return s_active.skipLogos ? 1 : 0; }
 extern "C" int tarzan_experiments_extra_lives_99() { return s_active.extraLives99 ? 1 : 0; }
 extern "C" int tarzan_experiments_unlimited_spears() { return s_active.unlimitedSpears ? 1 : 0; }
+extern "C" int tarzan_experiments_unlock_all_missions() { return s_active.unlockAllMissions ? 1 : 0; }
 
 extern "C" void tarzan_experiments_accept_language(uint32_t languageID) {
     if (languageID > 4u) return;

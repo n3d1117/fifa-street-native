@@ -64,6 +64,7 @@ PS2Recomp has no mid-function override, so our dep patch adds config `[[hooks]]`
 | clock trace `0x360388` | game vs host milliseconds | `TARZAN_TRACE_GAME_CLOCK` |
 | language `0x34fce0`, `0x350350`, `0x2cd48c`, `0x2c0e40` | persist accepted language IDs; restore through the original menu actions; hide the selector | `rememberLanguage`, `lastLanguage` |
 | cheats `0x2dac2c` (redirect `0x2dada4`) | inject the original code strings into the cheat parser; HUD shows 99 lives; spears stay at five | `extraLives99`, `unlimitedSpears` |
+| `IsItemActive` `0x2db810` (function replacement, installed only while the setting is on) | the map lock handler `ProcessMenuMessage_Locking` (`0x2c3e90`) asks it from six call sites (return addresses `0x2c41e4 0x2c43ac 0x2c4424 0x2c4494 0x2c463c 0x2c46d4`) which map entries are shown and selectable; for those callers only it reports true. Other callers (saving, completion, final cinematic) and all stored progress are untouched, so saves are byte-identical to a run without it. Terk's challenge locks (`0x2c4cb0`) are not changed | `unlockAllMissions` |
 | logo skip `0x35e2c4` (redirect `0x35e2cc`) | skip only the startup `Logo` call (verified by the `Logo` string); other movie call sites unchanged | `skipLogos` |
 
 - **FPS gate `0x6B00B8`.** `GAM_InitEngineState_Playing` (0x35ec20) stores a min-sync byte there; `osrSyncCallback` reads it as an unsigned byte and compares it with `0x6B0690` before entering its sync path. The address lies in loader-zeroed BSS beyond the ELF's file-backed range. The published PCSX2 PAL patch for SLES-50350 writes zero there (`006B00B8=00000000`), which is the provenance of the constant; its note about EE overclock is not followed, no overclock is used. Zeroing the byte alone gave no swap-rate gain; the opt-in VBlank period change is what lets high-FPS targets move.
@@ -105,7 +106,7 @@ Set by the host for the GS bridge library, not by users: `RRV_PCSX2_GS_*` and
 
 ## Settings defaults
 
-All experiments default off and apply after restart: `highFPS` off (`targetFPS` 60 or 120 when on), `hdWidescreen` off, `renderScale` Native, `sharperImage` off, `rememberLanguage` off, `skipLogos` off, `extraLives99` off, `unlimitedSpears` off. The normal path keeps original guest timing, 4:3 framing and native render scale. Window lifecycle: the Settings and Keyboard windows keep ARC ownership across close/reopen; keyboard capture monitors clean up on close. Routes: `./tz run --route first-mission --user-dir <empty-dir>` creates a separate slot, enters a new game via process-local FIFO input and refuses a nonempty save directory.
+All experiments default off and apply after restart: `highFPS` off (`targetFPS` 60 or 120 when on), `hdWidescreen` off, `renderScale` Native, `sharperImage` off, `rememberLanguage` off, `skipLogos` off, `extraLives99` off, `unlimitedSpears` off, `unlockAllMissions` off. The normal path keeps original guest timing, 4:3 framing and native render scale. Window lifecycle: the Settings and Keyboard windows keep ARC ownership across close/reopen; keyboard capture monitors clean up on close. Routes: `./tz run --route first-mission --user-dir <empty-dir>` creates a separate slot, enters a new game via process-local FIFO input and refuses a nonempty save directory.
 
 ## Patch-stack workflow details
 

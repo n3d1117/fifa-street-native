@@ -31,6 +31,7 @@ int tarzan_experiments_saved_language();
 int tarzan_experiments_skip_logos();
 int tarzan_experiments_extra_lives_99();
 int tarzan_experiments_unlimited_spears();
+int tarzan_experiments_unlock_all_missions();
 int tarzan_experiments_builtin_cheat(const uint8_t* rdram, uint32_t owner);
 int tarzan_experiments_skip_startup_logo(const uint8_t* rdram, uint32_t name);
 // Call only after the guest accepts a language selection.

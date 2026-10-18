@@ -34,14 +34,15 @@ int main() {
         all.highFps = true; all.targetFps = 120; all.hdWidescreen = true; all.renderScale = 3;
         all.sharperImage = true; all.rememberLanguage = true; all.lastLanguage = 4;
         all.skipLogos = true; all.extraLives99 = true; all.unlimitedSpears = true;
+        all.unlockAllMissions = true;
         assert(tarzan::save_settings_file(dir, all));
         assert(tarzan::load_settings_file(dir) == all);
 
         // Each boolean/choice individually (catches a key mapped to the wrong field).
-        for (int field = 0; field < 7; ++field) {
+        for (int field = 0; field < 8; ++field) {
             Settings one;
             bool* flags[] = {&one.highFps, &one.hdWidescreen, &one.sharperImage, &one.rememberLanguage,
-                             &one.skipLogos, &one.extraLives99, &one.unlimitedSpears};
+                             &one.skipLogos, &one.extraLives99, &one.unlimitedSpears, &one.unlockAllMissions};
             *flags[field] = true;
             if (field == 3) one.lastLanguage = 2;
             assert(tarzan::save_settings_file(dir, one));

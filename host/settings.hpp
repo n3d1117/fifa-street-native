@@ -21,6 +21,7 @@ struct Settings {
     bool skipLogos = false;
     bool extraLives99 = false;
     bool unlimitedSpears = false;
+    bool unlockAllMissions = false;
     bool wallClock = true;         // pace guest time from the host clock (PS2X_WALLCLOCK=0 turns it off)
 
     friend bool operator==(const Settings&, const Settings&) = default;
