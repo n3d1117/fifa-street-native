@@ -34,16 +34,13 @@ GENERATED_DIRS = {
 }
 REPOSITORIES = (
     {
-        "id": "ps2recomp-tests",
-        "path": "source/PS2Recomp",
-        "url": "https://github.com/ran-j/PS2Recomp.git",
-        "patch": "patches/ps2recomp-tests.patch",
-    },
-    {
         "id": "ps2recomp-metal",
         "path": "source/PS2Recomp-metal",
         "url": "https://github.com/ran-j/PS2Recomp.git",
         "patch": "patches/ps2recomp-metal.patch",
+        # Local commits sit on branch "tarzan"; the patch is taken against the
+        # real upstream base, not against the local HEAD.
+        "base": "2c5fbb9389e11dd95693385969490c9e8e6f57b4",
     },
     {
         "id": "fukami",
@@ -84,8 +81,8 @@ def is_allowed_text_path(path: str) -> bool:
     return posix.name in TEXT_NAMES or posix.suffix in TEXT_SUFFIXES
 
 
-def tracked_patch(repo: Path) -> tuple[bytes, list[str]]:
-    raw_paths = git(repo, "diff", "--no-renames", "--name-only", "-z", "HEAD", "--")
+def tracked_patch(repo: Path, base: str = "HEAD") -> tuple[bytes, list[str]]:
+    raw_paths = git(repo, "diff", "--no-renames", "--name-only", "-z", base, "--")
     changed = [os.fsdecode(item) for item in raw_paths.split(b"\0") if item]
     allowed: list[str] = []
     skipped: list[str] = []
@@ -95,7 +92,7 @@ def tracked_patch(repo: Path) -> tuple[bytes, list[str]]:
             continue
         # A source-named path can still contain binary data. Git reports binary
         # numstat as "-\t-"; such content is never written to the patch.
-        numstat = git(repo, "diff", "--no-renames", "--numstat", "HEAD", "--", f":(literal){path}")
+        numstat = git(repo, "diff", "--no-renames", "--numstat", base, "--", f":(literal){path}")
         if numstat.startswith(b"-\t-\t"):
             skipped.append(path)
             continue
@@ -103,7 +100,7 @@ def tracked_patch(repo: Path) -> tuple[bytes, list[str]]:
     if not allowed:
         return b"", skipped
     patch = git(repo, "diff", "--no-ext-diff", "--no-renames", "--no-color",
-                "--full-index", "HEAD", "--", *(f":(literal){path}" for path in allowed))
+                "--full-index", base, "--", *(f":(literal){path}" for path in allowed))
     return patch, skipped
 
 
@@ -172,8 +169,8 @@ def collect_snapshot() -> tuple[list[dict[str, object]], list[tuple[Path, bytes]
         repo = ROOT / str(spec["path"])
         if not (repo / ".git").exists():
             raise RuntimeError(f"upstream checkout is missing or not a Git repo: {spec['path']}")
-        revision = git(repo, "rev-parse", "HEAD").decode().strip()
-        patch, skipped = tracked_patch(repo)
+        revision = str(spec.get("base") or git(repo, "rev-parse", "HEAD").decode().strip())
+        patch, skipped = tracked_patch(repo, revision)
         if skipped:
             for path in skipped:
                 print(f"skip non-source or binary tracked change: {spec['path']}/{path}", file=sys.stderr)

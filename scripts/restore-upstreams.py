@@ -15,7 +15,6 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "patches/upstreams.json"
 REPOSITORIES = {
-    "ps2recomp-tests": ("source/PS2Recomp", "https://github.com/ran-j/PS2Recomp.git"),
     "ps2recomp-metal": ("source/PS2Recomp-metal", "https://github.com/ran-j/PS2Recomp.git"),
     "fukami": ("source/fukami", "https://github.com/danisandoval/fukami.git"),
     "pcsx2-metal": ("source/deps/pcsx2-2.8.2-bridge", "https://github.com/PCSX2/pcsx2.git"),
@@ -54,7 +53,7 @@ def read_manifest() -> list[dict[str, object]]:
     entries = data["repositories"]
     if (len(entries) != len(REPOSITORIES) or
             {item.get("id") for item in entries if isinstance(item, dict)} != set(REPOSITORIES)):
-        raise RuntimeError("manifest must contain exactly the four registered upstreams")
+        raise RuntimeError("manifest must contain exactly the three registered upstreams")
     return entries
 
 

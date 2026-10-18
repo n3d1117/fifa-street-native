@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 project(TarzanPS2 LANGUAGES C CXX)
 
 set(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
-set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/source/PS2Recomp" CACHE PATH
+set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/source/PS2Recomp-metal" CACHE PATH
     "Path to the upstream PS2Recomp checkout")
 set(TARZAN_GENERATED_DIR "${TARZAN_ROOT}/generated/SLES-50350-symbolmap-entry" CACHE PATH
     "Directory containing generated C++ and headers for the guest ELF")

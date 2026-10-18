@@ -13,7 +13,7 @@ if [ ! -x "$BINARY" ]; then
 fi
 
 mkdir -p "$LOG_DIR"
-cd "$ROOT/source/PS2Recomp"
+cd "$ROOT/source/PS2Recomp-metal"
 MINITEST_FILTER=MFIFO,SPR_FROM "$BINARY" 2>&1 | tee "$LOG"
 
 if ! rg -q '^Total Tests: 6$' "$LOG" || ! rg -q '^Passed: 6$' "$LOG" || ! rg -q '^Failed: 0$' "$LOG"; then

@@ -245,7 +245,7 @@ def main() -> int:
                     fail(f"compiler exited {result.returncode}; see {log_path}")
                 if "Recompilation completed successfully" not in log_text:
                     fail(f"compiler log lacks completion marker; see {log_path}")
-                if re.search(r"\[error\]|UnknownMMI|Unhandled (?:instruction|opcode|MMI|SPECIAL|COP2)",
+                if re.search(r"\[error\]|UnknownMMI|Unhandled (?:instruction(?!s: \d)|opcode|MMI|SPECIAL|COP2)",
                               log_text, flags=re.IGNORECASE):
                     fail(f"compiler log contains an error or UnknownMMI diagnostic; see {log_path}")
                 summary = parse_summary(log_text)

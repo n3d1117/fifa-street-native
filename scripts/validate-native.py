@@ -28,8 +28,6 @@ def main():
     directory = ROOT / "logs" / (stamp + "-validation")
     directory.mkdir(parents=True)
     steps = [
-        ("source-mirrors", [sys.executable, "scripts/check-runtime-mirrors.py"]),
-        ("original-diff", ["git", "-C", "source/PS2Recomp", "diff", "--check"]),
         ("metal-diff", ["git", "-C", "source/PS2Recomp-metal", "diff", "--check"]),
         ("diagnostic-selftest", [sys.executable, "scripts/test-diagnostics.py"]),
         # Catch host/API/link errors before paying for translated game compilation.

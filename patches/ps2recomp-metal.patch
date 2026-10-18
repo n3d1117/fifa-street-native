@@ -1,3 +1,38 @@
+diff --git a/ps2xIOP/include/ps2x/iop/iop_host_spu2.h b/ps2xIOP/include/ps2x/iop/iop_host_spu2.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6b2a67207143a63575da1cb0b3c0fb0ca00af79
+--- /dev/null
++++ b/ps2xIOP/include/ps2x/iop/iop_host_spu2.h
+@@ -0,0 +1,29 @@
++#pragma once
++
++#include <cstdint>
++
++// Optional host SPU2 implementation. Install before the IOP starts. Hooks are called on the EE/IOP emulation thread.
++// Register addresses are physical IOP addresses in 0x1F900000..0x1F9007FF. DMA buffers are live pointers into IOP
++// RAM and remain valid while the emulator exists; halfwords is the clamped transfer length. IOP cycles are monotonic
++// across IOP resets. Without installed hooks, existing stub behavior is retained.
++namespace ps2x::iop
++{
++    struct IopHostSpu2
++    {
++        uint16_t (*read16)(uint32_t physAddr, uint64_t iopCycle) = nullptr;
++        void (*write16)(uint32_t physAddr, uint16_t value, uint64_t iopCycle) = nullptr;
++        // core 0 = DMA channel 4, core 1 = channel 7. toSpu2 is CHCR bit 0 (IOP RAM -> SPU2 RAM).
++        // The host calls iopSpu2DmaComplete(core) only after the transfer has actually finished.
++        void (*dmaStart)(int core, uint16_t *ram, uint32_t madr, uint32_t halfwords,
++                         bool toSpu2, uint64_t iopCycle) = nullptr;
++        uint32_t (*dmaMadr)(int core) = nullptr;
++        void (*advance)(uint64_t iopCycle) = nullptr;
++        uint64_t (*nextEvent)() = nullptr; // monotonic IOP cycle; UINT64_MAX means none
++        uint64_t maxIdleStep = 768u * 32u;
++    };
++
++    void iopSetHostSpu2(const IopHostSpu2 &hooks);
++    const IopHostSpu2 &iopHostSpu2();
++    void iopSpu2RaiseIrq();
++    void iopSpu2DmaComplete(int core);
++}
 diff --git a/ps2xIOP/src/emulator/core/iop_cpu.cpp b/ps2xIOP/src/emulator/core/iop_cpu.cpp
 index e09642e30c09746581aa65820f851975811d470a..21c2a8ecf4d561de8c7b23e86add6f9e9fcb2d04 100644
 --- a/ps2xIOP/src/emulator/core/iop_cpu.cpp
@@ -2421,10 +2456,44 @@ index 509fd07b0a2f07788e9f62e961001f79fd649c23..8d86252dbdc62d8a3a7d9c579690f63b
                             (dest_mask & 0x4) ? -1 : 0, (dest_mask & 0x8) ? -1 : 0);
      }
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..1b03d177a970205cafa33fd87d26c359cfa08634 100644
+index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..114fd97c21ca0ef70acc6f70d8d35c758be68d39 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
-@@ -393,6 +393,8 @@ add_library(ps2_runtime STATIC
+@@ -347,6 +347,33 @@ else()
+         libswresample
+         libswscale
+     )
++    if(APPLE)
++        # Keep each `-framework <name>` pair intact. CMake de-duplicates
++        # INTERFACE_LINK_OPTIONS, which can otherwise collapse repeated
++        # `-framework` flags into `-framework CoreFoundation CoreVideo ...`.
++        get_target_property(_ffmpeg_link_options PkgConfig::FFMPEG INTERFACE_LINK_OPTIONS)
++        if(_ffmpeg_link_options)
++            set(_ffmpeg_grouped_link_options)
++            set(_ffmpeg_expect_framework_name FALSE)
++            foreach(_ffmpeg_option IN LISTS _ffmpeg_link_options)
++                if(_ffmpeg_expect_framework_name)
++                    list(APPEND _ffmpeg_grouped_link_options "SHELL:-framework ${_ffmpeg_option}")
++                    set(_ffmpeg_expect_framework_name FALSE)
++                elseif(_ffmpeg_option STREQUAL "-framework")
++                    set(_ffmpeg_expect_framework_name TRUE)
++                elseif(_ffmpeg_option MATCHES "^-framework[ \t]+(.+)$")
++                    list(APPEND _ffmpeg_grouped_link_options "SHELL:-framework ${CMAKE_MATCH_1}")
++                else()
++                    list(APPEND _ffmpeg_grouped_link_options "${_ffmpeg_option}")
++                endif()
++            endforeach()
++            if(_ffmpeg_expect_framework_name)
++                list(APPEND _ffmpeg_grouped_link_options "-framework")
++            endif()
++            set_property(TARGET PkgConfig::FFMPEG PROPERTY INTERFACE_LINK_OPTIONS
++                "${_ffmpeg_grouped_link_options}")
++        endif()
++    endif()
+ 
+     add_library(ffmpeg INTERFACE)
+     target_link_libraries(ffmpeg INTERFACE PkgConfig::FFMPEG)
+@@ -393,6 +420,8 @@ add_library(ps2_runtime STATIC
      src/lib/vu/ps2_vu1_core.cpp
      src/lib/vu/ps2_vu1_upper.cpp
      src/lib/vu/ps2_vu1_lower.cpp
@@ -2433,7 +2502,7 @@ index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..1b03d177a970205cafa33fd87d26c359
      src/lib/games_database.cpp
  )
  
-@@ -512,6 +514,36 @@ target_link_libraries(ps2EntryRunner
+@@ -512,6 +541,36 @@ target_link_libraries(ps2EntryRunner
      ps2_runtime
  )
  
@@ -2470,7 +2539,7 @@ index 589d76850a7e3c9b99eea17d66ba0a8cad7d3f24..1b03d177a970205cafa33fd87d26c359
  if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_VITA AND NOT PS2X_IS_ANDROID)
      target_sources(ps2EntryRunner PRIVATE
          src/lib/ps2_debug_panel.cpp
-@@ -608,3 +640,28 @@ endif()
+@@ -608,3 +667,28 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -2569,6 +2638,103 @@ index 20120830b0f01d1e04a2bc8f8633a16209a43748..3a5d2d91b158ea18de6f4fb2c85c83b1
  
      void setProcessPacketFn(ProcessPacketFn fn) { m_processFn = std::move(fn); }
  
+diff --git a/ps2xRuntime/include/runtime/ps2_display_timing.h b/ps2xRuntime/include/runtime/ps2_display_timing.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..97369b6c63d15e3da1e58be0fd7a22794a542642
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_display_timing.h
+@@ -0,0 +1,74 @@
++#pragma once
++
++#include <cstdint>
++#include <limits>
++
++class PS2Memory;
++
++// Returns the effective guest VBlank period, including the opt-in cadence
++// experiment, using the same GS mode as EeScheduler.
++uint64_t ps2VsyncPeriodMicroseconds(const PS2Memory &memory);
++
++namespace ps2x::display_timing
++{
++    constexpr uint64_t kQ32One = 1ull << 32u;
++
++    inline uint64_t mpegPtsDeltaToVsyncQ32(uint64_t delta90k, uint64_t periodUs)
++    {
++        if (periodUs == 0u || delta90k > std::numeric_limits<uint64_t>::max() / 1000000u)
++        {
++            return std::numeric_limits<uint64_t>::max();
++        }
++
++        const uint64_t numerator = delta90k * 1000000u;
++        const uint64_t denominator = 90000u * periodUs;
++        const uint64_t whole = numerator / denominator;
++        const uint64_t remainder = numerator % denominator;
++        if (whole > std::numeric_limits<uint64_t>::max() / kQ32One)
++        {
++            return std::numeric_limits<uint64_t>::max();
++        }
++
++        const uint64_t wholeQ32 = whole * kQ32One;
++        const uint64_t remainderQ32 =
++            (remainder * kQ32One + denominator / 2u) / denominator;
++        return wholeQ32 > std::numeric_limits<uint64_t>::max() - remainderQ32
++                   ? std::numeric_limits<uint64_t>::max()
++                   : wholeQ32 + remainderQ32;
++    }
++
++    // MPEG sequence-header intervals are stored in NTSC 59.94-Hz field ticks.
++    inline uint64_t canonicalMpegTicksToVsyncQ32(uint64_t ticksQ32, uint64_t periodUs)
++    {
++        if (periodUs == 0u)
++        {
++            return std::numeric_limits<uint64_t>::max();
++        }
++
++        // (1001 / 60000 seconds per canonical tick) / guest period.
++        uint64_t numerator = 1001000000u;
++        uint64_t denominator = 60000u * periodUs;
++        uint64_t a = numerator;
++        uint64_t b = denominator;
++        while (b != 0u)
++        {
++            const uint64_t remainder = a % b;
++            a = b;
++            b = remainder;
++        }
++        numerator /= a;
++        denominator /= a;
++
++        const uint64_t whole = ticksQ32 / denominator;
++        const uint64_t remainder = ticksQ32 % denominator;
++        if (whole > std::numeric_limits<uint64_t>::max() / numerator)
++        {
++            return std::numeric_limits<uint64_t>::max();
++        }
++        const uint64_t wholeScaled = whole * numerator;
++        const uint64_t remainderScaled = (remainder * numerator + denominator / 2u) / denominator;
++        return wholeScaled > std::numeric_limits<uint64_t>::max() - remainderScaled
++                   ? std::numeric_limits<uint64_t>::max()
++                   : wholeScaled + remainderScaled;
++    }
++}
+diff --git a/ps2xRuntime/include/runtime/ps2_host_arena.h b/ps2xRuntime/include/runtime/ps2_host_arena.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..61fe4632a15f355cdb49d2bf1da20b016c1eb4c4
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_host_arena.h
+@@ -0,0 +1,11 @@
++#pragma once
++
++#include <cstdint>
++
++// Configure guest-RAM ranges reserved for runtime-owned heap allocations and asynchronous callback stacks.
++// The caller must set this before loadELF() and ensure neither range overlaps any guest ELF PT_LOAD segment.
++// Ranges are half-open, 16-byte aligned, inside EE RDRAM, and must not overlap each other.
++// Passing four zeroes disables the override.
++void ps2SetRuntimeArena(uint32_t heapBase, uint32_t heapLimit, uint32_t stackFloor, uint32_t stackTop);
++
++// Either range may be disabled independently by passing zero for both bounds.
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
 index ea86a9cb257df16f18067068ddab5ee8ba408350..422f73b5a8f4c0d02e2cdedcf5aa59ad41c7fe93 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
@@ -2645,6 +2811,56 @@ index ea86a9cb257df16f18067068ddab5ee8ba408350..422f73b5a8f4c0d02e2cdedcf5aa59ad
  };
  
  #endif // PS2_MEMORY_H
+diff --git a/ps2xRuntime/include/runtime/ps2_vu0_recomp.h b/ps2xRuntime/include/runtime/ps2_vu0_recomp.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..a06d02285f4d961e0b8b8fc74937a3463d7413d8
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_vu0_recomp.h
+@@ -0,0 +1,35 @@
++#pragma once
++// Exact-image native VU0 dispatch. Unknown code continues through the interpreter.
++#include "runtime/ps2_vu1.h"
++#include <cstddef>
++#include <cstdint>
++struct Vu0RecContext {
++    VU1State* state = nullptr;
++    uint8_t* data = nullptr;
++    uint64_t cycle = 0;
++    uint32_t maxCycles = 4096;
++    uint32_t top = 0, itop = 0;
++    bool failed = false;
++    uint32_t failPc = 0;
++    uint8_t backupReg = 0;
++    int32_t backupValue = 0;
++};
++using Vu0RecFn = void (*)(Vu0RecContext&, uint32_t);
++struct Vu0RecImage {
++    uint64_t hash;
++    const uint32_t* entries;
++    size_t entryCount;
++    Vu0RecFn full;
++};
++void vu0recRegister(const Vu0RecImage& image);
++const Vu0RecImage* vu0recFind(uint64_t hash);
++struct Vu0RecRegistrar {
++    Vu0RecRegistrar(uint64_t hash, const uint32_t* entries, size_t count,
++                    Vu0RecFn, Vu0RecFn full, bool = false) {
++        vu0recRegister({hash, entries, count, full});
++    }
++};
++// The caller has reset/imported state as for the original interpreter path.
++// Differential mode keeps the interpreter result, including on a mismatch.
++bool vu0recExecute(VU1Interpreter& vu, uint8_t* code, uint8_t* data,
++                   GS& gs, PS2Memory& memory, uint32_t pc, uint32_t itop);
+diff --git a/ps2xRuntime/include/runtime/ps2_vu0_recomp_support.h b/ps2xRuntime/include/runtime/ps2_vu0_recomp_support.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..899e504e1befa7668fac7d4b987d19472b8bf7c0
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_vu0_recomp_support.h
+@@ -0,0 +1,3 @@
++#pragma once
++#include "runtime/ps2_vu1_recomp_support.h"
++#include "runtime/ps2_vu0_recomp.h"
 diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
 index 67c8184fd92cdc459958fbcf5fd675052a1d692a..4f8f991a8db76ae784d26aee5684b36add6c4e06 100644
 --- a/ps2xRuntime/include/runtime/ps2_vu1.h
@@ -2689,6 +2905,800 @@ index 67c8184fd92cdc459958fbcf5fd675052a1d692a..4f8f991a8db76ae784d26aee5684b36a
  
      void run(uint8_t *vuCode, uint32_t codeSize,
               uint8_t *vuData, uint32_t dataSize,
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1_recomp.h b/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f275249a7d6cfcfcf867e46c8dc4ad8d28adfb17
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
+@@ -0,0 +1,203 @@
++#ifndef PS2_VU1_RECOMP_H
++#define PS2_VU1_RECOMP_H
++
++// Native (statically recompiled) VU1 microprograms.
++//
++// Generated sources (work/vu1gen/vu1rec_<hash>.cpp, produced by
++// game/tools/vu1recomp/vu1recomp.py from a locally captured VU1 catalog)
++// register themselves here keyed by the FNV-1a hash of the 16 KiB VU1 micro
++// memory image.  The MSCAL path looks the image up (hash recomputed only when
++// PS2Memory's VU1 code generation changes) and runs the native function for the
++// requested start PC, or falls back to VU1Interpreter and counts the fallback.
++//
++// Env switches:
++//   PS2X_VU1_INTERPRETER=1  force the interpreter (comparison / bisecting)
++//   PS2X_VU1_DIFF=1         differential test: every MSCAL runs native code and
++//                           the interpreter on identical copies and compares
++//                           GIF packets, registers, flags, data memory, cycles.
++//   PS2X_VU1_DIFF_LOG=<n>   number of mismatching calls to log in detail (default 8)
++//   PS2X_VU1_STATS=<sec>    print counters every <sec> seconds (default 5, 0 = off)
++//   PS2X_VU1_CAPTURE=<dir>  write sampled MSCAL input snapshots (VU1State + data memory)
++//                           for the offline replay test (game/tests/vu1).  Disc-derived:
++//                           keep the directory out of git.
++//   PS2X_VU1_CAPTURE_EVERY=<n> sample every n-th MSCAL per entry (default 997; first 8 always)
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <tuple>
++#include <vector>
++
++#include "runtime/ps2_vu1.h"
++
++class GS;
++class PS2Memory;
++
++struct Vu1RecKick
++{
++    static constexpr uint32_t kBufferSize = 0x10000u;
++    bool active = false;
++    bool currentTagEop = false;
++    uint32_t sourceAddress = 0;
++    uint32_t totalBytes = 0;
++    uint32_t copiedBytes = 0;
++    uint32_t currentTagEnd = 0;
++    uint64_t issueCycle = 0;
++    uint64_t finishCycle = 0;
++    std::array<uint8_t, kBufferSize> packet{};
++};
++
++using Vu1RecPacketSink = void (*)(void *user, const uint8_t *data, uint32_t size);
++
++struct Vu1RecContext
++{
++    VU1State *state = nullptr;
++    uint8_t *data = nullptr;          // 16 KiB VU1 data memory
++    uint64_t cycle = 0;               // in: interpreter cycle at start; out: at end
++    uint32_t maxCycles = 65536;
++    uint32_t top = 0;
++    uint32_t itop = 0;
++    PS2Memory *memory = nullptr;
++    GS *gs = nullptr;
++    Vu1RecPacketSink sink = nullptr;  // diff mode: capture instead of submit
++    void *sinkUser = nullptr;
++    bool failed = false;
++    uint32_t failPc = 0;
++    uint32_t kickErrors = 0;
++    uint8_t backupReg = 0;
++    int32_t backupValue = 0;
++    Vu1RecKick kick;
++    const uint8_t *code = nullptr; // read-only microcode for guarded AOT variants
++};
++
++using Vu1RecFn = void (*)(Vu1RecContext &ctx, uint32_t entryPc);
++
++struct Vu1RecImage
++{
++    uint64_t hash = 0;
++    const uint32_t *entries = nullptr;
++    size_t entryCount = 0;
++    Vu1RecFn fast = nullptr;
++    Vu1RecFn full = nullptr;
++    bool hasDebugBits = false; // a reachable D or T bit; native code treats it as FBRST.DE/TE = 0
++    bool guarded = false; // validates each instruction pair instead of a whole-bank hash
++
++    bool hasEntry(uint32_t pc) const
++    {
++        for (size_t i = 0; i < entryCount; ++i)
++            if (entries[i] == pc)
++                return true;
++        return false;
++    }
++};
++
++void vu1recRegister(const Vu1RecImage &image);
++const Vu1RecImage *vu1recFind(uint64_t hash);
++const Vu1RecImage *vu1recFindGuarded();
++size_t vu1recImageCount();
++
++struct Vu1RecRegistrar
++{
++    Vu1RecRegistrar(uint64_t hash, const uint32_t *entries, size_t count, Vu1RecFn fast, Vu1RecFn full,
++                    bool hasDebugBits = false, bool guarded = false)
++    {
++        Vu1RecImage image;
++        image.hash = hash;
++        image.entries = entries;
++        image.entryCount = count;
++        image.fast = fast;
++        image.full = full;
++        image.hasDebugBits = hasDebugBits;
++        image.guarded = guarded;
++        vu1recRegister(image);
++    }
++};
++
++// PATH1 copy engine (cycle-exact lazy model of VU1Interpreter's XGKICK pipeline).
++void vu1rec_kick_start(Vu1RecContext &ctx, uint32_t qwordAddress, uint64_t cycle);
++void vu1rec_kick_catchup(Vu1RecContext &ctx, uint64_t cycle);
++uint64_t vu1rec_kick_drain(Vu1RecContext &ctx);
++
++// MSCAL/MSCNT front end used by PS2Runtime.
++class Vu1NativeDispatcher
++{
++public:
++    Vu1NativeDispatcher();
++    ~Vu1NativeDispatcher();
++
++    // Runs the program at startPC (MSCAL).  Returns false if the interpreter
++    // must be used (no native code); the call is then counted as a fallback.
++    // In diff mode it runs both and always returns true (interpreter result wins).
++    bool mscal(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++               uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles);
++    bool mscnt(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++               uint32_t top, uint32_t itop, uint32_t maxCycles);
++    void noteInterpreterRun(uint64_t cycles, double seconds)
++    {
++        m_stats.vu1Cycles += cycles;
++        m_vu1Seconds += seconds;
++    }
++    static double now();
++    void printStats(const char *why);
++
++private:
++    friend struct Vu1NativeDispatcherTestAccess;
++
++    bool dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++                  uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume);
++    struct Stats
++    {
++        uint64_t mscal = 0;
++        uint64_t native = 0;
++        uint64_t fallbackNoImage = 0;
++        uint64_t fallbackNoEntry = 0;
++        uint64_t fallbackFailed = 0;
++        uint64_t forcedInterpreter = 0;
++        uint64_t mscnt = 0;
++        uint64_t nativeFailures = 0;
++        uint64_t diffCalls = 0;
++        uint64_t diffMismatchFull = 0;
++        uint64_t diffMismatchFast = 0;
++        uint64_t diffInterpBudget = 0;
++        uint64_t diffPackets = 0;
++        uint64_t diffPacketBytes = 0;
++        uint64_t vu1Cycles = 0;
++    };
++
++    const Vu1RecImage *currentImage(PS2Memory &memory);
++    const Vu1RecImage *currentImage(const uint8_t *code, uint64_t codeGeneration);
++    void runDiff(const Vu1RecImage &image, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++                 uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume);
++    void maybePrintPeriodic();
++
++    bool m_forceInterpreter = false;
++    bool m_diff = false;
++    int m_diffLogBudget = 8;
++    double m_statsPeriod = 5.0;
++    double m_lastStatsTime = 0.0;
++    uint64_t m_cachedGeneration = ~0ull;
++    const uint8_t *m_cachedCode = nullptr;
++    uint64_t m_cachedHash = 0;
++    const Vu1RecImage *m_cachedImage = nullptr;
++    Stats m_stats;
++    Stats m_lastPrinted;
++    Vu1RecContext *m_ctx = nullptr;     // heap: holds a 64 KiB kick buffer
++    Vu1RecContext *m_ctx2 = nullptr;
++    std::vector<uint64_t> m_unknownHashes;
++    std::vector<std::pair<uint64_t, uint32_t>> m_unknownEntries;
++    void maybeCapture(uint64_t hash, VU1State &st, const uint8_t *data, uint32_t pc, uint32_t top,
++                      uint32_t itop, uint32_t maxCycles, uint64_t cycle, bool resume);
++    const char *m_captureDir = nullptr;
++    uint32_t m_captureEvery = 997;
++    uint64_t m_captureCount = 0;
++    std::vector<std::pair<std::tuple<uint64_t, uint32_t, bool>, uint64_t>> m_captureSeen;
++    PS2Memory *m_memory = nullptr;
++    uint64_t m_lastSwaps = 0;
++    uint64_t m_lastSwaps2 = 0;
++    double m_vu1Seconds = 0.0;
++    double m_lastVu1Seconds = 0.0;
++    // Keep new cache state at the end: debugger tooling relies on existing offsets.
++    uint64_t m_cachedRegistryGeneration = ~0ull;
++};
++
++#endif
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h b/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..1717128785e1259ab3145a50c9fba12f9e60ad50
+--- /dev/null
++++ b/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h
+@@ -0,0 +1,579 @@
++#ifndef PS2_VU1_RECOMP_SUPPORT_H
++#define PS2_VU1_RECOMP_SUPPORT_H
++
++// Inline helpers used only by generated VU1 microprogram code
++// (work/vu1gen/vu1rec_<hash>.cpp).  Every helper mirrors one piece of
++// VU1Interpreter semantics (ps2_vu1_core/upper/lower.cpp); scalar helpers
++// that the interpreter computes with clang-contracted expressions are copied
++// verbatim so the same contraction happens. Generated TUs are compiled with
++// -ffp-contract=off -frounding-math; multiply-accumulate operations use
++// separate multiply and add/subtract, matching the interpreter build.
++//
++// All generated code runs with FE_TOWARDZERO (as VU1Interpreter::run does).
++
++#include "runtime/ps2_vu1_recomp.h"
++
++#include <arm_neon.h>
++#include <cfenv>
++#include <cmath>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++
++struct Vu1RecRoundingGuard
++{
++    int previous;
++    bool ok;
++    Vu1RecRoundingGuard() : previous(std::fegetround()), ok(std::fesetround(FE_TOWARDZERO) == 0) {}
++    ~Vu1RecRoundingGuard()
++    {
++        if (ok && previous != -1)
++            std::fesetround(previous);
++    }
++};
++
++static inline float vr_bits2f(uint32_t b)
++{
++    float f;
++    std::memcpy(&f, &b, 4);
++    return f;
++}
++
++static inline uint32_t vr_f2bits(float f)
++{
++    uint32_t b;
++    std::memcpy(&b, &f, 4);
++    return b;
++}
++
++static inline float32x4_t vr_load_vf(const float *p) { return vld1q_f32(p); }
++static inline void vr_store_vf(float *p, float32x4_t v) { vst1q_f32(p, v); }
++
++// normalizeOperand: exponent 0 -> signed zero, exponent 255 -> signed FLT_MAX.
++static inline float32x4_t vr_norm(float32x4_t v)
++{
++    uint32x4_t b = vreinterpretq_u32_f32(v);
++    const uint32x4_t e = vandq_u32(b, vdupq_n_u32(0x7F800000u));
++    const uint32x4_t sign = vandq_u32(b, vdupq_n_u32(0x80000000u));
++    b = vbslq_u32(vceqzq_u32(e), sign, b);
++    b = vbslq_u32(vceqq_u32(e, vdupq_n_u32(0x7F800000u)), vorrq_u32(sign, vdupq_n_u32(0x7F7FFFFFu)), b);
++    return vreinterpretq_f32_u32(b);
++}
++
++// FMAC result normalization.  With clamped operands and round-toward-zero the
++// only case that occurs is a denormal (|exact| < FLT_MIN) -> signed zero; the
++// exponent-255 clamp is kept for completeness (it is one select).
++static inline float32x4_t vr_flush(float32x4_t v) { return vr_norm(v); }
++
++static inline float vr_normf(float v)
++{
++    uint32_t b = vr_f2bits(v);
++    const uint32_t e = (b >> 23) & 0xFFu;
++    if (e == 0u)
++        b &= 0x80000000u;
++    else if (e == 0xFFu)
++        b = (b & 0x80000000u) | 0x7F7FFFFFu;
++    return vr_bits2f(b);
++}
++
++// normalizeResult (value part)
++static inline float vr_normf_result(float v) { return vr_normf(v); }
++
++template <unsigned D>
++static inline float32x4_t vr_blend(float32x4_t n, float32x4_t o)
++{
++    const uint32x4_t m = {(D & 8u) ? 0xFFFFFFFFu : 0u, (D & 4u) ? 0xFFFFFFFFu : 0u,
++                          (D & 2u) ? 0xFFFFFFFFu : 0u, (D & 1u) ? 0xFFFFFFFFu : 0u};
++    return vbslq_f32(m, n, o);
++}
++
++template <int L>
++static inline float32x4_t vr_dup(float32x4_t v) { return vdupq_laneq_f32(v, L); }
++
++// MAX/MINI: (a > b) ? a : b  /  (a < b) ? a : b on clamped operands.
++static inline float32x4_t vr_max(float32x4_t a, float32x4_t b) { return vbslq_f32(vcgtq_f32(a, b), a, b); }
++static inline float32x4_t vr_min(float32x4_t a, float32x4_t b) { return vbslq_f32(vcltq_f32(a, b), a, b); }
++
++// OPMSUB: acc.xyz - vs.yzx * vt.zxy (separate operations under -ffp-contract=off), w = 0.
++static inline float32x4_t vr_yzxw(float32x4_t v)
++{
++    const uint8x16_t idx = {4, 5, 6, 7, 8, 9, 10, 11, 0, 1, 2, 3, 12, 13, 14, 15};
++    return vreinterpretq_f32_u8(vqtbl1q_u8(vreinterpretq_u8_f32(v), idx));
++}
++static inline float32x4_t vr_zxyw(float32x4_t v)
++{
++    const uint8x16_t idx = {8, 9, 10, 11, 0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15};
++    return vreinterpretq_f32_u8(vqtbl1q_u8(vreinterpretq_u8_f32(v), idx));
++}
++// The interpreter oracle is built with -ffp-contract=off, so preserve its two
++// rounding steps instead of using a hardware fused multiply-add.
++static inline float vr_fmac_exact_override(float rounded, float a, float s, float t, bool subtract)
++{
++    const double exact = static_cast<double>(a) +
++                         (subtract ? -1.0 : 1.0) * static_cast<double>(s) * static_cast<double>(t);
++    const double magnitude = std::fabs(exact);
++    const uint32_t sign = std::signbit(exact) ? 0x80000000u : 0u;
++    if (magnitude == 0.0 || magnitude < static_cast<double>(std::numeric_limits<float>::min()))
++        return vr_bits2f(sign);
++    if (magnitude > static_cast<double>(std::numeric_limits<float>::max()))
++        return vr_bits2f(sign | 0x7F7FFFFFu);
++    return rounded;
++}
++static inline float32x4_t vr_fmac_override(float32x4_t rounded, float32x4_t acc,
++                                            float32x4_t s, float32x4_t t, bool subtract)
++{
++    const float64x2_t minNormal = vdupq_n_f64(static_cast<double>(std::numeric_limits<float>::min()));
++    const float64x2_t maxFinite = vdupq_n_f64(static_cast<double>(std::numeric_limits<float>::max()));
++    const auto correct = [subtract, minNormal, maxFinite](float32x2_t rounded2, float32x2_t acc2,
++                                                          float32x2_t s2, float32x2_t t2) {
++        const float64x2_t a = vcvt_f64_f32(acc2);
++        float64x2_t x = vcvt_f64_f32(s2);
++        if (subtract)
++            x = vnegq_f64(x);
++        const float64x2_t y = vcvt_f64_f32(t2);
++        // Match the scalar oracle's left-associated double multiply then add.
++        const float64x2_t exact = vaddq_f64(a, vmulq_f64(x, y));
++        const float64x2_t magnitude = vabsq_f64(exact);
++        const uint64x2_t tiny64 = vcltq_f64(magnitude, minNormal);
++        const uint64x2_t large64 = vcgtq_f64(magnitude, maxFinite);
++        const uint32x2_t tiny = vmovn_u64(tiny64);
++        const uint32x2_t large = vmovn_u64(large64);
++        const uint32x2_t sign = vand_u32(vshrn_n_u64(vreinterpretq_u64_f64(exact), 32),
++                                          vdup_n_u32(0x80000000u));
++        const uint32x2_t roundedBits = vreinterpret_u32_f32(rounded2);
++        const uint32x2_t tinyValue = vbsl_u32(tiny, sign, roundedBits);
++        const uint32x2_t largeValue = vorr_u32(sign, vdup_n_u32(0x7F7FFFFFu));
++        return vreinterpret_f32_u32(vbsl_u32(large, largeValue, tinyValue));
++    };
++    return vcombine_f32(correct(vget_low_f32(rounded), vget_low_f32(acc), vget_low_f32(s), vget_low_f32(t)),
++                        correct(vget_high_f32(rounded), vget_high_f32(acc), vget_high_f32(s), vget_high_f32(t)));
++}
++static inline float32x4_t vr_madd(float32x4_t acc, float32x4_t s, float32x4_t t)
++{
++    return vr_fmac_override(vaddq_f32(acc, vmulq_f32(s, t)), acc, s, t, false);
++}
++static inline float32x4_t vr_msub(float32x4_t acc, float32x4_t s, float32x4_t t)
++{
++    return vr_fmac_override(vsubq_f32(acc, vmulq_f32(s, t)), acc, s, t, true);
++}
++static inline float32x4_t vr_opmsub(float32x4_t acc, float32x4_t s, float32x4_t t)
++{
++    return vsetq_lane_f32(0.0f, vr_msub(acc, vr_yzxw(s), vr_zxyw(t)), 3);
++}
++static inline float32x4_t vr_opmula(float32x4_t s, float32x4_t t)
++{
++    return vsetq_lane_f32(0.0f, vmulq_f32(vr_yzxw(s), vr_zxyw(t)), 3);
++}
++
++// Memory (VU1 data memory, 16 KiB, addresses already masked).
++static inline float32x4_t vr_ld(const uint8_t *p) { return vreinterpretq_f32_u8(vld1q_u8(p)); }
++
++template <unsigned D>
++static inline void vr_st(uint8_t *p, float32x4_t v)
++{
++    if constexpr (D == 0xFu)
++    {
++        vst1q_u8(p, vreinterpretq_u8_f32(v));
++    }
++    else
++    {
++        const uint32x4_t b = vreinterpretq_u32_f32(v);
++        if constexpr ((D & 8u) != 0u)
++        {
++            const uint32_t w = vgetq_lane_u32(b, 0);
++            std::memcpy(p + 0, &w, 4);
++        }
++        if constexpr ((D & 4u) != 0u)
++        {
++            const uint32_t w = vgetq_lane_u32(b, 1);
++            std::memcpy(p + 4, &w, 4);
++        }
++        if constexpr ((D & 2u) != 0u)
++        {
++            const uint32_t w = vgetq_lane_u32(b, 2);
++            std::memcpy(p + 8, &w, 4);
++        }
++        if constexpr ((D & 1u) != 0u)
++        {
++            const uint32_t w = vgetq_lane_u32(b, 3);
++            std::memcpy(p + 12, &w, 4);
++        }
++    }
++}
++
++template <unsigned D>
++static inline void vr_stw(uint8_t *p, uint32_t w)
++{
++    if constexpr ((D & 8u) != 0u)
++        std::memcpy(p + 0, &w, 4);
++    if constexpr ((D & 4u) != 0u)
++        std::memcpy(p + 4, &w, 4);
++    if constexpr ((D & 2u) != 0u)
++        std::memcpy(p + 8, &w, 4);
++    if constexpr ((D & 1u) != 0u)
++        std::memcpy(p + 12, &w, 4);
++}
++
++static inline uint32_t vr_ld32(const uint8_t *p)
++{
++    uint32_t w;
++    std::memcpy(&w, p, 4);
++    return w;
++}
++
++// CLIP (raw bits, as VU1Interpreter::execUpper special 0x1F).
++static inline uint32_t vr_clip_flags(float32x4_t vs, float32x4_t vt)
++{
++    const uint32_t wBits = vgetq_lane_u32(vreinterpretq_u32_f32(vt), 3);
++    const int32_t limit = (wBits & 0x7F800000u) != 0u ? static_cast<int32_t>(wBits & 0x7FFFFFFFu) : 0x007FFFFF;
++    const uint32x4_t b = vreinterpretq_u32_f32(vs);
++    const int32x4_t pos = vreinterpretq_s32_u32(b);
++    const int32x4_t neg = vreinterpretq_s32_u32(veorq_u32(b, vdupq_n_u32(0x80000000u)));
++    const int32x4_t lim = vdupq_n_s32(limit);
++    const uint32x4_t gp = vcgtq_s32(pos, lim);
++    const uint32x4_t gn = vcgtq_s32(neg, lim);
++    uint32_t flags = 0u;
++    flags |= (vgetq_lane_u32(gp, 0) & 0x01u);
++    flags |= (vgetq_lane_u32(gn, 0) & 0x02u);
++    flags |= (vgetq_lane_u32(gp, 1) & 0x04u);
++    flags |= (vgetq_lane_u32(gn, 1) & 0x08u);
++    flags |= (vgetq_lane_u32(gp, 2) & 0x10u);
++    flags |= (vgetq_lane_u32(gn, 2) & 0x20u);
++    return flags;
++}
++
++// R register
++static inline uint32_t vr_rnext(uint32_t r)
++{
++    const uint32_t x = (r >> 4) & 1u;
++    const uint32_t y = (r >> 22) & 1u;
++    r = ((r << 1) ^ x ^ y) & 0x007FFFFFu;
++    return r | 0x3F800000u;
++}
++
++// FDIV unit (copied from VU1Interpreter::execLower; operands already clamped).
++static inline float vr_div(float num, float den, uint32_t &di)
++{
++    uint32_t statusDi = 0u;
++    float result = 0.0f;
++    if (den == 0.0f)
++    {
++        statusDi = num == 0.0f ? 0x10u : 0x20u;
++        result = std::signbit(num) != std::signbit(den)
++                     ? -std::numeric_limits<float>::max()
++                     : std::numeric_limits<float>::max();
++    }
++    else
++    {
++        result = num / den;
++    }
++    di = statusDi & 0x30u;
++    return vr_normf(vr_normf(result));
++}
++
++static inline float vr_sqrt(float val, uint32_t &di)
++{
++    di = (val < 0.0f ? 0x10u : 0u) & 0x30u;
++    return vr_normf(std::sqrt(std::fabs(val)));
++}
++
++static inline float vr_rsqrt(float num, float radicand, uint32_t &di)
++{
++    const float den = std::sqrt(std::fabs(radicand));
++    uint32_t statusDi = radicand < 0.0f ? 0x10u : 0u;
++    float result = 0.0f;
++    if (den != 0.0f)
++        result = num / den;
++    else
++    {
++        statusDi = num == 0.0f ? 0x10u : 0x20u;
++        result = std::signbit(num) ? -std::numeric_limits<float>::max() : std::numeric_limits<float>::max();
++    }
++    di = statusDi & 0x30u;
++    return vr_normf(vr_normf(result));
++}
++
++// EFU (copied from ps2_vu1_lower.cpp, including expression shapes so clang
++// contracts them the same way).  Generated TUs are built with
++// -ffp-contract=off, so the contraction the interpreter gets from clang's
++// default (-ffp-contract=on) is spelled out with std::fma where the
++// interpreter object code shows fmadd.
++namespace vr_efu_detail
++{
++    static inline float eatan(float value)
++    {
++        constexpr float coefficients[] = {
++            0.999999344348907f, -0.333298563957214f, 0.199465364217758f, -0.13085337519646f,
++            0.096420042216778f, -0.055909886956215f, 0.021861229091883f, -0.004054057877511f};
++        constexpr float quarterPi = 0.785398185253143f;
++        const float squared = value * value;
++        float polynomial = coefficients[7];
++        for (int index = 6; index >= 0; --index)
++            polynomial = std::fma(squared, polynomial, coefficients[index]);
++        return std::fma(value, polynomial, quarterPi);
++    }
++    static inline float esin(float value)
++    {
++        constexpr float coefficients[] = {
++            1.0f, -0.166666567325592f, 0.008333025500178f, -0.000198074136279f, 0.000002601886990f};
++        const float squared = value * value;
++        float polynomial = coefficients[4];
++        for (int index = 3; index >= 0; --index)
++            polynomial = std::fma(squared, polynomial, coefficients[index]);
++        return value * polynomial;
++    }
++    static inline float eexp(float value)
++    {
++        constexpr float coefficients[] = {
++            0.249998688697815f, 0.031257584691048f, 0.002591371303424f,
++            0.000171562001924f, 0.000005430199963f, 0.000000690600018f};
++        float polynomial = coefficients[5];
++        for (int index = 4; index >= 0; --index)
++            polynomial = std::fma(value, polynomial, coefficients[index]);
++        polynomial = std::fma(value, polynomial, 1.0f);
++        polynomial *= polynomial;
++        polynomial *= polynomial;
++        return polynomial != 0.0f ? 1.0f / polynomial : std::numeric_limits<float>::max();
++    }
++    static inline float sumsq(float32x4_t v)
++    {
++        const float x = vr_normf(vgetq_lane_f32(v, 0));
++        const float y = vr_normf(vgetq_lane_f32(v, 1));
++        const float z = vr_normf(vgetq_lane_f32(v, 2));
++        // interpreter: x * x + y * y + z * z; clang emits fmul + fmadd + fmadd
++        // (LLVM folds fadd(fmul a, fmul b) into fma(a.., fmul b)).  Not reached by
++        // the RTA microcode, so this shape is not covered by the diff test.
++        return std::fma(z, z, std::fma(x, x, y * y));
++    }
++}
++
++static inline float vr_efu_esadd(float32x4_t v, int) { return vr_efu_detail::sumsq(v); }
++static inline float vr_efu_ersadd(float32x4_t v, int)
++{
++    const float sum = vr_efu_detail::sumsq(v);
++    return sum != 0.0f ? 1.0f / sum : sum;
++}
++static inline float vr_efu_eleng(float32x4_t v, int) { return std::sqrt(vr_efu_detail::sumsq(v)); }
++static inline float vr_efu_erleng(float32x4_t v, int)
++{
++    const float len = std::sqrt(vr_efu_detail::sumsq(v));
++    return len != 0.0f ? 1.0f / len : len;
++}
++static inline float vr_efu_eatanxy(float32x4_t v, int)
++{
++    const float x = vr_normf(vgetq_lane_f32(v, 0));
++    const float y = vr_normf(vgetq_lane_f32(v, 1));
++    return x != 0.0f ? vr_efu_detail::eatan(y / x) : 0.0f;
++}
++static inline float vr_efu_eatanxz(float32x4_t v, int)
++{
++    const float x = vr_normf(vgetq_lane_f32(v, 0));
++    const float z = vr_normf(vgetq_lane_f32(v, 2));
++    return x != 0.0f ? vr_efu_detail::eatan(z / x) : 0.0f;
++}
++static inline float vr_efu_esum(float32x4_t v, int)
++{
++    float sum = 0.0f;
++    sum += vr_normf(vgetq_lane_f32(v, 0));
++    sum += vr_normf(vgetq_lane_f32(v, 1));
++    sum += vr_normf(vgetq_lane_f32(v, 2));
++    sum += vr_normf(vgetq_lane_f32(v, 3));
++    return sum;
++}
++static inline float vr_lane(float32x4_t v, int c)
++{
++    float tmp[4];
++    vst1q_f32(tmp, v);
++    return tmp[c & 3];
++}
++static inline float vr_efu_ersqrt(float32x4_t v, int c)
++{
++    const float value = vr_normf(vr_lane(v, c));
++    float result = value;
++    if (result >= 0.0f)
++    {
++        result = std::sqrt(result);
++        if (result != 0.0f)
++            result = 1.0f / result;
++    }
++    return result;
++}
++static inline float vr_efu_esqrt(float32x4_t v, int c)
++{
++    const float value = vr_normf(vr_lane(v, c));
++    return value >= 0.0f ? std::sqrt(value) : value;
++}
++static inline float vr_efu_esin(float32x4_t v, int c) { return vr_efu_detail::esin(vr_normf(vr_lane(v, c))); }
++static inline float vr_efu_ercpr(float32x4_t v, int c)
++{
++    const float value = vr_normf(vr_lane(v, c));
++    return value != 0.0f ? 1.0f / value : value;
++}
++static inline float vr_efu_eatan(float32x4_t v, int c) { return vr_efu_detail::eatan(vr_normf(vr_lane(v, c))); }
++static inline float vr_efu_eexp(float32x4_t v, int c) { return vr_efu_detail::eexp(vr_normf(vr_lane(v, c))); }
++
++// ---------------------------------------------------------------------------
++// FMAC flags (MAC / status current / product sticky), only emitted where a
++// flag reader can observe them (or in the full-flag variant).  Mirrors
++// calculateFmacExactResult + normalizeFmacExactResult + updateFmacFlags +
++// calculateFmacProductSticky.  The interpreter's long double expressions are
++// contracted by clang (fmadd on double); std::fma reproduces that.
++// ---------------------------------------------------------------------------
++namespace vr_flag_detail
++{
++    static inline uint8_t exactFlags(long double exactResult)
++    {
++        const bool negative = std::signbit(exactResult);
++        const long double magnitude = std::fabs(exactResult);
++        const long double maximum = static_cast<long double>(std::numeric_limits<float>::max());
++        const long double minimum = static_cast<long double>(std::numeric_limits<float>::min());
++        uint8_t flags = negative ? 0x2u : 0u;
++        if (magnitude == 0.0L)
++            flags |= 0x1u;
++        else if (magnitude > maximum)
++            flags |= 0x8u;
++        else if (magnitude < minimum)
++            flags |= 0x5u;
++        return flags;
++    }
++
++    static inline long double madd(long double a, long double s, long double t) { return std::fma(s, t, a); }
++    static inline long double msub(long double a, long double s, long double t) { return std::fma(-s, t, a); }
++
++    template <uint32_t UPPER>
++    static inline bool exact(uint32_t c, const float *vs, const float *vt, const float *acc, float qf, float i_f,
++                             long double &result)
++    {
++        constexpr uint32_t op = UPPER & 0x3Fu;
++        constexpr uint32_t special = op >= 0x3Cu ? ((UPPER & 3u) | ((UPPER >> 4) & 0x7Cu)) : 0xFFu;
++        constexpr uint32_t sel = op >= 0x3Cu ? special : op;
++        const long double S = vs[c];
++        const auto T = [&](uint32_t l) { return static_cast<long double>(vt[l]); };
++        const long double A = acc[c];
++        const long double q = qf;
++        const long double i = i_f;
++        if constexpr (sel <= 0x03u)
++            result = S + T(sel & 3u);
++        else if constexpr (sel <= 0x07u)
++            result = S - T(sel & 3u);
++        else if constexpr (sel <= 0x0Bu)
++            result = madd(A, S, T(sel & 3u));
++        else if constexpr (sel <= 0x0Fu)
++            result = msub(A, S, T(sel & 3u));
++        else if constexpr (sel >= 0x18u && sel <= 0x1Bu)
++            result = S * T(sel & 3u);
++        else if constexpr (sel == 0x1Cu)
++            result = S * q;
++        else if constexpr (sel == 0x1Eu)
++            result = S * i;
++        else if constexpr (sel == 0x20u)
++            result = S + q;
++        else if constexpr (sel == 0x21u)
++            result = madd(A, S, q);
++        else if constexpr (sel == 0x22u)
++            result = S + i;
++        else if constexpr (sel == 0x23u)
++            result = madd(A, S, i);
++        else if constexpr (sel == 0x24u)
++            result = S - q;
++        else if constexpr (sel == 0x25u)
++            result = msub(A, S, q);
++        else if constexpr (sel == 0x26u)
++            result = S - i;
++        else if constexpr (sel == 0x27u)
++            result = msub(A, S, i);
++        else if constexpr (sel == 0x28u)
++            result = S + T(c);
++        else if constexpr (sel == 0x29u)
++            result = madd(A, S, T(c));
++        else if constexpr (sel == 0x2Au)
++            result = S * T(c);
++        else if constexpr (sel == 0x2Cu)
++            result = S - T(c);
++        else if constexpr (sel == 0x2Du)
++            result = msub(A, S, T(c));
++        else if constexpr (sel == 0x2Eu)
++        {
++            constexpr uint8_t left[4] = {1u, 2u, 0u, 3u};
++            constexpr uint8_t right[4] = {2u, 0u, 1u, 3u};
++            if constexpr (op == 0x2Eu)
++                result = c == 3u ? 0.0L : msub(acc[c], vs[left[c]], T(right[c]));
++            else
++                result = c == 3u ? 0.0L : static_cast<long double>(vs[left[c]]) * T(right[c]);
++        }
++        else
++            return false;
++        return true;
++    }
++}
++
++template <uint32_t UPPER>
++static inline void vr_fmac_flags(float32x4_t vsv, float32x4_t vtv, float32x4_t accv, float q, float i,
++                                 uint32_t &macOut, uint32_t &statusOut, uint32_t &stickyOut)
++{
++    using namespace vr_flag_detail;
++    constexpr uint32_t dest = (UPPER >> 21) & 0xFu;
++    constexpr uint32_t op = UPPER & 0x3Fu;
++    constexpr uint32_t special = op >= 0x3Cu ? ((UPPER & 3u) | ((UPPER >> 4) & 0x7Cu)) : 0xFFu;
++    float vs[4], vt[4], acc[4];
++    vst1q_f32(vs, vsv);
++    vst1q_f32(vt, vtv);
++    vst1q_f32(acc, accv);
++    uint32_t mac = 0u, status = 0u;
++    for (uint32_t c = 0; c < 4u; ++c)
++    {
++        const uint32_t lane = 1u << (3u - c);
++        if ((dest & lane) == 0u)
++            continue;
++        long double e = 0.0L;
++        uint32_t flags = 0u;
++        if (exact<UPPER>(c, vs, vt, acc, q, i, e))
++            flags = exactFlags(e);
++        if (flags & 0x1u)
++            mac |= lane;
++        if (flags & 0x2u)
++            mac |= lane << 4;
++        if (flags & 0x4u)
++            mac |= lane << 8;
++        if (flags & 0x8u)
++            mac |= lane << 12;
++        status |= flags;
++    }
++    // product sticky (calculateFmacProductSticky)
++    uint32_t extra = 0u;
++    constexpr bool productSum =
++        (op >= 0x08u && op <= 0x0Fu) || op == 0x21u || op == 0x23u || op == 0x25u || op == 0x27u ||
++        op == 0x29u || op == 0x2Du || op == 0x2Eu || (special >= 0x08u && special <= 0x0Fu) ||
++        special == 0x21u || special == 0x23u || special == 0x25u || special == 0x27u || special == 0x29u ||
++        special == 0x2Du;
++    if constexpr (productSum)
++    {
++        constexpr uint8_t crossLeft[4] = {1u, 2u, 0u, 3u};
++        constexpr uint8_t crossRight[4] = {2u, 0u, 1u, 3u};
++        for (uint32_t c = 0; c < 4u; ++c)
++        {
++            if ((dest & (1u << (3u - c))) == 0u)
++                continue;
++            const uint32_t lc = op == 0x2Eu ? crossLeft[c] : c;
++            const float left = vs[lc];
++            float right = 0.0f;
++            if ((op >= 0x08u && op <= 0x0Fu) || (special >= 0x08u && special <= 0x0Fu))
++                right = vt[((op >= 0x08u && op <= 0x0Fu) ? op : special) & 3u];
++            else if (op == 0x21u || op == 0x25u || special == 0x21u || special == 0x25u)
++                right = q;
++            else if (op == 0x23u || op == 0x27u || special == 0x23u || special == 0x27u)
++                right = i;
++            else if (op == 0x2Eu)
++                right = vt[crossRight[c]];
++            else
++                right = vt[c];
++            const long double exactProduct = static_cast<long double>(left) * static_cast<long double>(right);
++            extra |= exactFlags(exactProduct) & 0xFu;
++        }
++    }
++    macOut = mac;
++    statusOut = status;
++    stickyOut = extra;
++}
++
++#endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 index c5e31c48d887460d816564641f48e20e0af2f32d..da3432f077e7224d61e411f49aa31fac985f89db 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
@@ -8105,6 +9115,115 @@ index b02c7ca693a627d6a2d0a24ddd3d8fd5a4087298..dcf968294dc844058e4d9628aa17f056
 +        std::cerr << "[tarzan-vif1] exit call=" << thisCall << " consumedBytes=" << pos
 +                  << " pendingImageQWC=" << m_vif1PendingPath2ImageQwc << std::endl;
  }
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu0_recomp.cpp b/ps2xRuntime/src/lib/vu/ps2_vu0_recomp.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..5a9cdd8146b0d2ff1cf7b21da92570141a908834
+--- /dev/null
++++ b/ps2xRuntime/src/lib/vu/ps2_vu0_recomp.cpp
+@@ -0,0 +1,103 @@
++#include "runtime/ps2_vu0_recomp.h"
++#include "runtime/ps2_memory.h"
++#include <array>
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <vector>
++
++namespace {
++auto& registry() { static std::vector<Vu0RecImage> images; return images; }
++bool enabled(const char* name) { const char* p = std::getenv(name); return p && p[0] == '1' && p[1] == 0; }
++uint64_t hashCode(const uint8_t* code) {
++    uint64_t h = 1469598103934665603ull;
++    for (uint32_t i = 0; i < PS2_VU0_CODE_SIZE; ++i) { h ^= code[i]; h *= 1099511628211ull; }
++    return h;
++}
++void prepare(VU1State& state, uint32_t pc, uint32_t itop) {
++    state.pc = pc & (PS2_VU0_CODE_SIZE - 1u);
++    state.ebit = state.haltAfterDelaySlot = false;
++    state.stoppedByD = state.stoppedByT = false;
++    state.top = 0; state.itop = itop;
++    state.branchPending = false; state.branchTarget = state.branchDelay = 0;
++    state.vf[0][0] = state.vf[0][1] = state.vf[0][2] = 0;
++    state.vf[0][3] = 1;
++}
++}
++void vu0recRegister(const Vu0RecImage& image) { registry().push_back(image); }
++const Vu0RecImage* vu0recFind(uint64_t hash) {
++    for (const auto& image : registry()) if (image.hash == hash) return &image;
++    return nullptr;
++}
++bool vu0recExecute(VU1Interpreter& vu, uint8_t* code, uint8_t* data,
++                   GS& gs, PS2Memory& memory, uint32_t pc, uint32_t itop) {
++    static const bool forced = enabled("PS2X_VU0_INTERPRETER");
++    static const bool diff = enabled("PS2X_VU0_DIFF");
++    static const bool commitDiff = enabled("PS2X_VU0_DIFF_COMMIT");
++    if (forced || registry().empty()) return false;
++    // Compare actual bytes, including untracked direct MicroMem writes. Hash
++    // only on a change; no pointer/generation shortcut can accept stale code.
++    struct Cache { std::array<uint8_t, PS2_VU0_CODE_SIZE> code; bool valid = false; uint64_t hash = 0; };
++    static thread_local Cache cache;
++    if (!cache.valid || std::memcmp(cache.code.data(), code, cache.code.size()) != 0) {
++        std::memcpy(cache.code.data(), code, cache.code.size());
++        cache.hash = hashCode(code); cache.valid = true;
++        static thread_local unsigned imageTraces = 0;
++        if (imageTraces++ < 16)
++            std::fprintf(stderr, "[vu0rec] image=%016llx native=%u\n",
++                (unsigned long long)cache.hash, vu0recFind(cache.hash) != nullptr);
++    }
++    const Vu0RecImage* image = vu0recFind(cache.hash);
++    if (!image || !image->full || std::find(image->entries, image->entries + image->entryCount, pc) == image->entries + image->entryCount)
++        return false;
++    VU1State candidate = vu.state();
++    prepare(candidate, pc, itop);
++    std::array<uint8_t, PS2_VU0_DATA_SIZE> staged;
++    // Use a private copy even outside diff mode: failure has no guest effects.
++    std::memcpy(staged.data(), data, staged.size());
++    Vu0RecContext context;
++    context.state = &candidate; context.data = staged.data(); context.itop = itop;
++    image->full(context, pc);
++    candidate.cycles = context.cycle;
++    static thread_local uint64_t calls = 0, mismatches = 0, failures = 0;
++    ++calls;
++    if (context.failed) { ++failures; return false; }
++    if (diff) {
++        vu.execute(code, PS2_VU0_CODE_SIZE, data, PS2_VU0_DATA_SIZE,
++                   gs, &memory, pc, 0, itop, 4096);
++        const VU1State& expected = vu.state();
++        const bool equal = std::memcmp(&candidate, &expected, sizeof(expected)) == 0 &&
++            std::memcmp(staged.data(), data, staged.size()) == 0;
++        if (!equal) {
++            ++mismatches;
++            if (mismatches <= 8)
++                std::fprintf(stderr, "[vu0rec] mismatch call=%llu pc=%x cycles=%llu/%llu finalPC=%x/%x mac=%x/%x status=%x/%x\n",
++                    (unsigned long long)calls, pc, (unsigned long long)candidate.cycles,
++                    (unsigned long long)expected.cycles, candidate.pc, expected.pc,
++                    candidate.mac, expected.mac, candidate.status, expected.status);
++        }
++        // Diagnostic: retain oracle cost but adopt native completion, separating
++        // hidden interpreter state from a host-speed-sensitive DMA failure.
++        if (equal && commitDiff) {
++            vu.state() = candidate;
++            std::memcpy(data, staged.data(), staged.size());
++            vu.adoptNativeCompletion(context.cycle, context.backupReg, context.backupValue);
++        }
++    } else {
++        vu.state() = candidate;
++        std::memcpy(data, staged.data(), staged.size());
++        vu.adoptNativeCompletion(context.cycle, context.backupReg, context.backupValue);
++    }
++    static thread_local auto last = std::chrono::steady_clock::now();
++    if ((calls & 4095u) == 0u) {
++        const auto now = std::chrono::steady_clock::now();
++        if (now - last >= std::chrono::seconds(5)) {
++            std::fprintf(stderr, "[vu0rec] calls=%llu diff=%u mismatches=%llu failures=%llu\n",
++                (unsigned long long)calls, diff, (unsigned long long)mismatches, (unsigned long long)failures);
++            last = now;
++        }
++    }
++    return true;
++}
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 index bd75bba318bbaec0e635c5aeddb61be0a7123095..6639cd3fcea3a1cfbdf9e378daa7ecbf7f11ee8e 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
@@ -8176,8 +9295,796 @@ index bd75bba318bbaec0e635c5aeddb61be0a7123095..6639cd3fcea3a1cfbdf9e378daa7ecbf
      if (useVuRounding && previousRoundingMode != -1)
          std::fesetround(previousRoundingMode);
  }
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..d48aa4e4e634ae65e6500c236b7947a88d41b760
+--- /dev/null
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+@@ -0,0 +1,782 @@
++// Native VU1 microprogram registry, MSCAL dispatcher, PATH1 (XGKICK) model and
++// the PS2X_VU1_DIFF differential test.  See include/runtime/ps2_vu1_recomp.h.
++
++#include "runtime/ps2_vu1_recomp.h"
++#include "runtime/gs/gs_frontend.h"
++#include "runtime/gs/ps2_gif_arbiter.h"
++#include "runtime/ps2_memory.h"
++
++#include <algorithm>
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <vector>
++
++namespace
++{
++    std::vector<Vu1RecImage> &registry()
++    {
++        static std::vector<Vu1RecImage> images;
++        return images;
++    }
++
++    uint64_t &registryGeneration()
++    {
++        static uint64_t generation = 0u;
++        return generation;
++    }
++
++    struct CodeImageCacheEntry
++    {
++        std::array<uint8_t, PS2_VU1_CODE_SIZE> code{};
++        uint64_t hash = 0u;
++        uint64_t registryGeneration = 0u;
++        uint64_t lastUse = 0u;
++        const Vu1RecImage *image = nullptr;
++        bool valid = false;
++    };
++
++    struct CodeImageCache
++    {
++        static constexpr size_t kEntryCount = 16u;
++        std::array<CodeImageCacheEntry, kEntryCount> entries{};
++        uint64_t clock = 0u;
++        uint64_t hits = 0u;
++        uint64_t misses = 0u;
++        uint64_t lookups = 0u;
++        uint64_t lastStatsLookup = 0u;
++        uint32_t statsLines = 0u;
++    };
++
++    CodeImageCache &codeImageCache()
++    {
++        // The bytecode is compared by value, so this cache never retains a
++        // PS2Memory pointer and remains safe when game memory is destroyed.
++        // Per-thread ownership avoids synchronization on the hot dispatch path.
++        static thread_local CodeImageCache cache;
++        return cache;
++    }
++
++    uint64_t fnv1a64(const uint8_t *data, size_t size)
++    {
++        uint64_t hash = 1469598103934665603ull;
++        for (size_t i = 0; i < size; ++i)
++        {
++            hash ^= data[i];
++            hash *= 1099511628211ull;
++        }
++        return hash;
++    }
++
++    double nowSeconds()
++    {
++        using namespace std::chrono;
++        return duration<double>(steady_clock::now().time_since_epoch()).count();
++    }
++
++    int envInt(const char *name, int fallback)
++    {
++        const char *v = std::getenv(name);
++        if (!v || !*v)
++            return fallback;
++        return std::atoi(v);
++    }
++
++    double envDouble(const char *name, double fallback)
++    {
++        const char *v = std::getenv(name);
++        if (!v || !*v)
++            return fallback;
++        return std::atof(v);
++    }
++
++    struct PacketCapture
++    {
++        std::vector<std::vector<uint8_t>> packets;
++        static void sink(void *user, const uint8_t *data, uint32_t size)
++        {
++            auto *self = static_cast<PacketCapture *>(user);
++            self->packets.emplace_back(data, data + size);
++        }
++    };
++
++    void submitPacket(Vu1RecContext &ctx, const uint8_t *data, uint32_t size)
++    {
++        if (ctx.sink)
++            ctx.sink(ctx.sinkUser, data, size);
++        else if (ctx.memory)
++            ctx.memory->submitGifPacket(GifPathId::Path1, data, size);
++        else if (ctx.gs)
++            ctx.gs->processGIFPacket(data, size);
++    }
++
++    // One PATH1 transfer step: exactly the loop body of VU1Interpreter::progressXgkick.
++    // Returns false when the transfer ended (finished or aborted).
++    bool kickStep(Vu1RecContext &ctx)
++    {
++        Vu1RecKick &k = ctx.kick;
++        const uint32_t dataSize = PS2_VU1_DATA_SIZE;
++        if (k.copiedBytes > Vu1RecKick::kBufferSize - 16u)
++        {
++            ++ctx.kickErrors;
++            ctx.failed = true;
++            k.active = false;
++            return false;
++        }
++        const uint64_t eventCycle = k.issueCycle + 1u + 2u * (k.copiedBytes / 16u);
++        const uint32_t qwordOffset = k.copiedBytes;
++        for (uint32_t i = 0; i < 16u; ++i)
++        {
++            const uint32_t source = (k.sourceAddress + k.copiedBytes + i) % dataSize;
++            k.packet[k.copiedBytes + i] = ctx.data[source];
++        }
++        k.copiedBytes += 16u;
++
++        if (k.currentTagEnd == 0u)
++        {
++            uint64_t tagLo = 0;
++            std::memcpy(&tagLo, k.packet.data() + qwordOffset, sizeof(tagLo));
++            const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
++            const uint32_t format = static_cast<uint32_t>((tagLo >> 58) & 0x3u);
++            uint32_t nreg = static_cast<uint32_t>((tagLo >> 60) & 0xFu);
++            if (nreg == 0u)
++                nreg = 16u;
++            uint64_t tagBytes = 16u;
++            if (format == 0u)
++                tagBytes += static_cast<uint64_t>(nloop) * nreg * 16u;
++            else if (format == 1u)
++                tagBytes += ((static_cast<uint64_t>(nloop) * nreg + 1u) & ~1ull) * 8u;
++            else if (format == 2u)
++                tagBytes += static_cast<uint64_t>(nloop) * 16u;
++            else
++            {
++                ++ctx.kickErrors;
++                ctx.failed = true;
++                k.active = false;
++                return false;
++            }
++            if (tagBytes > Vu1RecKick::kBufferSize - qwordOffset)
++            {
++                ++ctx.kickErrors;
++                ctx.failed = true;
++                k.active = false;
++                return false;
++            }
++            k.currentTagEnd = qwordOffset + static_cast<uint32_t>(tagBytes);
++            k.currentTagEop = ((tagLo >> 15) & 1u) != 0u;
++            if (k.currentTagEop)
++                k.totalBytes = k.currentTagEnd;
++        }
++
++        if (k.copiedBytes >= k.currentTagEnd)
++        {
++            if (k.currentTagEop)
++            {
++                k.active = false;
++                k.finishCycle = eventCycle;
++                submitPacket(ctx, k.packet.data(), k.totalBytes);
++                return false;
++            }
++            k.currentTagEnd = 0u;
++            k.currentTagEop = false;
++        }
++        return true;
++    }
++}
++
++void vu1recRegister(const Vu1RecImage &image)
++{
++    registry().push_back(image);
++    ++registryGeneration();
++}
++
++const Vu1RecImage *vu1recFind(uint64_t hash)
++{
++    for (const Vu1RecImage &image : registry())
++        if (!image.guarded && image.hash == hash)
++            return &image;
++    return nullptr;
++}
++
++const Vu1RecImage *vu1recFindGuarded()
++{
++    for (const Vu1RecImage &image : registry())
++        if (image.guarded)
++            return &image;
++    return nullptr;
++}
++
++size_t vu1recImageCount()
++{
++    return registry().size();
++}
++
++void vu1rec_kick_start(Vu1RecContext &ctx, uint32_t qwordAddress, uint64_t cycle)
++{
++    Vu1RecKick &k = ctx.kick;
++    k.active = true;
++    k.currentTagEop = false;
++    k.sourceAddress = (qwordAddress * 16u) % PS2_VU1_DATA_SIZE;
++    k.totalBytes = 0u;
++    k.copiedBytes = 0u;
++    k.currentTagEnd = 0u;
++    k.issueCycle = cycle;
++}
++
++void vu1rec_kick_catchup(Vu1RecContext &ctx, uint64_t cycle)
++{
++    Vu1RecKick &k = ctx.kick;
++    while (k.active && k.issueCycle + 1u + 2u * (k.copiedBytes / 16u) <= cycle)
++    {
++        if (!kickStep(ctx))
++            break;
++    }
++}
++
++uint64_t vu1rec_kick_drain(Vu1RecContext &ctx)
++{
++    while (ctx.kick.active)
++    {
++        if (!kickStep(ctx))
++            break;
++    }
++    return ctx.kick.finishCycle;
++}
++
++// ---------------------------------------------------------------------------
++
++Vu1NativeDispatcher::Vu1NativeDispatcher()
++{
++    const char *forced = std::getenv("PS2X_VU1_INTERPRETER");
++    m_forceInterpreter = forced && forced[0] != '\0' && forced[0] != '0';
++    const char *diff = std::getenv("PS2X_VU1_DIFF");
++    m_diff = diff && diff[0] != '\0' && diff[0] != '0';
++    m_diffLogBudget = envInt("PS2X_VU1_DIFF_LOG", 8);
++    m_statsPeriod = envDouble("PS2X_VU1_STATS", 5.0);
++    m_captureDir = std::getenv("PS2X_VU1_CAPTURE");
++    if (m_captureDir && !*m_captureDir)
++        m_captureDir = nullptr;
++    m_captureEvery = static_cast<uint32_t>(std::max(1, envInt("PS2X_VU1_CAPTURE_EVERY", 997)));
++    m_ctx = new Vu1RecContext();
++    m_ctx2 = new Vu1RecContext();
++    std::fprintf(stderr, "[vu1rec] %zu native image(s) registered; mode=%s\n", vu1recImageCount(),
++                 m_forceInterpreter ? "interpreter (PS2X_VU1_INTERPRETER)" : (m_diff ? "diff (PS2X_VU1_DIFF)" : "native"));
++    m_lastStatsTime = nowSeconds();
++}
++
++Vu1NativeDispatcher::~Vu1NativeDispatcher()
++{
++    printStats("exit");
++    delete m_ctx;
++    delete m_ctx2;
++}
++
++const Vu1RecImage *Vu1NativeDispatcher::currentImage(PS2Memory &memory)
++{
++    return currentImage(memory.getVU1Code(), memory.getVU1CodeGeneration());
++}
++
++const Vu1RecImage *Vu1NativeDispatcher::currentImage(const uint8_t *code, uint64_t generation)
++{
++    const uint64_t currentRegistryGeneration = registryGeneration();
++    if (code != m_cachedCode || generation != m_cachedGeneration ||
++        currentRegistryGeneration != m_cachedRegistryGeneration)
++    {
++        m_cachedCode = code;
++        m_cachedGeneration = generation;
++        m_cachedRegistryGeneration = currentRegistryGeneration;
++        CodeImageCache &cache = codeImageCache();
++        ++cache.lookups;
++        CodeImageCacheEntry *hit = nullptr;
++        for (CodeImageCacheEntry &entry : cache.entries)
++        {
++            if (entry.valid && std::memcmp(entry.code.data(), code, PS2_VU1_CODE_SIZE) == 0)
++            {
++                hit = &entry;
++                break;
++            }
++        }
++
++        if (hit)
++        {
++            ++cache.hits;
++            hit->lastUse = ++cache.clock;
++            m_cachedHash = hit->hash;
++            // Registration is normally complete before dispatch. If a plugin
++            // adds images later, vector growth can invalidate stored pointers;
++            // the epoch lets us refresh the pointer without rehashing code.
++            if (hit->registryGeneration != currentRegistryGeneration)
++            {
++                hit->image = vu1recFind(hit->hash);
++                if (!hit->image)
++                    hit->image = vu1recFindGuarded();
++                hit->registryGeneration = currentRegistryGeneration;
++            }
++            m_cachedImage = hit->image;
++        }
++        else
++        {
++            ++cache.misses;
++            m_cachedHash = fnv1a64(code, PS2_VU1_CODE_SIZE);
++            m_cachedImage = vu1recFind(m_cachedHash);
++            if (!m_cachedImage)
++                m_cachedImage = vu1recFindGuarded();
++
++            CodeImageCacheEntry *victim = nullptr;
++            for (CodeImageCacheEntry &entry : cache.entries)
++            {
++                if (!entry.valid)
++                {
++                    victim = &entry;
++                    break;
++                }
++                if (!victim || entry.lastUse < victim->lastUse)
++                    victim = &entry;
++            }
++            if (victim)
++            {
++                std::memcpy(victim->code.data(), code, PS2_VU1_CODE_SIZE);
++                victim->hash = m_cachedHash;
++                victim->registryGeneration = currentRegistryGeneration;
++                victim->lastUse = ++cache.clock;
++                victim->image = m_cachedImage;
++                victim->valid = true;
++            }
++        }
++
++        if (std::getenv("PS2X_VU1_CACHE_STATS") &&
++            (cache.statsLines < 8u || cache.lookups - cache.lastStatsLookup >= 4096u))
++        {
++            std::fprintf(stderr, "[vu1rec-cache] hit=%llu miss=%llu entries=%zu\n",
++                         static_cast<unsigned long long>(cache.hits),
++                         static_cast<unsigned long long>(cache.misses), CodeImageCache::kEntryCount);
++            ++cache.statsLines;
++            cache.lastStatsLookup = cache.lookups;
++        }
++        if (!m_cachedImage &&
++            std::find(m_unknownHashes.begin(), m_unknownHashes.end(), m_cachedHash) == m_unknownHashes.end())
++        {
++            m_unknownHashes.push_back(m_cachedHash);
++            std::fprintf(stderr, "[vu1rec] VU1 image %016llx has no native code (interpreter fallback)\n",
++                         static_cast<unsigned long long>(m_cachedHash));
++        }
++    }
++    return m_cachedImage;
++}
++
++namespace
++{
++    // VU1Interpreter::execute() preamble.
++    void prepareState(VU1State &st, uint32_t startPC, uint32_t top, uint32_t itop, bool resume = false)
++    {
++        if (resume) { st.top = top; st.itop = itop; st.stoppedByD = false; st.stoppedByT = false; return; }
++        st.pc = startPC & 0x3FFFu;
++        st.ebit = false;
++        st.haltAfterDelaySlot = false;
++        st.stoppedByD = false;
++        st.stoppedByT = false;
++        st.top = top;
++        st.itop = itop;
++        st.branchPending = false;
++        st.branchTarget = 0;
++        st.branchDelay = 0;
++        st.vf[0][0] = 0.0f;
++        st.vf[0][1] = 0.0f;
++        st.vf[0][2] = 0.0f;
++        st.vf[0][3] = 1.0f;
++    }
++
++    void resetContext(Vu1RecContext &ctx, VU1State *st, uint8_t *data, uint64_t cycle, uint32_t maxCycles,
++                      uint32_t top, uint32_t itop, PS2Memory *memory, GS *gs)
++    {
++        ctx.state = st;
++        ctx.data = data;
++        ctx.cycle = cycle;
++        ctx.maxCycles = maxCycles;
++        ctx.top = top;
++        ctx.itop = itop;
++        ctx.memory = memory;
++        ctx.gs = gs;
++        ctx.sink = nullptr;
++        ctx.sinkUser = nullptr;
++        ctx.failed = false;
++        ctx.failPc = 0;
++        ctx.kickErrors = 0;
++        ctx.backupReg = 0;
++        ctx.backupValue = 0;
++        ctx.kick.active = false;
++        ctx.kick.finishCycle = 0;
++    }
++
++    uint32_t fbits(float f)
++    {
++        uint32_t b;
++        std::memcpy(&b, &f, 4);
++        return b;
++    }
++}
++
++bool Vu1NativeDispatcher::mscal(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++                                uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles)
++{
++    return dispatch(vu1, memory, gs, startPC, top, itop, maxCycles, false);
++}
++
++bool Vu1NativeDispatcher::mscnt(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++                                uint32_t top, uint32_t itop, uint32_t maxCycles)
++{
++    // Only fully drained continuations with no carried branch hazard can use
++    // a statically scheduled entry with an empty initial pipeline.
++    if (!vu1.canNativeResume())
++        return false;
++    return dispatch(vu1, memory, gs, vu1.state().pc, top, itop, maxCycles, true);
++}
++
++bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++                                uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume)
++{
++    if (resume)
++        ++m_stats.mscnt;
++    else
++        ++m_stats.mscal;
++    m_memory = &memory;
++    maybePrintPeriodic();
++    const Vu1RecImage *image = currentImage(memory);
++    const uint32_t pc = startPC & 0x3FFFu;
++    if (image && !image->hasEntry(pc))
++    {
++        const Vu1RecImage *guarded = vu1recFindGuarded();
++        if (guarded && guarded->hasEntry(pc))
++            image = guarded;
++    }
++    // Capture interpreter-only images too: these snapshots bootstrap native
++    // generation and allow offline equivalence checks before enabling it.
++    if (m_captureDir)
++    {
++        VU1State input = vu1.state();
++        prepareState(input, startPC, top, itop, resume);
++        maybeCapture(m_cachedHash, input, memory.getVU1Data(), pc, top, itop, maxCycles, vu1.cycleCount(), resume);
++    }
++    if (m_forceInterpreter)
++    {
++        ++m_stats.forcedInterpreter;
++        return false;
++    }
++    if (!image)
++    {
++        ++m_stats.fallbackNoImage;
++        return false;
++    }
++    if (!image->hasEntry(pc))
++    {
++        ++m_stats.fallbackNoEntry;
++        const std::pair<uint64_t, uint32_t> key(image->hash, pc);
++        if (std::find(m_unknownEntries.begin(), m_unknownEntries.end(), key) == m_unknownEntries.end())
++        {
++            m_unknownEntries.push_back(key);
++            std::fprintf(stderr, "[vu1rec] VU1 image %016llx entry 0x%04x has no native code (interpreter fallback)\n",
++                         static_cast<unsigned long long>(image->hash), pc);
++        }
++        return false;
++    }
++    if (image->hasDebugBits && (vu1.state().dBitEnabled || vu1.state().tBitEnabled))
++    {
++        ++m_stats.fallbackFailed; // D/T halts are only modelled by the interpreter
++        return false;
++    }
++    if (m_diff)
++    {
++        runDiff(*image, vu1, memory, gs, pc, top, itop, maxCycles, resume);
++        return true;
++    }
++
++    // Stage all observable output until the native call succeeds. A new
++    // indirect target or exhausted budget must not leak partial registers,
++    // stores or GIF packets into the interpreter fallback.
++    VU1State stagedState = vu1.state();
++    prepareState(stagedState, startPC, top, itop, resume);
++    std::array<uint8_t, PS2_VU1_DATA_SIZE> stagedData;
++    std::memcpy(stagedData.data(), memory.getVU1Data(), stagedData.size());
++    PacketCapture stagedPackets;
++    Vu1RecContext &ctx = *m_ctx;
++    const uint64_t startCycle = vu1.cycleCount();
++    resetContext(ctx, &stagedState, stagedData.data(), startCycle, maxCycles, top, itop, nullptr, nullptr);
++    ctx.code = memory.getVU1Code();
++    ctx.sink = &PacketCapture::sink;
++    ctx.sinkUser = &stagedPackets;
++    const double t0 = nowSeconds();
++    // A guarded pool admits code combinations beyond the closed image catalog.
++    // Such programs may observe flags the catalog's fast variant omitted.
++    (vu1recFindGuarded() ? image->full : image->fast)(ctx, pc);
++    m_vu1Seconds += nowSeconds() - t0;
++    if (ctx.failed)
++    {
++        ++m_stats.nativeFailures;
++        ++m_stats.fallbackFailed;
++        if (m_stats.nativeFailures <= 16u)
++            std::fprintf(stderr, "[vu1rec] native program failed, using unchanged interpreter input: image=%016llx entry=0x%04x failPc=0x%04x kickErrors=%u\n",
++                         static_cast<unsigned long long>(m_cachedHash), pc, ctx.failPc, ctx.kickErrors);
++        return false;
++    }
++    vu1.state() = stagedState;
++    std::memcpy(memory.getVU1Data(), stagedData.data(), stagedData.size());
++    for (const auto &packet : stagedPackets.packets)
++        memory.submitGifPacket(GifPathId::Path1, packet.data(), static_cast<uint32_t>(packet.size()));
++    ++m_stats.native;
++    m_stats.vu1Cycles += ctx.cycle - startCycle;
++    vu1.adoptNativeCompletion(ctx.cycle, ctx.backupReg, ctx.backupValue);
++    return true;
++}
++
++void Vu1NativeDispatcher::maybeCapture(uint64_t hash, VU1State &st, const uint8_t *data, uint32_t pc,
++                                       uint32_t top, uint32_t itop, uint32_t maxCycles, uint64_t cycle, bool resume)
++{
++    uint64_t *seen = nullptr;
++    const auto key = std::make_tuple(hash, pc, resume);
++    for (auto &e : m_captureSeen)
++        if (e.first == key)
++            seen = &e.second;
++    if (!seen)
++    {
++        m_captureSeen.emplace_back(key, 0u);
++        seen = &m_captureSeen.back().second;
++    }
++    static const uint64_t s_captureSkip = static_cast<uint64_t>(envDouble("PS2X_VU1_CAPTURE_SKIP", 0.0));
++    if (m_stats.mscal + m_stats.mscnt < s_captureSkip)
++        return; // PS2X_VU1_CAPTURE_SKIP=<dispatch count>: start capturing later in a run
++    const uint64_t n = (*seen)++;
++    if (!(n < 8u || (n % m_captureEvery) == 0u) || m_captureCount >= 4096u)
++        return;
++    char path[1024];
++    std::snprintf(path, sizeof(path), "%s/snap_%016llx_%04x_%06llu.bin", m_captureDir,
++                  static_cast<unsigned long long>(hash), pc, static_cast<unsigned long long>(m_captureCount++));
++    if (FILE *f = std::fopen(path, "wb"))
++    {
++        const uint32_t header[8] = {0x53315556u /* 'VU1S' */, resume ? 2u : 1u, pc, top, itop, maxCycles,
++                                    static_cast<uint32_t>(sizeof(VU1State)), 0u};
++        std::fwrite(header, sizeof(header), 1, f);
++        std::fwrite(&hash, sizeof(hash), 1, f);
++        std::fwrite(&cycle, sizeof(cycle), 1, f);
++        std::fwrite(&st, sizeof(VU1State), 1, f);
++        std::fwrite(data, 1, PS2_VU1_DATA_SIZE, f);
++        std::fclose(f);
++    }
++}
++
++double Vu1NativeDispatcher::now() { return nowSeconds(); }
++
++void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++                                  uint32_t pc, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume)
++{
++    ++m_stats.diffCalls;
++    VU1State &real = vu1.state();
++    prepareState(real, pc, top, itop, resume);
++    const VU1State s0 = real;
++    uint8_t *realData = memory.getVU1Data();
++    static std::vector<uint8_t> d0, dFull, dFast;
++    d0.assign(realData, realData + PS2_VU1_DATA_SIZE);
++    dFull = d0;
++    dFast = d0;
++    const uint64_t c0 = vu1.cycleCount();
++
++    // native, full-flag variant
++    VU1State sFull = s0;
++    PacketCapture pFull;
++    resetContext(*m_ctx, &sFull, dFull.data(), c0, maxCycles, top, itop, nullptr, nullptr);
++    m_ctx->code = memory.getVU1Code();
++    m_ctx->sink = &PacketCapture::sink;
++    m_ctx->sinkUser = &pFull;
++    image.full(*m_ctx, pc);
++    const bool fullFailed = m_ctx->failed;
++    const uint64_t fullCycle = m_ctx->cycle;
++
++    // native, fast variant
++    VU1State sFast = s0;
++    PacketCapture pFast;
++    resetContext(*m_ctx2, &sFast, dFast.data(), c0, maxCycles, top, itop, nullptr, nullptr);
++    m_ctx2->code = memory.getVU1Code();
++    m_ctx2->sink = &PacketCapture::sink;
++    m_ctx2->sinkUser = &pFast;
++    image.fast(*m_ctx2, pc);
++    const bool fastFailed = m_ctx2->failed;
++    const uint64_t fastCycle = m_ctx2->cycle;
++
++    // interpreter (oracle) on the real state
++    PacketCapture pInterp;
++    vu1.setPacketSink(&PacketCapture::sink, &pInterp);
++    if (resume)
++        vu1.resume(memory.getVU1Code(), PS2_VU1_CODE_SIZE, realData, PS2_VU1_DATA_SIZE, gs, &memory, top, itop, maxCycles);
++    else
++        vu1.execute(memory.getVU1Code(), PS2_VU1_CODE_SIZE, realData, PS2_VU1_DATA_SIZE, gs, &memory, pc, top, itop, maxCycles);
++    vu1.setPacketSink(nullptr, nullptr);
++    if (!vu1.lastRunEnded())
++        ++m_stats.diffInterpBudget;
++    const uint64_t interpCycle = vu1.cycleCount();
++    m_stats.vu1Cycles += interpCycle - c0;
++
++    auto compare = [&](const char *variant, const VU1State &s, const std::vector<uint8_t> &d,
++                       const PacketCapture &pk, bool failed, uint64_t cycle, bool checkFlags,
++                       bool checkClip) -> bool
++    {
++        std::vector<std::string> diffs;
++        char buf[256];
++        if (failed)
++            diffs.emplace_back("native-failed");
++        for (int r = 0; r < 32; ++r)
++            for (int c = 0; c < 4; ++c)
++                if (fbits(s.vf[r][c]) != fbits(real.vf[r][c]))
++                {
++                    std::snprintf(buf, sizeof(buf), "vf%d.%c native=%08x(%g) interp=%08x(%g)", r, "xyzw"[c],
++                                  fbits(s.vf[r][c]), s.vf[r][c], fbits(real.vf[r][c]), real.vf[r][c]);
++                    diffs.emplace_back(buf);
++                }
++        for (int c = 0; c < 4; ++c)
++            if (fbits(s.acc[c]) != fbits(real.acc[c]))
++            {
++                std::snprintf(buf, sizeof(buf), "acc.%c native=%08x interp=%08x", "xyzw"[c], fbits(s.acc[c]),
++                              fbits(real.acc[c]));
++                diffs.emplace_back(buf);
++            }
++        for (int r = 0; r < 16; ++r)
++            if (s.vi[r] != real.vi[r])
++            {
++                std::snprintf(buf, sizeof(buf), "vi%d native=%d interp=%d", r, s.vi[r], real.vi[r]);
++                diffs.emplace_back(buf);
++            }
++        auto cmpScalar = [&](const char *name, uint32_t a, uint32_t b)
++        {
++            if (a != b)
++            {
++                std::snprintf(buf, sizeof(buf), "%s native=%08x interp=%08x", name, a, b);
++                diffs.emplace_back(buf);
++            }
++        };
++        cmpScalar("q", fbits(s.q), fbits(real.q));
++        cmpScalar("p", fbits(s.p), fbits(real.p));
++        cmpScalar("i", fbits(s.i), fbits(real.i));
++        cmpScalar("r", s.r, real.r);
++        cmpScalar("pc", s.pc, real.pc);
++        if (checkFlags)
++        {
++            cmpScalar("mac", s.mac, real.mac);
++            cmpScalar("status", s.status, real.status);
++        }
++        if (checkClip)
++            cmpScalar("clip", s.clip, real.clip);
++        if (cycle != interpCycle)
++        {
++            std::snprintf(buf, sizeof(buf), "cycles native=+%llu interp=+%llu",
++                          static_cast<unsigned long long>(cycle - c0),
++                          static_cast<unsigned long long>(interpCycle - c0));
++            diffs.emplace_back(buf);
++        }
++        size_t firstMem = SIZE_MAX, memCount = 0;
++        for (size_t i = 0; i < PS2_VU1_DATA_SIZE; ++i)
++            if (d[i] != realData[i])
++            {
++                if (firstMem == SIZE_MAX)
++                    firstMem = i;
++                ++memCount;
++            }
++        if (memCount)
++        {
++            std::snprintf(buf, sizeof(buf), "data: %zu bytes differ, first at 0x%04zx (qw 0x%03zx)", memCount,
++                          firstMem, firstMem / 16);
++            diffs.emplace_back(buf);
++        }
++        if (pk.packets.size() != pInterp.packets.size())
++        {
++            std::snprintf(buf, sizeof(buf), "gif: packet count native=%zu interp=%zu", pk.packets.size(),
++                          pInterp.packets.size());
++            diffs.emplace_back(buf);
++        }
++        for (size_t i = 0; i < std::min(pk.packets.size(), pInterp.packets.size()); ++i)
++        {
++            const auto &a = pk.packets[i];
++            const auto &b = pInterp.packets[i];
++            if (a != b)
++            {
++                size_t first = 0;
++                while (first < a.size() && first < b.size() && a[first] == b[first])
++                    ++first;
++                std::snprintf(buf, sizeof(buf), "gif: packet %zu differs (sizes %zu/%zu) first byte 0x%zx", i,
++                              a.size(), b.size(), first);
++                diffs.emplace_back(buf);
++                break;
++            }
++        }
++        if (diffs.empty())
++            return true;
++        if (m_diffLogBudget > 0)
++        {
++            --m_diffLogBudget;
++            std::fprintf(stderr, "[vu1diff] MISMATCH variant=%s image=%016llx entry=0x%04x call=%llu (%zu diffs)\n",
++                         variant, static_cast<unsigned long long>(image.hash), pc,
++                         static_cast<unsigned long long>(m_stats.diffCalls), diffs.size());
++            for (size_t i = 0; i < diffs.size() && i < 24; ++i)
++                std::fprintf(stderr, "[vu1diff]   %s\n", diffs[i].c_str());
++        }
++        return false;
++    };
++
++    // The fast variant only writes back flags that some program in the image can
++    // read (for the RTA image: clip only; MAC/status have no reader).
++    if (!compare("full", sFull, dFull, pFull, fullFailed, fullCycle, true, true))
++        ++m_stats.diffMismatchFull;
++    if (!compare("fast", sFast, dFast, pFast, fastFailed, fastCycle, false, true))
++        ++m_stats.diffMismatchFast;
++
++    m_stats.diffPackets += pInterp.packets.size();
++    for (const auto &packet : pInterp.packets)
++    {
++        m_stats.diffPacketBytes += packet.size();
++        memory.submitGifPacket(GifPathId::Path1, packet.data(), static_cast<uint32_t>(packet.size()));
++    }
++}
++
++void Vu1NativeDispatcher::maybePrintPeriodic()
++{
++    if (m_statsPeriod <= 0.0)
++        return;
++    if (((m_stats.mscal + m_stats.mscnt) & 255u) != 0u)
++        return;
++    const double t = nowSeconds();
++    if (t - m_lastStatsTime >= m_statsPeriod)
++    {
++        printStats("periodic");
++    }
++}
++
++void Vu1NativeDispatcher::printStats(const char *why)
++{
++    const double t = nowSeconds();
++    const double dt = std::max(1e-6, t - m_lastStatsTime);
++    const Stats &s = m_stats;
++    const Stats &l = m_lastPrinted;
++    const uint64_t fallbacks = s.fallbackNoImage + s.fallbackNoEntry + s.fallbackFailed;
++    const uint64_t swaps = m_memory ? m_memory->dispfbSwapCount() : 0u;
++    const double fps = (swaps - m_lastSwaps) / dt;
++    m_lastSwaps = swaps;
++    const uint64_t swaps2 = m_memory ? m_memory->dispfb2SwapCount() : 0u;
++    const double fps2 = (swaps2 - m_lastSwaps2) / dt;
++    m_lastSwaps2 = swaps2;
++    const double vu1Share = (m_vu1Seconds - m_lastVu1Seconds) / dt;
++    m_lastVu1Seconds = m_vu1Seconds;
++    std::fprintf(stderr,
++                 "[vu1rec] %s: mscal=%llu native=%llu fallback=%llu (noimage=%llu noentry=%llu) forced=%llu "
++                 "mscnt=%llu nativeFail=%llu | diff calls=%llu mismatch full=%llu fast=%llu interpBudget=%llu "
++                 "| %.1f calls/s, %.2f Mcyc/s, DISPFB1/2 changes/s %.2f (DISPFB2 %.2f), VU1 time %.1f%% over %.1fs\n",
++                 why, (unsigned long long)s.mscal, (unsigned long long)s.native, (unsigned long long)fallbacks,
++                 (unsigned long long)s.fallbackNoImage, (unsigned long long)s.fallbackNoEntry,
++                 (unsigned long long)s.forcedInterpreter, (unsigned long long)s.mscnt,
++                 (unsigned long long)s.nativeFailures, (unsigned long long)s.diffCalls,
++                 (unsigned long long)s.diffMismatchFull, (unsigned long long)s.diffMismatchFast,
++                 (unsigned long long)s.diffInterpBudget,
++                 ((s.mscal - l.mscal) + (s.mscnt - l.mscnt)) / dt,
++                 (s.vu1Cycles - l.vu1Cycles) / dt / 1e6, fps, fps2, vu1Share * 100.0, dt);
++    m_lastPrinted = m_stats;
++    m_lastStatsTime = t;
++}
 diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
-index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4afccc3aa42ab5090a6314cf8b57bc4a3e388960 100644
+index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64 100644
 --- a/ps2xTest/CMakeLists.txt
 +++ b/ps2xTest/CMakeLists.txt
 @@ -29,6 +29,7 @@ add_library(ps2_test_lib STATIC
@@ -8188,8 +10095,87 @@ index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4afccc3aa42ab5090a6314cf8b57bc4a
      src/ps2_vu1_tests.cpp
      src/ps2_vu_tests.cpp
      src/ps2_gs_tests.cpp
+@@ -39,6 +40,12 @@ add_library(ps2_test_lib STATIC
+     src/ps2_runtime_expansion_tests.cpp
+ )
+ 
++# Exercise native VU helpers with the shipping arithmetic contract.
++if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
++    set_source_files_properties(src/ps2_vu_tests.cpp PROPERTIES
++        COMPILE_OPTIONS "-O2;-ffp-contract=off;-frounding-math;-fno-fast-math")
++endif()
++
+ target_include_directories(ps2_test_lib PRIVATE
+     ${CMAKE_CURRENT_SOURCE_DIR}/include
+     ${CMAKE_SOURCE_DIR}/ps2xRecomp/include
+diff --git a/ps2xTest/include/MiniTest.h b/ps2xTest/include/MiniTest.h
+index 9fc510b8dc45059794ec83bcdf7ee517dbd0a727..8dae012ffb01ad626e15a18ce93c35f29b7c955f 100644
+--- a/ps2xTest/include/MiniTest.h
++++ b/ps2xTest/include/MiniTest.h
+@@ -5,6 +5,7 @@
+ #include <map>
+ #include <iostream>
+ #include <exception>
++#include <cstdlib>
+ 
+ class TestCase;
+ using TestRunnerCallback = std::function<void(TestCase&)>;
+@@ -120,8 +121,31 @@ public:
+         m_beforeEach = fn;
+     }
+ 
++    static bool MatchesFilter(const std::string &testName, const char *filter)
++    {
++        if (!filter || !*filter)
++            return true;
++
++        const std::string filterList(filter);
++        size_t start = 0;
++        while (start <= filterList.size())
++        {
++            const size_t comma = filterList.find(',', start);
++            const size_t end = comma == std::string::npos ? filterList.size() : comma;
++            const std::string token = filterList.substr(start, end - start);
++            if (!token.empty() && testName.find(token) != std::string::npos)
++                return true;
++            if (comma == std::string::npos)
++                break;
++            start = comma + 1;
++        }
++        return false;
++    }
++
+     static int Run()
+     {
++        const char *filter = std::getenv("MINITEST_FILTER");
++        const bool filterActive = filter && *filter;
+         int failedCount = 0;
+         int totalTests = 0;
+ 
+@@ -144,6 +168,8 @@ public:
+             {
+                 const std::string& testName = cc.first;
+                 const TestRunnerCallback& testFn = cc.second;
++                if (!MatchesFilter(testName, filter))
++                    continue;
+ 
+                 totalTests++;
+                 testCase.ClearFailures();
+@@ -200,6 +226,12 @@ public:
+             }
+         }
+ 
++        if (filterActive && totalTests == 0)
++        {
++            std::cerr << "MINITEST_FILTER matched no test names: " << filter << std::endl;
++            failedCount++;
++        }
++
+         std::cout << "\n========================================" << std::endl;
+         std::cout << "Total Tests: " << totalTests << std::endl;
+         std::cout << "Passed: " << (totalTests - failedCount) << std::endl;
 diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
-index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f08696e100cce 100644
+index 463b6cff1a92fd7ad08e606c2a92ef8331244624..eab85bdfea9f57c80a4708d7be2bf528f757a5a9 100644
 --- a/ps2xTest/src/code_generator_tests.cpp
 +++ b/ps2xTest/src/code_generator_tests.cpp
 @@ -5,6 +5,9 @@
@@ -8232,7 +10218,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f0869
      tc.Run("SYSCALL publishes its continuation before entering the runtime", [](TestCase &t) {
          Function func;
          func.name = "syscall_resume";
-@@ -1020,6 +1046,95 @@ void register_code_generator_tests()
+@@ -1020,6 +1046,98 @@ void register_code_generator_tests()
              t.IsTrue(ctc1Code.find("ignored") == std::string::npos, "CTC1 FCR31 should not be ignored");
          });
  
@@ -8241,7 +10227,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f0869
 +            Instruction rsqrt{};
 +            rsqrt.opcode = OPCODE_COP1;
 +            rsqrt.rs = COP1_S;
-+            rsqrt.rt = 5; // Ft
++            rsqrt.rt = 5; // Ft; also aliases Fd
 +            rsqrt.rd = 0; // Fs
 +            rsqrt.sa = 5; // Fd
 +            rsqrt.function = COP1_S_RSQRT;
@@ -8254,7 +10240,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f0869
 +            t.IsTrue(generated.find("fabsf(ctx->f[5])") != std::string::npos,
 +                     "RSQRT.S denominator must use abs(Ft)");
 +            t.IsTrue(generated.find("copysignf(0x1.fffffep+127f, ctx->f[5])") != std::string::npos,
-+                     "RSQRT.S zero/denormal result sign must come from Ft");
++                     "zero/denormal result sign must come from Ft, including -0");
 +            t.IsTrue(generated.find("FPU_DIV_S(rsqrtFs, FPU_SQRT_S(rsqrtFt))") != std::string::npos,
 +                     "RSQRT.S must divide Fs by sqrt(Ft)");
 +        });
@@ -8276,6 +10262,9 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f0869
 +                     "SQRT.S must produce signed zero for either zero operand");
 +            t.IsTrue(generated.find("FPU_SQRT_S(fabsf(sqrtFt))") != std::string::npos,
 +                     "SQRT.S must take sqrt(abs(Ft)) for negative inputs");
++
++            // PCSX2's SQRT_S reference cases: +9 and -9 both yield +3;
++            // +0 and -0 preserve their respective zero sign.
 +            t.IsTrue(std::sqrt(std::fabs(-9.0f)) == 3.0f && std::sqrt(9.0f) == 3.0f,
 +                     "SQRT.S normal positive/negative numerical cases");
 +            t.IsTrue(std::signbit(-0.0f) && !std::signbit(0.0f),
@@ -8328,7 +10317,35 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f0869
          tc.Run("VU CFC2/CTC2 access VI registers directly", [](TestCase& t)
              {
                  CodeGenerator gen({}, {});
-@@ -1443,25 +1558,46 @@ void register_code_generator_tests()
+@@ -1087,6 +1205,27 @@ void register_code_generator_tests()
+                 t.IsTrue(ctc2Code.find("Unimplemented") == std::string::npos, "CTC2 FBRST should be implemented");
+         });
+ 
++        tc.Run("VCALLMSR reads CMSAR0 without indexing the VI array", [](TestCase& t) {
++            CodeGenerator gen({}, {});
++            Instruction call{};
++            call.opcode = OPCODE_COP2;
++            call.rs = COP2_CO;
++            call.function = VU0_S1_VCALLMSR;
++            call.rd = VU0_CR_CMSAR0;
++            call.raw = (static_cast<uint32_t>(VU0_CR_CMSAR0) << 11) |
++                       (static_cast<uint32_t>(VU0_S1_VCALLMSR));
++
++            const std::string code = gen.translateInstruction(call);
++            t.IsTrue(code.find("ctx->vu0_cmsar0 & 0x1FF") != std::string::npos,
++                     "VCALLMSR must use the CMSAR0 instruction index");
++            t.IsTrue(code.find("ctx->vu0_tpc = instr_index") != std::string::npos,
++                     "VCALLMSR must publish the architectural TPC in instruction units");
++            t.IsTrue(code.find("vu0StartMicroProgram(rdram, ctx, target_byte_addr)") != std::string::npos,
++                     "VCALLMSR must start the microprogram at the corresponding byte address");
++            t.IsTrue(code.find("ctx->vi[27]") == std::string::npos,
++                     "CMSAR0 control register 27 must never index the 16-entry VI array");
++        });
++
+         tc.Run("scalar logical immediates emit low64 operations", [](TestCase &t) {
+             CodeGenerator gen({}, {});
+ 
+@@ -1443,25 +1582,46 @@ void register_code_generator_tests()
              t.IsTrue(out.find("ctx->vu0_vf[22]") == std::string::npos, "S2 must not use rs(format) as register index");
          });
  
@@ -8681,25 +10698,17 @@ index 0458a8cc8665efa376aa5764f5d08027c0e90533..1907bdc919f846aceb28485680b51bf3
                                      "sceGsResetGraph should free its temporary GIF packet");
          });
 diff --git a/ps2xTest/src/ps2_memory_tests.cpp b/ps2xTest/src/ps2_memory_tests.cpp
-index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f67380ab726f 100644
+index 0b22fe03c62df92895c96b752a15cacf12ac43da..79e92985ddee46a4765763e32a33931d71b1a70c 100644
 --- a/ps2xTest/src/ps2_memory_tests.cpp
 +++ b/ps2xTest/src/ps2_memory_tests.cpp
-@@ -40,12 +40,12 @@ namespace
-         std::memcpy(dst.data() + pos, &value, sizeof(uint64_t));
-     }
- 
--    uint64_t makeDmaTag(uint16_t qwc, uint8_t id, uint32_t addr, bool irq = false)
-+    uint64_t makeDmaTag(uint16_t qwc, uint8_t id, uint32_t addr, bool irq = false, bool spr = false)
-     {
-         return static_cast<uint64_t>(qwc) |
-                (static_cast<uint64_t>(id & 0x7u) << 28) |
-                (irq ? (1ull << 31) : 0ull) |
--               (static_cast<uint64_t>(addr & 0x7FFFFFFFu) << 32);
-+               (static_cast<uint64_t>((addr & 0x7FFFFFFFu) | (spr ? 0x80000000u : 0u)) << 32);
-     }
- 
-     void writeDmaTag(uint8_t *rdram, uint32_t tagAddr, uint64_t tagLo)
-@@ -410,6 +410,105 @@ void register_ps2_memory_tests()
+@@ -1,5 +1,6 @@
+ #include "MiniTest.h"
+ #include "runtime/ps2_memory.h"
++#include "runtime/ee_scheduler.h"
+ #include "runtime/gs/gs_frontend.h"
+ #include "runtime/gs/ps2_gs_psmct32.h"
+ #include "ps2_runtime.h"
+@@ -410,6 +411,105 @@ void register_ps2_memory_tests()
              t.IsTrue(matches, "MPG num=0 should copy 2048 bytes into VU1 code memory");
          });
  
@@ -8805,7 +10814,15 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
          tc.Run("VIF UNPACK num zero uploads 256 vectors", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -440,6 +539,126 @@ void register_ps2_memory_tests()
+@@ -418,6 +518,7 @@ void register_ps2_memory_tests()
+             // UNPACK V4_32: opcode 0x6C (vn=3, vl=0), num=0 => 256 vectors, 16 bytes each.
+             std::vector<uint8_t> packet;
+             packet.reserve(4u + 4096u);
++            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(packet, makeVifCmd(0x6Cu, 0u, 0u));
+             for (uint32_t i = 0; i < 4096u; ++i)
+             {
+@@ -440,6 +541,126 @@ void register_ps2_memory_tests()
              t.IsTrue(matches, "UNPACK num=0 should copy 256 V4_32 vectors (4096 bytes)");
          });
  
@@ -8932,7 +10949,31 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
          tc.Run("VIF control commands update MARK MASK ROW and COL registers", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1370,6 +1589,45 @@ void register_ps2_memory_tests()
+@@ -490,6 +711,7 @@ void register_ps2_memory_tests()
+             const uint16_t comps[4] = {0xFF80u, 0x0001u, 0x7FFFu, 0x8001u};
+ 
+             std::vector<uint8_t> signPacket;
++            appendU32(signPacket, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(signPacket, makeVifCmd(0x6Du, 1u, 0x0000u)); // sign-extend
+             for (uint16_t c : comps)
+             {
+@@ -512,6 +734,7 @@ void register_ps2_memory_tests()
+ 
+             // Same UNPACK with imm bit14 set => zero-extend.
+             std::vector<uint8_t> zeroPacket;
++            appendU32(zeroPacket, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(zeroPacket, makeVifCmd(0x6Du, 1u, 0x4000u)); // zero-extend
+             for (uint16_t c : comps)
+             {
+@@ -657,6 +880,7 @@ void register_ps2_memory_tests()
+             std::memset(mem.getVU1Data(), 0, PS2_VU1_DATA_SIZE);
+ 
+             std::vector<uint8_t> packet;
++            appendU32(packet, makeVifCmd(0x01u, 0u, 0x0101u)); // STCYCL: CL=1, WL=1.
+             appendU32(packet, makeVifCmd(0x30u, 0u, 0u)); // STROW
+             appendU32(packet, 10u);
+             appendU32(packet, 20u);
+@@ -1370,6 +1594,45 @@ void register_ps2_memory_tests()
              t.IsTrue(ct32Ok, "all CT32 pixels should survive a preceding paletted upload in the same GIF DMA chain");
          });
  
@@ -8978,7 +11019,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
          tc.Run("VIF1 DMA DIRECT forwards payload to GIF callback and clears channel", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1418,6 +1676,259 @@ void register_ps2_memory_tests()
+@@ -1418,6 +1681,256 @@ void register_ps2_memory_tests()
              t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u, "VIF1 QWC should be cleared after drain");
          });
  
@@ -9031,7 +11072,6 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
 +            const uint32_t codes[] = {0x82000000u, 0x81001234u}; // NOP-I, then STCYCL-I.
 +            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(codes), sizeof(codes));
-+
 +            t.Equals(mem.vif1_regs.code, codes[0], "VIF1_CODE must retain the first IRQ command while stalled");
 +            t.IsTrue((mem.vif1_regs.stat & (1u << 11u)) != 0u, "completed NOP-I should set STAT.INT");
 +            t.IsTrue((mem.vif1_regs.stat & (1u << 10u)) != 0u, "non-MARK IRQ should set STAT.VIS");
@@ -9042,17 +11082,16 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
 +            t.Equals(firstIrq.size(), static_cast<size_t>(1u), "NOP-I should queue one VIF1 INTC interrupt");
 +            if (!firstIrq.empty())
 +                t.Equals(static_cast<uint32_t>(firstIrq[0]), 5u, "VIF1 INTC cause should be 5");
-+
 +            t.IsTrue(mem.writeIORegister(0x10003C10u, 0x8u), "FBRST.STC should resume the stalled VIF parser");
 +            t.Equals(mem.vif1_regs.code, codes[1], "STC should then parse the next queued VIF command");
 +            t.Equals(mem.vif1_regs.cycle, 0x1234u, "resumed STCYCL should take effect");
 +            t.Equals(mem.readIORegister(0x10003C80u), codes[1], "VIF1_CODE MMIO should advance after STC");
 +            t.Equals(mem.readIORegister(0x10003C00u), mem.vif1_regs.stat, "VIF1_STAT MMIO should track resumed parser state");
-+            const auto secondIrq = mem.takeCompletedIntcInterrupts();
-+            t.Equals(secondIrq.size(), static_cast<size_t>(1u), "resumed STCYCL-I should queue the next interrupt");
++            t.Equals(mem.takeCompletedIntcInterrupts().size(), static_cast<size_t>(1u),
++                     "resumed STCYCL-I should queue the next interrupt");
 +        });
 +
-+        tc.Run("VIF1 MMIO reads live scalar and spaced ROW/COL registers", [](TestCase &t)
++        tc.Run("VIF1 MMIO reads live scalar and ROW/COL registers", [](TestCase &t)
 +        {
 +            PS2Memory mem;
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
@@ -9117,7 +11156,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
 +            PS2Memory mem;
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
 +            t.IsTrue(mem.writeIORegister(0x10003C20u, 1u), "set VIF1_ERR.MII");
-+            const uint32_t codes[] = {0x82000000u, 0x01005678u}; // masked NOP-I, STCYCL.
++            const uint32_t codes[] = {0x82000000u, 0x01005678u};
 +            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(codes), sizeof(codes));
 +            t.Equals(mem.vif1_regs.code, codes[1], "MII-masked IRQ should not leave VIF stalled");
 +            t.Equals(mem.vif1_regs.cycle, 0x5678u, "command after masked NOP-I should execute");
@@ -9132,12 +11171,11 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
 +            PS2Memory mem;
 +            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
 +            uint8_t first[20]{};
-+            const uint32_t directI = 0xD0000002u; // DIRECT-I, two QWC.
++            const uint32_t directI = 0xD0000002u;
 +            std::memcpy(first, &directI, sizeof(directI));
-+            mem.processVIF1Data(first, sizeof(first)); // First payload QWC only.
++            mem.processVIF1Data(first, sizeof(first));
 +            t.Equals(mem.takeCompletedIntcInterrupts().size(), static_cast<size_t>(0u),
 +                     "DIRECT-I must wait for all payload QWC before interrupting");
-+
 +            uint8_t finalQwc[16]{};
 +            mem.processVIF1Data(finalQwc, sizeof(finalQwc));
 +            t.IsTrue((mem.vif1_regs.stat & (1u << 11u)) != 0u, "completed DIRECT-I should set STAT.INT");
@@ -9238,7 +11276,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
          tc.Run("VIF1 DMA chain preserves compact tag high bytes for DIRECT packets", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -1912,6 +2423,116 @@ void register_ps2_memory_tests()
+@@ -1912,6 +2425,73 @@ void register_ps2_memory_tests()
              }
          });
  
@@ -9309,6 +11347,96 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
 +                t.Equals(causes[0], 1u, "REFE should complete through VIF1 DMAC cause 1");
 +        });
 +
+         tc.Run("DMAC SPR_FROM copies scratchpad to RDRAM and completes channel 8", [](TestCase &t)
+         {
+             PS2Memory mem;
+@@ -1947,6 +2527,132 @@ void register_ps2_memory_tests()
+                 t.Equals(causes[0], 8u, "SPR_FROM completion should use DMAC cause 8");
+         });
+ 
++        tc.Run("DMAC SPR_FROM chain writes scratchpad data across MFIFO ring wrap", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            constexpr uint32_t kSpr = 0x1000D000u;
++            constexpr uint32_t kDctrl = 0x1000E000u;
++            constexpr uint32_t kRingBase = 0x00030000u;
++            constexpr uint32_t kRingMask = 0x30u;
++            constexpr uint32_t kTagSadr = 0x3FF0u;
++            auto putTag = [&](uint32_t scratchAddr, uint32_t id, uint32_t qwc, uint32_t madr)
++            {
++                const uint64_t tag = (static_cast<uint64_t>(madr) << 32u) |
++                                     (static_cast<uint64_t>(id) << 28u) | qwc;
++                std::memcpy(mem.getScratchpad() + scratchAddr, &tag, sizeof(tag));
++            };
++            putTag(kTagSadr, 0u, 2u, kRingBase + kRingMask);
++            for (uint32_t i = 0; i < 32u; ++i)
++                mem.getScratchpad()[i] = static_cast<uint8_t>(0xA0u + i);
++            putTag(32u, 7u, 0u, kRingBase);
++            mem.writeIORegister(kDctrl, 0x29u); // DMAE + STS_fromSPR + MFD_VIF1
++            mem.writeIORegister(0x1000E050u, kRingBase);
++            mem.writeIORegister(0x1000E040u, kRingMask);
++            mem.writeIORegister(kSpr + 0x10u, kRingBase + kRingMask);
++            mem.writeIORegister(kSpr + 0x20u, 0u);
++            mem.writeIORegister(kSpr + 0x30u, kTagSadr);
++            mem.writeIORegister(kSpr + 0x80u, kTagSadr);
++            t.IsTrue(mem.writeIORegister(kSpr, 0x104u), "start SPR_FROM chain should succeed");
++            bool copied = true;
++            for (uint32_t i = 0; i < 16u; ++i)
++                copied = copied && mem.getRDRAM()[kRingBase + kRingMask + i] == static_cast<uint8_t>(0xA0u + i);
++            for (uint32_t i = 0; i < 16u; ++i)
++                copied = copied && mem.getRDRAM()[kRingBase + i] == static_cast<uint8_t>(0xB0u + i);
++            t.IsTrue(copied, "MFIFO writes should wrap at RBSR while reading the scratchpad ring");
++            t.Equals(mem.readIORegister(kSpr + 0x10u), kRingBase, "SPR_FROM MADR should reflect the END tag destination");
++            t.Equals(mem.readIORegister(kSpr + 0x80u), 48u, "SPR_FROM SADR should advance across scratchpad tag and payload");
++            t.Equals(mem.readIORegister(0x1000E060u), kRingBase + 16u, "CNTS should update STADR after its payload");
++            t.IsTrue((mem.readIORegister(kSpr) & 0x100u) == 0u, "END tag should complete SPR_FROM");
++            t.IsTrue((mem.readIORegister(0x1000E010u) & (1u << 8u)) != 0u, "SPR_FROM chain should raise channel 8 status");
++        });
++
++        tc.Run("VIF1 MFIFO resumes when producer data is available at nonzero RBOR", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            constexpr uint32_t kVif = 0x10009000u;
++            constexpr uint32_t kSpr = 0x1000D000u;
++            constexpr uint32_t kRingBase = 0x00034000u;
++            constexpr uint32_t kRingMask = 0x30u;
++            auto putTag = [&](uint32_t address, uint32_t id, uint32_t qwc, uint32_t madr)
++            {
++                const uint64_t tag = (static_cast<uint64_t>(madr) << 32u) |
++                                     (static_cast<uint64_t>(id) << 28u) | qwc;
++                std::memcpy(mem.getScratchpad() + address, &tag, sizeof(tag));
++            };
++            mem.writeIORegister(0x1000E000u, 9u); // DMAE + MFD_VIF1
++            mem.writeIORegister(0x1000E050u, kRingBase);
++            mem.writeIORegister(0x1000E040u, kRingMask);
++            mem.writeIORegister(kSpr + 0x10u, kRingBase + 0x30u); // producer and consumer initially meet
++            mem.writeIORegister(kVif + 0x10u, kRingBase + 0x30u);
++            mem.writeIORegister(kVif + 0x20u, 0u);
++            mem.writeIORegister(kVif + 0x30u, kRingBase + 0x30u);
++            t.IsTrue(mem.writeIORegister(kVif, 0x105u), "start VIF1 chain consumer should succeed");
++            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "empty MFIFO read should preserve active VIF1 STR");
++            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "repeated empty MFIFO reads should keep VIF1 waiting");
++
++            putTag(0u, 1u, 1u, kRingBase);
++            mem.writeIORegister(kSpr + 0x20u, 1u); // publish only the CNT tag
++            mem.writeIORegister(kSpr + 0x80u, 0u);
++            t.IsTrue(mem.writeIORegister(kSpr, 0x100u), "SPR_FROM should publish the partial MFIFO stream");
++            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "partial CNT payload should leave VIF1 active");
++            t.IsTrue((mem.readIORegister(kVif) & 0x100u) != 0u, "repeated partial MFIFO reads should preserve STR");
++
++            std::memset(mem.getScratchpad() + 16u, 0, 16u); // VIF NOP stream
++            putTag(32u, 7u, 0u, kRingBase);
++            mem.writeIORegister(kSpr + 0x10u, kRingBase);
++            mem.writeIORegister(kSpr + 0x20u, 2u); // payload and END tag
++            mem.writeIORegister(kSpr + 0x80u, 16u);
++            t.IsTrue(mem.writeIORegister(kSpr, 0x100u), "SPR_FROM should publish the remaining MFIFO stream");
++            t.IsTrue((mem.readIORegister(kVif) & 0x100u) == 0u, "END tag should clear STR after producer resumes VIF1");
++            t.Equals(mem.readIORegister(kVif + 0x30u), kRingBase + 32u, "VIF1 TADR should advance across wrapped tag and payload");
++            t.IsTrue((mem.readIORegister(0x1000E010u) & (1u << 1u)) != 0u, "VIF1 completion should raise channel 1 status");
++        });
++
 +        tc.Run("VIF1 MFIFO accepts chains longer than 4096 zero-length CNT tags", [](TestCase &t)
 +        {
 +            PS2Memory mem;
@@ -9352,10 +11480,18 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
 +                t.Equals(causes[0], 1u, "long MFIFO chain should use VIF1 DMAC cause 1");
 +        });
 +
-         tc.Run("DMAC SPR_FROM copies scratchpad to RDRAM and completes channel 8", [](TestCase &t)
+         tc.Run("DMAC SPR_TO copies RDRAM to scratchpad and completes channel 9", [](TestCase &t)
          {
              PS2Memory mem;
-@@ -2138,7 +2759,7 @@ void register_ps2_memory_tests()
+@@ -2034,6 +2740,7 @@ void register_ps2_memory_tests()
+             R5900Context ctx{};
+             setRegU32(ctx, 4, 1u); // sceDmaGetChan(1) / VIF1
+             setRegU32(ctx, 5, kTag);
++            runtime.eeScheduler().reset(rdram, ctx);
+             ps2_stubs::sceDmaSend(rdram, &ctx, &runtime);
+ 
+             t.Equals(static_cast<int32_t>(::getRegU32(&ctx, 2)), 0,
+@@ -2138,7 +2845,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -9364,7 +11500,7 @@ index 0b22fe03c62df92895c96b752a15cacf12ac43da..246a835103ae1eb3a974edb53b10f673
              appendU64(packet, makeGifTag(1u, GIF_FMT_IMAGE, 0u, true));
              appendU64(packet, 0ull);
              for (uint32_t i = 0; i < 16u; ++i)
-@@ -2187,7 +2808,7 @@ void register_ps2_memory_tests()
+@@ -2187,7 +2894,7 @@ void register_ps2_memory_tests()
              gs.writeRegister(GS_REG_TRXDIR, 0ull);
  
              std::vector<uint8_t> packet;
@@ -10387,8 +12523,100 @@ index 63b12d9278c4e35e6d6b16c36de204cda48e3c2a..6064569c61d6da07e22f859a7e5c3cf5
          tc.Run("memalign stubs allocate aligned guest memory", [](TestCase &t)
          {
              TestEnv env;
+diff --git a/ps2xTest/src/ps2_vif_error_tests.cpp b/ps2xTest/src/ps2_vif_error_tests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..85fc95ad27450c90950410673c99b38af07aaf33
+--- /dev/null
++++ b/ps2xTest/src/ps2_vif_error_tests.cpp
+@@ -0,0 +1,86 @@
++#include "MiniTest.h"
++#include "runtime/ps2_memory.h"
++
++#include <cstdint>
++#include <cstring>
++#include <vector>
++
++namespace
++{
++    constexpr uint32_t kVifErrReg = 0x10003C20u;
++    constexpr uint32_t kVifFbrstReg = 0x10003C10u;
++    constexpr uint32_t kVifStatEr1 = 1u << 13u;
++    constexpr uint32_t kVifStatInt = 1u << 11u;
++    constexpr uint32_t kVifStatVis = 1u << 10u;
++
++    void appendWord(std::vector<uint8_t> &bytes, uint32_t value)
++    {
++        const size_t offset = bytes.size();
++        bytes.resize(offset + sizeof(value));
++        std::memcpy(bytes.data() + offset, &value, sizeof(value));
++    }
++
++    std::vector<uint8_t> invalidThenStcycl(bool irq)
++    {
++        std::vector<uint8_t> bytes;
++        appendWord(bytes, (irq ? 0x80000000u : 0u) | 0x40000000u); // Reserved opcode 0x40.
++        appendWord(bytes, 0x01010102u); // STCYCL, WL=1, CL=2.
++        return bytes;
++    }
++}
++
++void register_ps2_vif_error_tests()
++{
++    MiniTest::Case("VIF1Error", [](TestCase &tc)
++    {
++        tc.Run("invalid opcode with I sets ER1 without IRQ and STC resumes tail", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            mem.m_ioRegisters[0x10009000u] = 0x100u; // Active VIF1 DMA: VifStallEnable is true.
++            const auto packet = invalidThenStcycl(true);
++            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
++
++            t.IsTrue((mem.vif1_regs.stat & kVifStatEr1) != 0u, "invalid opcode should set ER1");
++            t.IsFalse((mem.vif1_regs.stat & (kVifStatInt | kVifStatVis)) != 0u,
++                      "invalid opcode I bit must not raise VIF interrupt status");
++            t.IsTrue(mem.m_vif1Stalled, "invalid opcode should stall VIF1 until STC");
++            t.Equals(mem.vif1_regs.cycle, 0u, "command tail must wait while ER1 is stalled");
++            t.IsTrue(mem.takeCompletedIntcInterrupts().empty(), "invalid opcode must not queue INTC5");
++
++            mem.writeIORegister(kVifFbrstReg, 0x8u);
++            t.IsFalse(mem.m_vif1Stalled, "STC should release the invalid-command stall");
++            t.Equals(mem.vif1_regs.cycle, 0x0102u, "STC should resume and execute the buffered tail");
++        });
++
++        tc.Run("invalid opcode without I sets ER1 and STC resumes tail", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            mem.m_ioRegisters[0x10009000u] = 0x100u; // Active VIF1 DMA: VifStallEnable is true.
++            const auto packet = invalidThenStcycl(false);
++            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
++
++            t.IsTrue((mem.vif1_regs.stat & kVifStatEr1) != 0u, "invalid opcode should set ER1 without I");
++            t.IsTrue(mem.m_vif1Stalled, "invalid opcode should stall independent of I bit");
++            t.IsTrue(mem.takeCompletedIntcInterrupts().empty(), "invalid opcode without I must not queue INTC5");
++            mem.writeIORegister(kVifFbrstReg, 0x8u);
++            t.Equals(mem.vif1_regs.cycle, 0x0102u, "STC should resume and execute the buffered tail");
++        });
++
++        tc.Run("ERR.ME1 masks invalid opcode and continues without IRQ", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            t.IsTrue(mem.writeIORegister(kVifErrReg, 1u << 2u), "ERR.ME1 should be writable");
++            const auto packet = invalidThenStcycl(true);
++            mem.processVIF1Data(packet.data(), static_cast<uint32_t>(packet.size()));
++
++            t.IsFalse((mem.vif1_regs.stat & (kVifStatEr1 | kVifStatInt | kVifStatVis)) != 0u,
++                      "ME1 should suppress ER1 and VIF interrupt status");
++            t.IsFalse(mem.m_vif1Stalled, "ME1 should prevent an error stall");
++            t.Equals(mem.vif1_regs.cycle, 0x0102u, "ME1 should allow the following command to execute");
++            t.IsTrue(mem.takeCompletedIntcInterrupts().empty(), "ME1-masked invalid I must not queue INTC5");
++        });
++    });
++}
 diff --git a/ps2xTest/src/ps2_vu1_tests.cpp b/ps2xTest/src/ps2_vu1_tests.cpp
-index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5d241c35c 100644
+index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..2f5dd3ed299a12ec20f23f6ff60aea9ed36a4cef 100644
 --- a/ps2xTest/src/ps2_vu1_tests.cpp
 +++ b/ps2xTest/src/ps2_vu1_tests.cpp
 @@ -4,6 +4,7 @@
@@ -10399,7 +12627,150 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5
  
  #include <cmath>
  #include <cstdint>
-@@ -1690,6 +1691,85 @@ void register_ps2_vu1_tests()
+@@ -211,6 +212,50 @@ namespace
+     {
+         std::memcpy(values, data + qwordIndex * 16u, sizeof(float) * 4u);
+     }
++
++    constexpr uint32_t kGuardedVu1Entry = 0x3F00u;
++    constexpr uint64_t kGuardedVu1ExpectedWord = 0x1122334455667788ull;
++    const uint8_t *gGuardedVu1ExpectedCode = nullptr;
++    uint32_t gGuardedVu1FastCalls = 0u;
++    uint32_t gGuardedVu1FullCalls = 0u;
++
++    void runGuardedVu1TestImage(Vu1RecContext &ctx, uint32_t entryPc)
++    {
++        uint64_t currentWord = 0u;
++        const bool codePointerMatches = ctx.code != nullptr && ctx.code == gGuardedVu1ExpectedCode;
++        if (codePointerMatches)
++            std::memcpy(&currentWord, ctx.code + entryPc, sizeof(currentWord));
++
++        if (codePointerMatches && entryPc == kGuardedVu1Entry &&
++            currentWord == kGuardedVu1ExpectedWord)
++        {
++            ctx.state->vi[3] = 77;
++            ctx.state->pc = entryPc + 8u;
++            ctx.cycle += 2u;
++            return;
++        }
++
++        ctx.state->vi[3] = 1234;
++        ctx.data[7] = 0xCCu;
++        ctx.cycle += 100u;
++        const uint8_t packet[16] = {0u, 0x80u};
++        if (ctx.sink)
++            ctx.sink(ctx.sinkUser, packet, sizeof(packet));
++        ctx.failed = true;
++        ctx.failPc = entryPc;
++    }
++
++    void guardedVu1FastForTest(Vu1RecContext &ctx, uint32_t entryPc)
++    {
++        ++gGuardedVu1FastCalls;
++        runGuardedVu1TestImage(ctx, entryPc);
++    }
++
++    void guardedVu1FullForTest(Vu1RecContext &ctx, uint32_t entryPc)
++    {
++        ++gGuardedVu1FullCalls;
++        runGuardedVu1TestImage(ctx, entryPc);
++    }
+ }
+ 
+ void register_ps2_vu1_tests()
+@@ -1202,6 +1247,91 @@ void register_ps2_vu1_tests()
+             }
+         });
+ 
++        tc.Run("XGKICK packet storage can be reused after reset", [](TestCase &t)
++        {
++            Vu1Fixture fx;
++            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
++
++            std::vector<std::vector<uint8_t>> captured;
++            fx.mem.setGifPacketCallback([&](const uint8_t *packet, uint32_t sizeBytes)
++            {
++                captured.emplace_back(packet, packet + sizeBytes);
++            });
++
++            writeVuInstructionPair(
++                fx.code, 0u,
++                makeVuLowerSpecial(0x6Cu, 1u),
++                kVuUpperNop);
++
++            const uint64_t longTag = makeGifTag(8u, GIF_FMT_IMAGE, 0u, true);
++            std::memcpy(fx.data, &longTag, sizeof(longTag));
++            std::memset(fx.data + 8u, 0, 8u);
++            for (uint32_t i = 0; i < 8u * 16u; ++i)
++                fx.data[16u + i] = static_cast<uint8_t>(0x20u + i);
++
++            std::vector<uint8_t> expectedLong(16u + 8u * 16u);
++            std::memcpy(expectedLong.data(), fx.data, expectedLong.size());
++
++            VU1Interpreter vu1;
++            vu1.state().vi[1] = 0;
++            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
++                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
++                        0u, 0u, 0u, 64u);
++            t.Equals(captured.size(), size_t{1},
++                     "the long XGKICK packet should finish before reset");
++            if (captured.size() == 1u)
++                t.IsTrue(captured[0] == expectedLong,
++                         "the long packet should preserve every transferred byte");
++
++            vu1.reset();
++            const uint64_t shortTag = makeGifTag(1u, GIF_FMT_IMAGE, 0u, true);
++            std::memcpy(fx.data, &shortTag, sizeof(shortTag));
++            std::memset(fx.data + 8u, 0, 8u);
++            for (uint32_t i = 0; i < 16u; ++i)
++                fx.data[16u + i] = static_cast<uint8_t>(0xD0u + i);
++
++            std::vector<uint8_t> expectedShort(32u);
++            std::memcpy(expectedShort.data(), fx.data, expectedShort.size());
++            vu1.state().vi[1] = 0;
++            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
++                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
++                        0u, 0u, 0u, 16u);
++            t.Equals(captured.size(), size_t{2},
++                     "the short packet should follow the reset without stale output");
++            if (captured.size() == 2u)
++                t.IsTrue(captured[1] == expectedShort,
++                         "the short packet should have exactly its new tag and payload");
++
++            vu1.reset();
++            const uint64_t oversizedTag = makeGifTag(0x7FFFu, GIF_FMT_IMAGE, 0u, true);
++            std::memcpy(fx.data, &oversizedTag, sizeof(oversizedTag));
++            std::memset(fx.data + 8u, 0, 8u);
++            vu1.state().vi[1] = 0;
++            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
++                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
++                        0u, 0u, 0u, 8u);
++            t.Equals(captured.size(), size_t{2},
++                     "an oversized packet must fail without emitting partial output");
++
++            vu1.reset();
++            std::memcpy(fx.data, &shortTag, sizeof(shortTag));
++            std::memset(fx.data + 8u, 0, 8u);
++            for (uint32_t i = 0; i < 16u; ++i)
++                fx.data[16u + i] = static_cast<uint8_t>(0x70u + i);
++            std::vector<uint8_t> expectedAfterOversized(32u);
++            std::memcpy(expectedAfterOversized.data(), fx.data,
++                        expectedAfterOversized.size());
++            vu1.state().vi[1] = 0;
++            vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
++                        fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
++                        0u, 0u, 0u, 16u);
++            t.Equals(captured.size(), size_t{3},
++                     "the valid packet after oversized-transfer reset should be the only new output");
++            if (captured.size() == 3u)
++                t.IsTrue(captured[2] == expectedAfterOversized,
++                         "oversized-transfer state must not leak into the next packet");
++        });
++
+         tc.Run("XGKICK observes stores committed before a future PATH1 qword", [](TestCase &t)
+         {
+             PS2Memory mem;
+@@ -1690,6 +1820,85 @@ void register_ps2_vu1_tests()
                       "the underflowing product should set sticky Z and U");
          });
  
@@ -10485,3 +12856,262 @@ index 0754b69fc64c75e3e15cd645f7841d6be972ec0d..a41fa02bbde9293cccdfed1e80c28be5
          tc.Run("reserved opcodes stop before executing or corrupting state", [](TestCase &t)
          {
              Vu1Fixture fx;
+@@ -1712,5 +1921,78 @@ void register_ps2_vu1_tests()
+             t.Equals(vu1.state().vi[1], 0,
+                      "instruction following a reserved opcode must not execute");
+         });
++
++        tc.Run("guarded VU image validates only executed code and stages failures", [](TestCase &t)
++        {
++            Vu1Fixture fx;
++            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
++            std::memcpy(fx.code + kGuardedVu1Entry, &kGuardedVu1ExpectedWord,
++                        sizeof(kGuardedVu1ExpectedWord));
++
++            uint64_t codeHash = 1469598103934665603ull;
++            for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
++                codeHash = (codeHash ^ fx.code[i]) * 1099511628211ull;
++            t.IsTrue(vu1recFind(codeHash) == nullptr,
++                     "the test bank must not have an exact whole-bank image");
++
++            static const uint32_t entries[] = {kGuardedVu1Entry};
++            Vu1RecImage image;
++            image.hash = codeHash;
++            image.entries = entries;
++            image.entryCount = 1u;
++            image.fast = &guardedVu1FastForTest;
++            image.full = &guardedVu1FullForTest;
++            image.guarded = true;
++            vu1recRegister(image);
++
++            gGuardedVu1ExpectedCode = fx.code;
++            gGuardedVu1FastCalls = 0u;
++            gGuardedVu1FullCalls = 0u;
++
++            VU1Interpreter vu1;
++            Vu1NativeDispatcher native;
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
++                     "unknown whole-bank hashes should dispatch through the guarded image");
++            t.Equals(gGuardedVu1FullCalls, 1u,
++                     "guarded images must use the full-flag native variant");
++            t.Equals(gGuardedVu1FastCalls, 0u,
++                     "guarded images must not use the fast native variant");
++            t.Equals(vu1.state().vi[3], 77,
++                     "the guarded callback should execute when its current word matches");
++
++            fx.code[0x2F00u] = 0xA5u; // Not reached by this test image.
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
++                     "mutating an unexecuted code word must not reject the guarded image");
++            t.Equals(gGuardedVu1FullCalls, 2u,
++                     "the guarded full variant should receive the second dispatch");
++            t.Equals(gGuardedVu1FastCalls, 0u,
++                     "the guarded fast variant should remain unused");
++
++            vu1.state().vi[3] = 42;
++            vu1.state().pc = 0x2580u;
++            vu1.setCycleCount(17u);
++            fx.data[7] = 0x55u;
++            const uint64_t gifBefore = fx.mem.gifCopyCount();
++            const uint64_t changedWord = kGuardedVu1ExpectedWord ^ 1u;
++            std::memcpy(fx.code + kGuardedVu1Entry, &changedWord, sizeof(changedWord));
++
++            t.IsTrue(!native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
++                     "changing an executed code word must fail the guarded image");
++            t.Equals(gGuardedVu1FullCalls, 3u,
++                     "the changed executed word should reach the full guard");
++            t.Equals(gGuardedVu1FastCalls, 0u,
++                     "failed guarded dispatch must not use the fast variant");
++            t.Equals(vu1.state().vi[3], 42,
++                     "a guarded failure must preserve the input registers");
++            t.Equals(vu1.state().pc, 0x2580u,
++                     "a guarded failure must preserve the input PC");
++            t.Equals(vu1.cycleCount(), uint64_t(17u),
++                     "a guarded failure must preserve guest cycles");
++            t.Equals(fx.data[7], uint8_t(0x55u),
++                     "a guarded failure must discard staged data writes");
++            t.Equals(fx.mem.gifCopyCount(), gifBefore,
++                     "a guarded failure must discard staged GIF packets");
++            gGuardedVu1ExpectedCode = nullptr;
++        });
+     });
+ }
+diff --git a/ps2xTest/src/ps2_vu_tests.cpp b/ps2xTest/src/ps2_vu_tests.cpp
+index b96befe6566f5187c30246e4b431c14b07433634..932d210ba17f19b12d031b29fb6d823f94c64218 100644
+--- a/ps2xTest/src/ps2_vu_tests.cpp
++++ b/ps2xTest/src/ps2_vu_tests.cpp
+@@ -5,10 +5,15 @@
+ #include "Kernel/Stubs/VU.h"
+ 
+ #include <cmath>
++#include <cfenv>
+ #include <cstdint>
+ #include <cstring>
+ #include <vector>
+ 
++#if defined(__aarch64__)
++#include "runtime/ps2_vu1_recomp_support.h"
++#endif
++
+ namespace
+ {
+     constexpr float kEps = 1e-4f;
+@@ -75,6 +80,29 @@ namespace
+         m[10] = 1.0f;
+         m[15] = 1.0f;
+     }
++
++#if defined(__aarch64__)
++    uint32_t floatBits(float value)
++    {
++        uint32_t bits;
++        std::memcpy(&bits, &value, sizeof(bits));
++        return bits;
++    }
++
++    float bitsFloat(uint32_t bits)
++    {
++        float value;
++        std::memcpy(&value, &bits, sizeof(value));
++        return value;
++    }
++
++    struct FenvRestore
++    {
++        fenv_t saved{};
++        FenvRestore() { std::fegetenv(&saved); }
++        ~FenvRestore() { std::fesetenv(&saved); }
++    };
++#endif
+ }
+ 
+ void register_ps2_vu_tests()
+@@ -97,6 +125,129 @@ void register_ps2_vu_tests()
+                      "MulVector should multiply lanes component-wise");
+         });
+ 
++#if defined(__aarch64__)
++        tc.Run("FmacOverride_matches_scalar_exact_all_rounding_modes", [](TestCase &t)
++        {
++            FenvRestore restore;
++            constexpr int roundingModes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
++            constexpr uint32_t edgeBits[] = {
++                0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u,
++                0x007FFFFFu, 0x807FFFFFu, 0x00800000u, 0x80800000u,
++                0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u,
++                0x7FC00001u, 0xFFC12345u, 0x3F800000u, 0xBF800000u,
++                0x4B000001u, 0xCB000001u, 0x7EFFFFFFu, 0xFEFFFFFFu,
++                0x33800000u, 0xB3800000u, 0x00800001u, 0x80800001u
++            };
++            struct InputBits
++            {
++                uint32_t acc[4];
++                uint32_t s[4];
++                uint32_t t[4];
++            };
++            constexpr InputBits boundaryVectors[] = {
++                // Exact positive and negative cancellation for both add and subtract.
++                {{0x3F800000u, 0x3F800000u, 0xBF800000u, 0xBF800000u},
++                 {0xBF800000u, 0x3F800000u, 0x3F800000u, 0xBF800000u},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
++                // Tiny exact values plus immediately below/above the minimum normal boundary.
++                {{0x00000000u, 0x00000000u, 0x00800000u, 0x00800000u},
++                 {0x00000001u, 0x80000001u, 0x80000001u, 0x00000001u},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
++                // Rounded overflow must clamp to signed FLT_MAX; also exercise the exact boundary.
++                {{0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F7FFFFFu, 0xFF7FFFFFu},
++                 {0x7F7FFFFFu, 0xFF7FFFFFu, 0xFF7FFFFFu, 0x7F7FFFFFu},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}},
++                {{0x00000000u, 0x00000000u, 0x7F7FFFFFu, 0xFF7FFFFFu},
++                 {0x7F7FFFFFu, 0xFF7FFFFFu, 0x00000000u, 0x00000000u},
++                 {0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u}}
++            };
++            auto checkInputs = [&](const float *acc, const float *s, const float *v)
++            {
++                const float32x4_t va = vld1q_f32(acc);
++                const float32x4_t vs = vld1q_f32(s);
++                const float32x4_t vv = vld1q_f32(v);
++                const float32x4_t product = vmulq_f32(vs, vv);
++                const float32x4_t roundedAdd = vaddq_f32(va, product);
++                const float32x4_t roundedSub = vsubq_f32(va, product);
++                const float32x4_t addActual = vr_madd(va, vs, vv);
++                const float32x4_t subActual = vr_msub(va, vs, vv);
++                const float32x4_t addOverride = vr_fmac_override(roundedAdd, va, vs, vv, false);
++                const float32x4_t subOverride = vr_fmac_override(roundedSub, va, vs, vv, true);
++                float addOut[4], subOut[4], addDirect[4], subDirect[4];
++                vst1q_f32(addOut, addActual);
++                vst1q_f32(subOut, subActual);
++                vst1q_f32(addDirect, addOverride);
++                vst1q_f32(subDirect, subOverride);
++                for (unsigned lane = 0; lane < 4; ++lane)
++                {
++                    const float expectedAdd = vr_fmac_exact_override(roundedAdd[lane], acc[lane], s[lane], v[lane], false);
++                    const float expectedSub = vr_fmac_exact_override(roundedSub[lane], acc[lane], s[lane], v[lane], true);
++                    if (floatBits(addOut[lane]) != floatBits(expectedAdd) ||
++                        floatBits(addDirect[lane]) != floatBits(expectedAdd) ||
++                        floatBits(subOut[lane]) != floatBits(expectedSub) ||
++                        floatBits(subDirect[lane]) != floatBits(expectedSub))
++                        return false;
++                }
++                return true;
++            };
++
++            bool matches = true;
++            for (int mode : roundingModes)
++            {
++                if (std::fesetround(mode) != 0)
++                {
++                    matches = false;
++                    break;
++                }
++                for (const InputBits &input : boundaryVectors)
++                {
++                    float acc[4], s[4], v[4];
++                    for (unsigned lane = 0; lane < 4; ++lane)
++                    {
++                        acc[lane] = bitsFloat(input.acc[lane]);
++                        s[lane] = bitsFloat(input.s[lane]);
++                        v[lane] = bitsFloat(input.t[lane]);
++                    }
++                    matches = checkInputs(acc, s, v);
++                    if (!matches)
++                        break;
++                }
++                for (size_t i = 0; i < sizeof(edgeBits) / sizeof(edgeBits[0]) && matches; i += 4)
++                {
++                    float acc[4], s[4], v[4];
++                    for (unsigned lane = 0; lane < 4; ++lane)
++                    {
++                        acc[lane] = bitsFloat(edgeBits[(i + lane) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
++                        s[lane] = bitsFloat(edgeBits[(i + lane + 7) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
++                        v[lane] = bitsFloat(edgeBits[(i + lane + 13) % (sizeof(edgeBits) / sizeof(edgeBits[0]))]);
++                    }
++                    matches = checkInputs(acc, s, v);
++                }
++
++                uint32_t state = 0x9E3779B9u;
++                auto nextBits = [&state]()
++                {
++                    state ^= state << 13;
++                    state ^= state >> 17;
++                    state ^= state << 5;
++                    return state;
++                };
++                for (unsigned sample = 0; sample < 10000u && matches; ++sample)
++                {
++                    float acc[4], s[4], v[4];
++                    for (unsigned lane = 0; lane < 4; ++lane)
++                    {
++                        acc[lane] = bitsFloat(nextBits());
++                        s[lane] = bitsFloat(nextBits());
++                        v[lane] = bitsFloat(nextBits());
++                    }
++                    matches = checkInputs(acc, s, v);
++                }
++            }
++            t.IsTrue(matches, "NEON FMAC override must match scalar exact handling bit-for-bit for all rounding modes");
++        });
++#endif
++
+         tc.Run("ScaleVectorXYZ_scales_xyz", [](TestCase &t)
+         {
+             VuEnv env;
