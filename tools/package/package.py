@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a self-contained, ad-hoc-signed macOS app bundle for the Metal runner.
+"""Build a self-contained, ad-hoc-signed macOS app bundle whose main executable is the Metal runner itself.
 
 Generates the icon, builds dist/Tarzan Freeride PS2.app, audits it (no disc image or game ELF outside
 Resources/game, no Mach-O with /Users, Downloads or tools/build paths, arm64 only) and with --install
@@ -27,6 +27,7 @@ ICON_DEFAULT = ROOT / "build/AppIcon.icns"
 GAME_DEFAULT = ROOT / "extracted/disc"
 OUTPUT_DEFAULT = ROOT / "dist/Tarzan Freeride PS2.app"
 BRIDGE_NAME = "librrv-pcsx2-gs-bridge.dylib"
+EXECUTABLE = "TarzanFreeridePS2"  # the game itself: one process, no launcher
 
 
 def run(args, capture=False):
@@ -108,7 +109,7 @@ def ensure_app_dependency_closure(runner, bridge, runtime_dir, bundle_runner):
 
 def write_info_plist(contents):
     values = {
-        "CFBundleDevelopmentRegion": "en", "CFBundleExecutable": "TarzanFreeridePS2Launcher",
+        "CFBundleDevelopmentRegion": "en", "CFBundleExecutable": EXECUTABLE,
         "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": "org.rrv.tarzan-freeride-ps2",
         "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": "Tarzan Freeride PS2",
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
@@ -118,15 +119,6 @@ def write_info_plist(contents):
     }
     with (contents / "Info.plist").open("wb") as stream:
         plistlib.dump(values, stream)
-
-
-def compile_launcher(destination):
-    sdk = run(["xcrun", "--show-sdk-path"], capture=True).stdout.strip()
-    run(["xcrun", "--find", "clang"], capture=True)
-    run(["xcrun", "clang", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
-         "-isysroot", sdk, str(ROOT / "tools/package/ps2-app-launcher.m"),
-         "-framework", "Foundation", "-o", str(destination)])
-    destination.chmod(0o755)
 
 
 def remove_tree(path):
@@ -215,7 +207,7 @@ def install(source, applications):
 def remove_nonbundle_rpaths(image):
     for entry in rpaths(image):
         absolute = entry.startswith("/") and not entry.startswith(("/System/Library/", "/usr/lib/"))
-        if absolute or BAD_PATH.search(entry):  # also build-tree-relative entries such as @loader_path/../../tools/build
+        if absolute or BAD_PATH.search(entry) or "../../" in entry:  # also build-tree-relative entries such as @loader_path/../../tools/build
             run(["install_name_tool", "-delete_rpath", entry, image])
 
 
@@ -259,12 +251,10 @@ def main():
     resources = contents / "Resources"
     macos.mkdir(parents=True)
     resources.mkdir(parents=True)
-    (frameworks / "PS2Recomp").mkdir(parents=True)
     (frameworks / "PCSX2GSBridge").mkdir(parents=True)
     (frameworks / "Runtime").mkdir(parents=True)
     write_info_plist(contents)
     copy_fresh(args.icon, resources / "AppIcon.icns")
-    compile_launcher(macos / "TarzanFreeridePS2Launcher")
 
     manifest = {"bundle": str(app), "app_icon_sha256": sha256(resources / "AppIcon.icns"),
                 "release_qualification": "not established by packaging; requires actual Metal capability and gameplay reports"}
@@ -294,7 +284,7 @@ def main():
             if not (LLVM_LIB / name).is_file():
                 raise RuntimeError("matching LLVM 19 C++ runtime is missing: " + str(LLVM_LIB / name))
 
-        bundled_runner = frameworks / "PS2Recomp/ps2EntryRunner"
+        bundled_runner = macos / EXECUTABLE
         bundled_bridge = frameworks / "PCSX2GSBridge" / BRIDGE_NAME
         runtime = frameworks / "Runtime"
         copy_fresh(runner, bundled_runner)
@@ -324,8 +314,8 @@ def main():
         run(["install_name_tool", "-id", "@rpath/libc++.1.dylib", runtime / "libc++.1.dylib"])
         run(["install_name_tool", "-id", "@rpath/libc++abi.1.dylib", runtime / "libc++abi.1.dylib"])
         run(["install_name_tool", "-id", "@rpath/" + BRIDGE_NAME, bundled_bridge])
-        run(["install_name_tool", "-add_rpath", "@executable_path/../Runtime", bundled_runner])
-        run(["install_name_tool", "-add_rpath", "@executable_path/../PCSX2GSBridge", bundled_runner])
+        run(["install_name_tool", "-add_rpath", "@executable_path/../Frameworks/Runtime", bundled_runner])
+        run(["install_name_tool", "-add_rpath", "@executable_path/../Frameworks/PCSX2GSBridge", bundled_runner])
         run(["install_name_tool", "-add_rpath", "@loader_path/../Runtime", bundled_bridge])
         ensure_app_dependency_closure(bundled_runner, bundled_bridge, runtime, bundled_runner)
         manifest.update({
@@ -338,10 +328,11 @@ def main():
         })
     # Sign inside out only after all Mach-O edits and assets are final.
     for image in (frameworks / "Runtime/libc++abi.1.dylib", frameworks / "Runtime/libc++.1.dylib",
-                  frameworks / "PCSX2GSBridge" / BRIDGE_NAME,
-                  frameworks / "PS2Recomp/ps2EntryRunner"):
+                  frameworks / "PCSX2GSBridge" / BRIDGE_NAME):
         if image.exists():
             run(["codesign", "--force", "--sign", "-", image])
+    # The main executable is signed by the deep app signature below (signing it alone fails
+    # while Frameworks resources are still unsealed).
     # GS resources live under Frameworks and need the recursive signing pass.
     # Seal the final manifest afterward without re-signing nested binaries.
     run(["codesign", "--force", "--deep", "--strict", "--sign", "-", app])

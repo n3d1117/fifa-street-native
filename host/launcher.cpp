@@ -1,3 +1,5 @@
+#include "tarzan-app.hpp"
+#include "metal-host.hpp"
 #include "ps2_runtime.h"
 #include "runtime/ps2_host_arena.h"
 
@@ -13,6 +15,9 @@
 #include <vector>
 
 #include <mach-o/dyld.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace
 {
@@ -51,6 +56,42 @@ void configureRuntimeArena(const std::filesystem::path& elfPath)
     // Tarzan's libc malloc is HLE-bound to guestMalloc; retain that shared
     // allocator and isolate only runtime callback stacks below the executable.
     ps2SetRuntimeArena(0u, 0u, arenaBegin, arenaEnd);
+}
+
+// When this executable is Contents/MacOS/<name> of an app bundle, the game
+// data ships in Contents/Resources/game. Empty path when not in a bundle.
+std::filesystem::path bundledGameElf()
+{
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string exe(size, '\0');
+    if (size == 0 || _NSGetExecutablePath(exe.data(), &size) != 0)
+        return {};
+    const std::filesystem::path macos = std::filesystem::path(exe.c_str()).lexically_normal().parent_path();
+    const std::filesystem::path elf = macos.parent_path() / "Resources" / "game" / "SLES_503.50";
+    std::error_code ec;
+    if (macos.filename() == "MacOS" && std::filesystem::exists(elf, ec))
+        return elf;
+    return {};
+}
+
+// A GUI launch (LaunchServices) hands us /dev/null for stdout/stderr; keep the
+// runtime log in the user directory instead. Terminals and pipes are left alone.
+void redirectLogsIfDetached(const std::filesystem::path &userDirectory)
+{
+    struct stat devNull{}, err{};
+    if (stat("/dev/null", &devNull) != 0 || fstat(STDERR_FILENO, &err) != 0 ||
+        !S_ISCHR(err.st_mode) || err.st_rdev != devNull.st_rdev)
+        return;
+    std::error_code ec;
+    const std::filesystem::path logs = userDirectory / "Logs";
+    std::filesystem::create_directories(logs, ec);
+    const int fd = open((logs / "native.log").c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd < 0)
+        return;
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    close(fd);
 }
 
 struct LaunchOptions
@@ -145,6 +186,8 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
         options.elfPath = argument;
     }
 
+    if (options.elfPath.empty())
+        options.elfPath = bundledGameElf();
 #if defined(PS2X_DEFAULT_BOOT_ELF)
     if (options.elfPath.empty())
     {
@@ -188,30 +231,25 @@ void setupTerminateLogger()
 }
 }
 
-int main(int argc, char *argv[])
+
+int tarzan_run(const TarzanConfig *config)
 {
-    setupTerminateLogger();
     try
     {
-        LaunchOptions options;
-        if (!parseOptions(argc, argv, options))
-        {
-            return 0;
-        }
-
+        if (!config || !config->elf_path || !config->user_dir)
+            throw std::runtime_error("tarzan_run needs an ELF path and a user directory");
         std::error_code error;
-        options.elfPath = std::filesystem::absolute(options.elfPath, error).lexically_normal();
+        const std::filesystem::path elfPath =
+            std::filesystem::absolute(config->elf_path, error).lexically_normal();
         if (error)
-        {
             throw std::runtime_error("Unable to resolve game ELF path: " + error.message());
-        }
-        options.userDirectory = std::filesystem::absolute(options.userDirectory, error).lexically_normal();
+        const std::filesystem::path userDirectory =
+            std::filesystem::absolute(config->user_dir, error).lexically_normal();
         if (error)
-        {
             throw std::runtime_error("Unable to resolve user directory: " + error.message());
-        }
 
-        if (setenv("TARZAN_PS2_USER_DIR", options.userDirectory.c_str(), 1) != 0)
+        redirectLogsIfDetached(userDirectory);
+        if (setenv("TARZAN_PS2_USER_DIR", userDirectory.c_str(), 1) != 0)
             throw std::runtime_error("Unable to configure keyboard settings directory");
         // Pace hardware time from the host clock. Estimated block costs must
         // neither slow it down nor accelerate audio during movie playback.
@@ -225,25 +263,27 @@ int main(int argc, char *argv[])
         // The IOP loader checks every relocated module against this boundary.
         if (!std::getenv("PS2X_IOP_HEAP_BASE") && setenv("PS2X_IOP_HEAP_BASE", "0x80000", 0) != 0)
             throw std::runtime_error("Unable to configure Tarzan IOP heap");
-        configureRuntimeArena(options.elfPath);
-        PS2Runtime runtime;
+        // The arena is only a range handed to the runtime allocator; it needs no
+        // fresh process image, just to be set before the runtime initializes.
+        configureRuntimeArena(elfPath);
+        // Never destroyed: teardown order of the runtime's threads is not worth
+        // risking after the window is gone; the process exits right after.
+        PS2Runtime &runtime = *new PS2Runtime;
         if (!runtime.initialize("TarzanFreeride PS2 Native macOS"))
         {
             std::cerr << "Failed to initialize PS2 runtime" << std::endl;
             return 1;
         }
-        if (!runtime.loadELF(options.elfPath.string()))
+        if (!runtime.loadELF(elfPath.string()))
         {
-            std::cerr << "Failed to load game ELF: " << options.elfPath << std::endl;
+            std::cerr << "Failed to load game ELF: " << elfPath << std::endl;
             return 1;
         }
 
-        const std::filesystem::path memoryCardDirectory = options.userDirectory / "memcards";
+        const std::filesystem::path memoryCardDirectory = userDirectory / "memcards";
         std::filesystem::create_directories(memoryCardDirectory, error);
         if (error)
-        {
             throw std::runtime_error("Unable to create memory card directory: " + error.message());
-        }
 
         // loadELF derives paths from the ELF directory, so apply the user-owned
         // memory card location after loading it and before the runtime starts.
@@ -251,12 +291,12 @@ int main(int argc, char *argv[])
         ioPaths.mcRoot = memoryCardDirectory;
         PS2Runtime::setIoPaths(ioPaths);
 
-        std::cout << "Game ELF: " << options.elfPath << std::endl;
+        std::cout << "Game ELF: " << elfPath << std::endl;
         std::cout << "Memory cards: " << memoryCardDirectory << std::endl;
         runtime.run();
         std::cout.flush();
         std::cerr.flush();
-        std::_Exit(0);
+        return 0;
     }
     catch (const std::exception &error)
     {
@@ -266,8 +306,34 @@ int main(int argc, char *argv[])
     {
         std::cerr << "[launcher] unknown fatal exception" << std::endl;
     }
-
     std::cout.flush();
     std::cerr.flush();
-    std::_Exit(1);
+    return 1;
+}
+
+void tarzan_stop(void)
+{
+    tarzan_metal_host_request_close();
+}
+
+int main(int argc, char *argv[])
+{
+    setupTerminateLogger();
+    int status = 1;
+    try
+    {
+        LaunchOptions options;
+        if (!parseOptions(argc, argv, options))
+            return 0;
+        const std::string elf = options.elfPath.string(), user = options.userDirectory.string();
+        TarzanConfig config{elf.c_str(), user.c_str()};
+        status = tarzan_run(&config);
+    }
+    catch (const std::exception &error)
+    {
+        std::cerr << "[launcher] " << error.what() << std::endl;
+    }
+    std::cout.flush();
+    std::cerr.flush();
+    std::_Exit(status);
 }

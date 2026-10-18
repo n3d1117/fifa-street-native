@@ -9,6 +9,7 @@ extern "C" {
 int tarzan_metal_host_start(const char* title, uint32_t width, uint32_t height);
 void tarzan_metal_host_poll();
 int tarzan_metal_host_should_close();
+void tarzan_metal_host_request_close();  // any thread
 void tarzan_metal_host_stop();
 int tarzan_metal_gs_create();
 void tarzan_metal_gs_destroy();

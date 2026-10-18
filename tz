@@ -8,7 +8,7 @@
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run [--seconds N] [--route first-mission] [--user-dir D] [--profile] [--app PATH]
+  tz run [--seconds N] [--route first-mission] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
   tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
@@ -417,6 +417,27 @@ def cmd_run(args):
             require(ELF, "./tz disc <iso>")
             require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./tz build")
         run.shown_log, run.context = out / "run.log", False
+        if args.quit_cycles:
+            if not args.app:
+                raise Failed("--quit-cycles needs --app")
+            reports = Path.home() / "Library/Logs/DiagnosticReports"
+            known = set(reports.glob("TarzanFreeridePS2*.crash"))
+            bad = 0
+            for i in range(args.quit_cycles):
+                cdir = out / f"cycle{i + 1:02d}"
+                cmd = [sys.executable, "tools/probe/probe.py", "--out", cdir, "--route", args.route or "none",
+                       "--app", args.app, "--quit-at-end"]
+                rc = run.sh(cmd)
+                s = json.loads((cdir / "summary.json").read_text()) if (cdir / "summary.json").is_file() else {}
+                ok = s.get("reached") == s.get("target") and s.get("quit_clean") and s.get("exit_code") == 0  # underruns are not a quit property
+                run.notes.append(f"cycle {i + 1}: reached {s.get('reached')} quit_clean {s.get('quit_clean')} exit {s.get('exit_code')}")
+                bad += not ok
+            time.sleep(3)
+            new = set(reports.glob("TarzanFreeridePS2*.crash")) - known
+            if bad or new:
+                run.failed.append("quit cycles")
+                raise Failed(f"{bad} bad cycles, {len(new)} new crash reports")
+            return f"{args.quit_cycles} clean quit cycles"
         cmd = [sys.executable, "tools/probe/probe.py", "--out", out, "--route", args.route or "none"]
         for flag, value in (("--seconds", args.seconds), ("--user-dir", args.user_dir), ("--app", args.app)):
             if value:
@@ -499,6 +520,8 @@ def main():
     r.add_argument("--user-dir")
     r.add_argument("--profile", action="store_true")
     r.add_argument("--app")
+    r.add_argument("--quit-cycles", type=int, metavar="N",
+                   help="with --app: N launch -> (route) -> AppleEvent quit cycles; fails on non-zero exit or new crash report")
     r.set_defaults(fn=cmd_run)
     k = sp.add_parser("package")
     k.add_argument("--install", action="store_true")

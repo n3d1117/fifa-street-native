@@ -6,7 +6,7 @@ Merges the former run-native-check / diagnose-native / probe-first-level scripts
                          (OCR guard on the language menu before the first key)
   --profile              macOS `sample` of the GameThread after --profile-after seconds
   --gpu-capture          bounded Metal frame capture (TARZAN_CAPTURE_*)
-  --app BUNDLE           exercise an installed .app through its real launcher
+  --app BUNDLE           exercise an installed .app (the app binary is the game itself; same isolated user dir and diagnostics)
 With no route the run ends as soon as the language menu is confirmed; --seconds gets 15 s of grace for it.
 Stops on the first fault marker unless --keep-running-on-failure. Never certifies gameplay:
 `reached` only says which milestone was observed. A metric whose log line is missing is null.
@@ -221,6 +221,8 @@ def main():
     ap.add_argument("--user-dir", type=Path)
     ap.add_argument("--runner", type=Path)
     ap.add_argument("--app", type=Path)
+    ap.add_argument("--quit-at-end", action="store_true",
+                    help="with --app: end the run with an AppleEvent quit (like Dock/Cmd-Q) and require exit 0 within 30 s")
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--profile-after", type=float, default=10)
     ap.add_argument("--gpu-capture", action="store_true")
@@ -232,10 +234,10 @@ def main():
     ap.add_argument("--desktop-input", action="store_true",
                     help="synthetic desktop key events instead of the diagnostic FIFO (needs Accessibility)")
     args = ap.parse_args()
+    if args.quit_at_end and not args.app:
+        ap.error("--quit-at-end needs --app")
     if args.runner and args.app:
         ap.error("--runner and --app are mutually exclusive")
-    if args.route != "none" and args.app:
-        ap.error("--route needs the runner's diagnostic input; it cannot drive --app")
     seconds = args.seconds or (150 if args.route == "first-mission" else 60)
     if args.route == "first-mission" and seconds < 140:
         ap.error("--route first-mission needs --seconds >= 140")
@@ -275,14 +277,9 @@ def main():
         fifo_fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
         env["TARZAN_DIAGNOSTIC_INPUT_FIFO"] = str(fifo)
 
-    offsets = {}
     if args.app:
         app = args.app.resolve(strict=True)
-        command = [str(app / "Contents/MacOS/TarzanFreeridePS2Launcher")]
-        # The launcher always uses the real support dir (a throwaway HOME breaks PCSX2's data dir), so the
-        # save-dir hash below is the guard; its own log there is read from the offset recorded now.
-        log = REAL_SUPPORT / "Logs/native.log"
-        offsets[log] = log.stat().st_size if log.exists() else 0
+        command = [str(app / "Contents/MacOS/TarzanFreeridePS2"), "--user-dir", str(user_dir)]
     else:
         runner = (args.runner or DEFAULT_RUNNER).resolve(strict=True)
         if not ELF.is_file():
@@ -297,14 +294,7 @@ def main():
     cap = Capture(out)
 
     def log_text():
-        if not args.app:
-            return log_path.read_text(errors="replace")
-        for c, off in offsets.items():
-            if c.exists() and c.stat().st_size > off:
-                with c.open("rb") as f:
-                    f.seek(off)
-                    return f.read().decode("utf-8", "replace")
-        return ""
+        return log_path.read_text(errors="replace")
 
     def send_key(key):
         if fifo_fd is not None:
@@ -365,6 +355,16 @@ def main():
         if route and route_i == len(route) and proc.poll() is None and not fault_stop:
             cap.grab(proc.pid)
     finally:
+        quit_ok = None
+        if args.quit_at_end and proc.poll() is None:
+            subprocess.run(["osascript", "-e", 'tell application id "org.rrv.tarzan-freeride-ps2" to quit'],
+                           capture_output=True, timeout=30)  # the app cancels terminate and shuts down itself
+            try:
+                proc.wait(timeout=30)
+                quit_ok = proc.returncode == 0
+            except subprocess.TimeoutExpired:
+                quit_ok = False
+                notes.append("quit did not exit within 30 s")
         if proc.poll() is None:
             killed_by_us = True
             proc.send_signal(signal.SIGTERM)  # the GS dependency can swallow SIGTERM: escalate
@@ -379,14 +379,13 @@ def main():
 
     elapsed = round(time.monotonic() - started, 1)
     text = log_text()
-    if args.app:
-        log_path.write_text(text)
     metrics = parse_log(text)
     crash = crash_from(text, proc.returncode, killed_by_us)
     report = None
     if proc.returncode and proc.returncode < 0 and not killed_by_us:
         for _ in range(6):  # macOS writes crash reports asynchronously; match our pid only
-            found = [r for r in (Path.home() / "Library/Logs/DiagnosticReports").glob("ps2EntryRunner*.crash")
+            found = [r for pattern in ("ps2EntryRunner*.crash", "TarzanFreeridePS2*.crash")
+                     for r in (Path.home() / "Library/Logs/DiagnosticReports").glob(pattern)
                      if f"[{proc.pid}]" in r.read_text(errors="replace")[:2000]]
             if found:
                 shutil.copy2(found[0], out / found[0].name)
@@ -413,12 +412,12 @@ def main():
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
         "menu_confirmed_s": menu_at, "keys": keys, "notes": notes, "crash_report": report,
-        "log": str(log_path),
+        "log": str(log_path), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     shutil.rmtree(scratch, ignore_errors=True) if scratch else None
     steady_audio = bool(summary["audio_underruns"])
-    return 0 if reached == target and not changed and not steady_audio else 1
+    return 0 if reached == target and not changed and not steady_audio and quit_ok is not False else 1
 
 
 if __name__ == "__main__":

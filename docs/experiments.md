@@ -107,7 +107,6 @@ future scene diagnosis; it never selects cameras by transient heap addresses.
 
 Fresh-start diagnostics: `./tz run --route first-mission --user-dir <empty-dir>`
 creates a separate slot, fills the name through normal input, and enters the
-first Story mission. It rejects personal/nonempty save directories and the
-installed-launcher mode. `--fast --keep-story` retains the actual story movie;
+first Story mission. It rejects personal/nonempty save directories. `--fast --keep-story` retains the actual story movie;
 omitting `--play` avoids automated tutorial confirmations. This route verifies
 new-game creation; it does not yet reliably reproduce the reported tip card.

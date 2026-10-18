@@ -74,8 +74,7 @@ Reference: [Fukami](https://github.com/danisandoval/fukami), reviewed at
 ## P5 — Apple mobile platforms, later
 
 - After macOS whole-game qualification, build real iOS/tvOS targets: replace
-  AppKit with UIKit/Metal surfaces, consolidate the launcher and runner into one
-  process, cross-build the renderer/media/input dependencies, and implement
+  AppKit with UIKit/Metal surfaces, cross-build the renderer/media/input dependencies, and implement
   user-owned game-data import and container-based saves. Qualify memory,
   suspend/resume, controller input, audio interruptions, and Apple TV import UX
   on physical devices. See [apple-platforms.md](apple-platforms.md).

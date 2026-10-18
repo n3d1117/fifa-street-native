@@ -25,7 +25,7 @@ NSView* s_view;
 NSView* s_container;
 CAMetalLayer* s_layer;
 RrvPcsx2GsBridgeSurface s_surface{};
-bool s_should_close{};
+std::atomic_bool s_should_close{false};
 bool s_fullscreen{};
 CGFloat gameAspect() { return tarzan_experiments_hd_widescreen() ? 16.0 / 9.0 : 4.0 / 3.0; }
 thread_local std::unique_ptr<tarzan::ps2::MetalGsAdapter> s_gs;
@@ -89,7 +89,7 @@ void apply_pending_surface_resize() {
 
 }
 
-@interface TarzanMetalWindowDelegate : NSObject <NSWindowDelegate>
+@interface TarzanMetalWindowDelegate : NSObject <NSWindowDelegate, NSApplicationDelegate>
 - (void)showKeyboardControls:(id)sender;
 - (void)showSettings:(id)sender;
 - (void)windowDidResignKey:(NSNotification*)notification;
@@ -101,7 +101,12 @@ void apply_pending_surface_resize() {
 - (void)windowDidExitFullScreen:(NSNotification*)notification;
 @end
 @implementation TarzanMetalWindowDelegate
-- (BOOL)windowShouldClose:(id)sender { (void)sender; s_should_close = true; return NO; }
+// Dock/AppleScript/logout quit must take the same orderly path as the Quit menu:
+// exit() under a running guest thread would destroy live mutexes.
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
+    (void)sender; s_should_close.store(true); return NSTerminateCancel;
+}
+- (BOOL)windowShouldClose:(id)sender { (void)sender; s_should_close.store(true); return NO; }
 - (void)showKeyboardControls:(id)sender {
     (void)sender;
     for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
@@ -121,7 +126,7 @@ void apply_pending_surface_resize() {
     (void)notification;
     tarzan_gamepad_set_active(1);
 }
-- (void)requestClose:(id)sender { (void)sender; s_should_close = true; }
+- (void)requestClose:(id)sender { (void)sender; s_should_close.store(true); }
 - (void)windowDidResize:(NSNotification*)notification {
     (void)notification;
     layout_game_view();
@@ -231,6 +236,7 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
         [s_window setCollectionBehavior:[s_window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
         s_delegate = [TarzanMetalWindowDelegate new];
         [s_window setDelegate:s_delegate];
+        [app setDelegate:s_delegate];
         NSMenu* mainMenu = [NSMenu new];
         NSMenuItem* appItem = [NSMenuItem new];
         [mainMenu addItem:appItem];
@@ -326,7 +332,8 @@ extern "C" void tarzan_metal_host_poll(void) {
             (void)rrv_pcsx2_gs_bridge_pump_main_thread();
     }
 }
-extern "C" int tarzan_metal_host_should_close(void) { return s_should_close ? 1 : 0; }
+extern "C" int tarzan_metal_host_should_close(void) { return s_should_close.load() ? 1 : 0; }
+extern "C" void tarzan_metal_host_request_close(void) { s_should_close.store(true); }
 extern "C" void tarzan_metal_host_stop(void) {
     @autoreleasepool {
         if (s_playbackActivity) {
@@ -341,6 +348,7 @@ extern "C" void tarzan_metal_host_stop(void) {
         tarzan_diagnostic_input_shutdown();
         tarzan_gamepad_shutdown();
         [s_window setDelegate:nil];
+        [NSApp setDelegate:nil];
         [NSApp setMainMenu:nil];
         [s_window close]; s_window=nil; s_view=nil; s_layer=nil; s_delegate=nil;
     }
