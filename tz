@@ -361,6 +361,7 @@ def cmd_run(args):
         run.notes += [f"reached: {s['reached']}", f"seconds: {s['seconds']:g}",
                       f"fps_dispfb2: {fmt(s['fps_dispfb2'])}", f"presents_per_s: {fmt(s['presents_per_s'])}",
                       f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
+                      f"audio_boundary_underruns: {fmt(s.get('audio_boundary_underruns'))}",
                       "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
                       f"stubs: {stubs}"]
         if s["black_frames"]:
@@ -368,6 +369,9 @@ def cmd_run(args):
         if s["save_dir_changed"]:
             run.failed.append("save dir changed")
             run.notes.append("FAIL: the real save dir changed during the run")
+        if s["audio_underruns"]:
+            run.failed.append("audio underruns")
+            run.notes.append(f"FAIL: {s['audio_underruns']} steady-state audio underruns")
         if rc != 0:
             run.failed.append(f"reached {s['reached']}, wanted {s['target']}")
             raise Failed(f"reached {s['reached']} (wanted {s['target']})")

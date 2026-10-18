@@ -90,6 +90,33 @@ def title_screen_present(lines):
     return english_menu_present(lines) or (any("tarzan" in t for t in texts) and any("start" in t for t in texts))
 
 
+def split_underruns(text):
+    """(steady, boundary, overruns, saw_health). Boundary = the first health line after a PSS movie's audio stream
+    starts (`iop-audio-rpc fn=12` following a .PSS open), and the
+    health line containing or following an `iop-audio-rpc fn=11 ... init=0` (movie EOF flush)."""
+    steady = boundary = overruns = 0
+    seen = False
+    pss_open = after_start = after_flush = False
+    for line in text.splitlines():
+        if re.search(r"\[sceCdSearchFile:ok\] path=\"[^\"]*\.PSS", line):
+            pss_open = True
+        elif pss_open and re.search(r"\[iop-audio-rpc\] fn=12 ", line):
+            pss_open, after_start = False, True
+        elif re.search(r"\[iop-audio-rpc\] fn=11 .*\binit=0\b", line):
+            after_flush = True
+        else:
+            m = re.search(r"\[tarzan-spu2-health\].*?underrun=(\d+) overrun=(\d+)", line)
+            if m:
+                seen = True
+                overruns += int(m[2])
+                if after_start or after_flush:
+                    boundary += int(m[1])
+                else:
+                    steady += int(m[1])
+                after_start = after_flush = False
+    return steady, boundary, overruns, seen
+
+
 def parse_log(text):
     """Derive every metric from lines the runtime already logs. Missing -> absent key."""
     out = {}
@@ -99,10 +126,11 @@ def parse_log(text):
         out["vu_native_fail"] = int(vu[-1][1])
         # The latest periodic line describes the current phase (movies run at 50, gameplay at 25).
         out["fps_dispfb2"] = round(float(vu[-1][2]), 1) if float(vu[-1][2]) > 0 else None
-    health = re.findall(r"\[tarzan-spu2-health\].*?underrun=(\d+) overrun=(\d+)", text)
-    if health:
-        out["audio_underruns"] = sum(int(h[0]) for h in health)
-        out["audio_overruns"] = sum(int(h[1]) for h in health)
+    steady, boundary, overruns, seen = split_underruns(text)
+    if seen:
+        out["audio_underruns"] = steady
+        out["audio_boundary_underruns"] = boundary
+        out["audio_overruns"] = overruns
     out["vu0_active"] = "[vu0rec] image=" in text or "[vu0rec] calls=" in text
     stubs = collections.Counter(re.findall(r"Unimplemented PS2 stub called\. name=(\S+)", text))
     for m in re.finditer(r"\[Syscall TODO\] encoded=0x([0-9a-f]+) v1=0x([0-9a-f]+)", text):
@@ -374,6 +402,7 @@ def main():
         "reached": reached, "target": target, "seconds": elapsed,
         "fps_dispfb2": metrics.get("fps_dispfb2"), "presents_per_s": None,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
+        "audio_boundary_underruns": metrics.get("audio_boundary_underruns"),
         "audio_overruns": metrics.get("audio_overruns"), "vu_native_fail": metrics.get("vu_native_fail"),
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
@@ -383,7 +412,8 @@ def main():
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     shutil.rmtree(scratch, ignore_errors=True) if scratch else None
-    return 0 if reached == target and not changed else 1
+    steady_audio = bool(summary["audio_underruns"])
+    return 0 if reached == target and not changed and not steady_audio else 1
 
 
 if __name__ == "__main__":
