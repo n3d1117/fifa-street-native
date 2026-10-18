@@ -58,7 +58,7 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 |---|---|---|---|---|
 | 1 | Further upstream PS2Recomp PR batches (FPU semantics and recompiler batches are in; remaining IOP/HLE/runtime fixes) | correctness everywhere | M | low (batched, verified) |
 | 2 | EE cycle-charge scale by VBlank period: a frame over one VBlank's estimated cycles no longer spans two VBlanks when the host finished early | 60/120 FPS stuck at 26-29 | S | low, if game-speed parity is proven |
-| 3 | Scheduler fixed-cost trims: atomic idle check, lazy EE timers (verify mode), division-free timer math, skip the DMAC-drain lock when idle, scratchpad fast path, IOP idle fast path, no `getenv` in hot loops | CPU-bound gameplay | S-M | none |
+| 3 | Scheduler fixed-cost trims: atomic idle check, lazy EE timers (verify mode), division-free timer math, skip the DMAC-drain lock when idle, scratchpad fast path, IOP idle fast path | CPU-bound gameplay | S-M | none |
 | 5 | IOP/HLE fixes: `WaitSema`/`WaitEventFlag` outside IOP threads run the scheduler; `sceSifGetOtherData` copies; `sceSifSetDmaIntr` callback; `sceMpegIsEnd` on `000001B7`/`000001B9`; synchronous MPEG audio callbacks on a private copy | hangs, movie sync | S | low |
 | 6 | PCSX2 sprite-coverage patch (snapped edges plus coverage-weighted 4-tap for point-sampled sprites above 1x) | upscaled tutorial text blur | S-M | low |
 | 7 | `jalr` resumes only at its return address, plus a resume-switch guard | CPU-bound gameplay | S | medium (checkable) |

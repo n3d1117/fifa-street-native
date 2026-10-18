@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 23:43:04 +0200
+Subject: [PATCH 3/3] Cache GS bridge diagnostic environment flags
+
+
+diff --git a/tools/pcsx2-gs-bridge/bridge.cpp b/tools/pcsx2-gs-bridge/bridge.cpp
+index bb8eacc1eef51d5c32d48c4177a147f8b5cc8db4..4763ad295b8ec195498b2e3716220eb9842aff37 100644
+--- a/tools/pcsx2-gs-bridge/bridge.cpp
++++ b/tools/pcsx2-gs-bridge/bridge.cpp
+@@ -285,15 +285,21 @@ bool VsyncFieldFromCsr()
+     return v;
+ }
+ 
++const char* BridgeDiagValue()
++{
++    static const char* value = std::getenv("RRV_PCSX2_GS_DIAG");
++    return value;
++}
++
+ bool BridgeDiagEnabled()
+ {
+-    const char* value = std::getenv("RRV_PCSX2_GS_DIAG");
++    const char* value = BridgeDiagValue();
+     return value && value[0] != '\0' && std::strcmp(value, "0") != 0;
+ }
+ 
+ bool BridgeDiagVerbose()
+ {
+-    const char* value = std::getenv("RRV_PCSX2_GS_DIAG");
++    const char* value = BridgeDiagValue();
+     return value && std::strcmp(value, "verbose") == 0;
+ }
+ 
+@@ -2971,7 +2977,8 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
+     // the CRTC composition depends on, in a format directly comparable with the
+     // MTGS side (KNOWN_ISSUES #24). CSR is read back AFTER the call so a field
+     // flip performed inside the GS is visible.
+-    if (std::getenv("RRV_PCSX2_GS_VSYNC_TRACE"))
++    static const bool vsync_trace = std::getenv("RRV_PCSX2_GS_VSYNC_TRACE") != nullptr;
++    if (vsync_trace)
+     {
+         uint64_t csr_after = 0;
+         std::memcpy(&csr_after, bridge->pcsx2_regs.data() + kPcsx2Offsets[15], sizeof(csr_after));
