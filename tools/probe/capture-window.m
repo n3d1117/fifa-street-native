@@ -20,7 +20,9 @@ int main(int argc,const char **argv){ @autoreleasepool {
  if(!img)return 4;
  NSURL *url=[NSURL fileURLWithPath:[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"window-%03d.png",i]]];
  CGImageDestinationRef out=CGImageDestinationCreateWithURL((__bridge CFURLRef)url,CFSTR("public.png"),1,NULL);
- CGImageDestinationAddImage(out,img,NULL);CGImageDestinationFinalize(out);CFRelease(out);CGImageRelease(img);
+ CGImageDestinationAddImage(out,img,NULL);CGImageDestinationFinalize(out);CFRelease(out);
+ {CGColorSpaceRef cs=CGColorSpaceCreateDeviceGray();uint8_t px[256];CGContextRef g=CGBitmapContextCreate(px,16,16,8,16,cs,kCGImageAlphaNone);CGContextSetInterpolationQuality(g,kCGInterpolationMedium);CGContextDrawImage(g,CGRectMake(0,0,16,16),img);double sum=0;for(int k=0;k<256;k++)sum+=px[k];printf("frame %d luma=%.4f\n",i,sum/256/255);CGContextRelease(g);CGColorSpaceRelease(cs);}
+ CGImageRelease(img);
  usleep(10000);
  }}printf("Captured %d window frames\n",count);
 }return 0;}

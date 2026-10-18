@@ -10,13 +10,13 @@ Follow-up for this A/B: verify the flag value at runtime in both phases and comp
 
 ## Capture analyzer
 
-`scripts/analyze-gs-profile.py` reads the actual `RRV_GATE4_GS_COUNTERS` v1 text rows emitted by `deps/fukami/tools/pcsx2-gs-bridge/bridge.cpp:558-575,700-723`. Example:
+`tools/probe/gs-profile.py` reads the actual `RRV_GATE4_GS_COUNTERS` v1 text rows emitted by `deps/fukami/tools/pcsx2-gs-bridge/bridge.cpp:558-575,700-723`. Example:
 
 ```sh
-python3 scripts/analyze-gs-profile.py /path/to/gs-counters.txt --from-field 500 --to-field 900
+python3 tools/probe/gs-profile.py /path/to/gs-counters.txt --from-field 500 --to-field 900
 ```
 
-The field bounds are inclusive. Interval percentiles use entry-time deltas only for adjacent field indices; they describe GS field-service cadence, not unique game FPS. The JSON separates `p` counters (between VSync returns) from `v` counters (inside `GSvsync`), counts invalid `v=-1` reset rows, and keeps overlapping ROV counters separate. GPU time is accumulated asynchronously from completed work and may be attributed to earlier fields; use its total rather than treating an individual field sample as that field's render time. GIF/VSync/readback host times are instrumented attribution, not clean benchmark timing. The retained mission capture was analyzed with `python3 scripts/analyze-gs-profile.py reports/mission-fps-ab-gs.txt --from-field 4500`.
+The field bounds are inclusive. Interval percentiles use entry-time deltas only for adjacent field indices; they describe GS field-service cadence, not unique game FPS. The JSON separates `p` counters (between VSync returns) from `v` counters (inside `GSvsync`), counts invalid `v=-1` reset rows, and keeps overlapping ROV counters separate. GPU time is accumulated asynchronously from completed work and may be attributed to earlier fields; use its total rather than treating an individual field sample as that field's render time. GIF/VSync/readback host times are instrumented attribution, not clean benchmark timing. The retained mission capture was analyzed with `python3 tools/probe/gs-profile.py reports/mission-fps-ab-gs.txt --from-field 4500`.
 
 ## Practical optimization order and mobile constraints
 

@@ -11,7 +11,6 @@
 !/cmake/
 !/CMakeLists.txt
 !/CMakePresets.json
-!/scripts/
 !/tests/
 !/patches/
 !/tools/
@@ -36,14 +35,6 @@
 !/host/**/*.m
 !/host/**/CMakeLists.txt
 !/host/**/*.cmake
-
-# Reproducible helper scripts only.
-/scripts/*
-/scripts/**/*
-!/scripts/**/
-!/scripts/**/*.py
-!/scripts/**/*.sh
-!/scripts/**/*.m
 
 # Focused test code and readable text fixtures only.
 /tests/*
@@ -74,6 +65,16 @@
 !/tools/prepare-metal-bridge.py
 !/tools/disc.py
 !/tools/generate.py
+!/tools/where.py
+!/tools/check-repo-hygiene.py
+!/tools/probe/
+/tools/probe/*
+!/tools/probe/*.py
+!/tools/probe/*.m
+!/tools/package/
+/tools/package/*
+!/tools/package/*.py
+!/tools/package/*.m
 !/tools/vu/
 /tools/vu/*
 !/tools/vu/*.py

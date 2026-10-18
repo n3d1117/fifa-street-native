@@ -336,6 +336,25 @@ def configure(vu1_only: bool) -> None:
           "local config, symbol maps and disc-derived native VU1 code generated")
 
 
+STAMP = ROOT / "build/disc.stamp"
+
+
+def stamp_key(iso_path: Path) -> str:
+    """Identity of everything `tz disc` produced: the ISO file, the extracted ELF and the generators."""
+    h = hashlib.sha256()
+    st = iso_path.stat()
+    h.update(f"{iso_path}:{st.st_size}:{st.st_mtime_ns}:{ELF_SHA1}".encode())
+    for p in [Path(__file__), ROOT / "config/SLES-50350.template.toml", *sorted((ROOT / "tools/vu").glob("*.py"))]:
+        h.update(p.name.encode())
+        h.update(p.read_bytes())
+    return h.hexdigest()
+
+
+def outputs_present() -> bool:
+    return all(p.exists() for p in (ELF, ENTRY_CSV, ROOT / "config/SLES-50350.symbolmap-entry.toml",
+                                   ROOT / "generated/vu1-disc-native/vu1rec_guarded.cpp"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("iso", type=Path, nargs="?", help="path to your own PAL disc image")
@@ -352,13 +371,23 @@ def main() -> int:
                 import pycdlib  # noqa: F401
             except ImportError:
                 raise Missing("pycdlib not installed -> ./tz setup")
+            custom_dest = args.dest.expanduser().resolve() != DEFAULT_DEST.resolve()
+            if not custom_dest and outputs_present() and STAMP.is_file() and STAMP.read_text().strip() == stamp_key(iso_path):
+                print("disc up to date: extracted/ and generated config match this ISO (delete build/disc.stamp to force)")
+                return 0
             if sha1_file(iso_path) != ISO_SHA1:
                 raise Fail(f"ISO SHA-1 mismatch for {iso_path.name}; expected Disney's Tarzan - Freeride (Europe), {ISO_SHA1}")
             verify_boot_elf_in_iso(iso_path)
             extract(iso_path, args.dest.expanduser().resolve(), args.report.expanduser().resolve())
+            if custom_dest:
+                print("--dest differs from extracted/disc: extracted only, config and VU1 generation skipped")
+                return 0
         elif not args.vu1_only and not ELF.is_file():
             raise Missing("extracted/disc/SLES_503.50 missing -> ./tz disc <iso>")
         configure(args.vu1_only)
+        if args.iso is not None and not args.vu1_only:
+            STAMP.parent.mkdir(parents=True, exist_ok=True)
+            STAMP.write_text(stamp_key(args.iso.expanduser().resolve()) + "\n")
     except Missing as exc:
         print(exc, file=sys.stderr)
         return 2

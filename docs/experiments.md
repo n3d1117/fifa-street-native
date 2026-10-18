@@ -30,8 +30,7 @@ four title-scoped hooks after regeneration. It never patches the disc. Use
 framebuffer changes, guest updates and displayed presents are distinct metrics.
 Diagnostic `TARZAN_EXPERIMENT_FPS=60|120` and `TARZAN_EXPERIMENT_HD=1` override only
 the current process. `TARZAN_EXPERIMENT_SCALE=1|2|3|4` selects an
-independent scale without saving preferences. `probe-first-level.py --user-dir <copied-saves> --play`
-provides a bounded first-mission movement/capture route, not whole-game proof.
+independent scale without saving preferences. `./tz run --route first-mission` runs a bounded new-game route to the first mission (evidence only, not whole-game proof).
 
 References: [PCSX2 PAL patches](https://github.com/PCSX2/pcsx2_patches/blob/main/patches/SLES-50350_368E1540.pnach),
 [KillzoneRecomp timing work](https://github.com/drakolordx7/KillzoneRecomp/blob/master/docs/findings.md),
@@ -87,7 +86,7 @@ zombie diagnostics reported no lifetime errors. Movie timing no longer
 accumulates late-frame shifts into its PTS epoch; late frames present promptly
 without discarding decoded frames or changing audio clocks.
 
-Repeatable routing: `probe-first-level.py --diagnostic-input --fast --keep-story`
+Repeatable routing: `./tz run --route first-mission` (the former `--fast --keep-story` variants were dropped)
 skips only the logo and exercises the real first-mission story using a bounded,
 process-local FIFO input path. It uses copied saves when supplied `--user-dir`,
 does not depend on desktop keyboard focus, and is disabled during normal play.
@@ -103,7 +102,7 @@ context. Prologue, caller and SetId instructions are verified against the ELF.
 `TARZAN_TRACE_CAMERA_CONTEXT=1` logs up to 64 distinct camera/dialog tuples for
 future scene diagnosis; it never selects cameras by transient heap addresses.
 
-Fresh-start diagnostics: `probe-first-level.py --new-game --user-dir <empty-dir>`
+Fresh-start diagnostics: `./tz run --route first-mission --user-dir <empty-dir>`
 creates a separate slot, fills the name through normal input, and enters the
 first Story mission. It rejects personal/nonempty save directories and the
 installed-launcher mode. `--fast --keep-story` retains the actual story movie;

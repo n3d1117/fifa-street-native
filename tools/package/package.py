@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""Build a self-contained, ad-hoc-signed macOS app bundle for the Metal runner."""
+"""Build a self-contained, ad-hoc-signed macOS app bundle for the Metal runner.
+
+Generates the icon, builds dist/Tarzan Freeride PS2.app, audits it (no disc image or game ELF outside
+Resources/game, no Mach-O with /Users, Downloads or tools/build paths, arm64 only) and with --install
+replaces /Applications/Tarzan Freeride PS2.app (previous copy goes to the Trash).
+"""
 import argparse
+from datetime import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 NATIVE = Path(os.environ.get("TARZAN_NATIVE_TOOLS_ROOT") or ROOT)
 RUNNER_DEFAULT = ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner"
 BRIDGE_DEFAULT = ROOT / "build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
@@ -117,14 +124,98 @@ def compile_launcher(destination):
     sdk = run(["xcrun", "--show-sdk-path"], capture=True).stdout.strip()
     run(["xcrun", "--find", "clang"], capture=True)
     run(["xcrun", "clang", "-fobjc-arc", "-O2", "-mmacosx-version-min=11.0",
-         "-isysroot", sdk, str(ROOT / "scripts/ps2-app-launcher.m"),
+         "-isysroot", sdk, str(ROOT / "tools/package/ps2-app-launcher.m"),
          "-framework", "Foundation", "-o", str(destination)])
     destination.chmod(0o755)
 
 
+def remove_tree(path):
+    def writable(func, p, _):
+        os.chmod(p, 0o700)
+        func(p)
+    for p in sorted(Path(path).rglob("*"), reverse=True):
+        if p.is_dir() and not p.is_symlink():
+            p.chmod(0o755)
+    shutil.rmtree(path, onerror=writable)
+
+
+def make_icon():
+    """Draw the project icon with native commands (no game artwork) into build/AppIcon.icns."""
+    build = ROOT / "build"
+    iconset = build / "AppIcon.iconset"
+    tool = build / "package-tools/make-icon"
+    png = build / "AppIcon-1024.png"
+    source = ROOT / "tools/package/make-icon.m"
+    if ICON_DEFAULT.is_file() and ICON_DEFAULT.stat().st_mtime >= source.stat().st_mtime:
+        return
+    tool.parent.mkdir(parents=True, exist_ok=True)
+    iconset.mkdir(parents=True, exist_ok=True)
+    run(["xcrun", "clang", "-fobjc-arc", "-framework", "AppKit", source, "-o", tool])
+    run([tool, png])
+    for size in (16, 32, 128, 256, 512):
+        run(["sips", "-z", size, size, png, "--out", iconset / f"icon_{size}x{size}.png"], capture=True)
+        run(["sips", "-z", size * 2, size * 2, png, "--out", iconset / f"icon_{size}x{size}@2x.png"], capture=True)
+    run(["iconutil", "-c", "icns", iconset, "-o", ICON_DEFAULT])
+
+
+MACHO_MAGIC = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+BAD_PATH = re.compile(r"/Users/|tools/build|[Dd]ownloads")
+
+
+def audit_bundle(app):
+    """Return a list of problems; empty means the bundle is clean."""
+    app = Path(app)
+    game = app / "Contents/Resources/game"
+    problems = []
+    for path in sorted(app.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        rel = path.relative_to(app)
+        if path.suffix.lower() == ".iso":
+            problems.append(f"disc image in bundle: {rel}")
+        if path.name.startswith("SLES_") and game not in path.parents:
+            problems.append(f"game ELF outside Resources/game: {rel}")
+        with open(path, "rb") as stream:
+            magic = stream.read(4)
+        if magic not in MACHO_MAGIC:
+            continue
+        archs = architectures(path)
+        if archs != ["arm64"]:
+            problems.append(f"{rel}: architectures {archs}, expected arm64 only")
+        for ref in dependencies(path) + rpaths(path):
+            if BAD_PATH.search(ref):
+                problems.append(f"{rel}: references {ref}")
+    return problems
+
+
+def install(source, applications):
+    source = Path(source).resolve(strict=True)
+    run(["codesign", "--verify", "--deep", "--strict", source])
+    destination = applications.resolve() / "Tarzan Freeride PS2.app"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup = None
+    if destination.exists():
+        backup = Path.home() / ".Trash" / ("Tarzan-PS2-before-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".app")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        destination.rename(backup)
+    try:
+        shutil.move(str(source), str(destination))
+        run(["codesign", "--verify", "--deep", "--strict", destination])
+    except Exception:
+        if backup and backup.exists() and not destination.exists():
+            backup.rename(destination)
+        raise
+    run(["/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+         "-f", destination])
+    print("Installed:", destination)
+    if backup:
+        print("Previous app is recoverable in Trash:", backup)
+
+
 def remove_nonbundle_rpaths(image):
     for entry in rpaths(image):
-        if entry.startswith("/") and not entry.startswith(("/System/Library/", "/usr/lib/")):
+        absolute = entry.startswith("/") and not entry.startswith(("/System/Library/", "/usr/lib/"))
+        if absolute or BAD_PATH.search(entry):  # also build-tree-relative entries such as @loader_path/../../tools/build
             run(["install_name_tool", "-delete_rpath", entry, image])
 
 
@@ -137,6 +228,9 @@ def main():
     parser.add_argument("--game-dir", type=Path, default=GAME_DEFAULT)
     parser.add_argument("--icon", type=Path, default=ICON_DEFAULT)
     parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
+    parser.add_argument("--install", action="store_true",
+                        help="move the audited bundle to /Applications (previous copy to the Trash)")
+    parser.add_argument("--applications", type=Path, default=Path("/Applications"))
     parser.add_argument("--prepare-only", action="store_true",
                         help="Create a visibly incomplete app scaffold without runner or 1 GB game assets")
     args = parser.parse_args()
@@ -145,9 +239,13 @@ def main():
         raise RuntimeError("App bundle packaging requires macOS")
     output = args.output.resolve()
     if output.exists():
-        raise RuntimeError("refusing to overwrite existing bundle: " + str(output))
+        if output.parent != OUTPUT_DEFAULT.parent:
+            raise RuntimeError("refusing to overwrite existing bundle: " + str(output))
+        remove_tree(output)  # dist/ holds only our own build product
+    if args.icon == ICON_DEFAULT:
+        make_icon()
     if not args.icon.is_file():
-        raise RuntimeError("custom icon is missing; run scripts/make-icon.sh: " + str(args.icon))
+        raise RuntimeError("custom icon is missing; run without --icon to generate it: " + str(args.icon))
     runner = args.runner.resolve()
     if not args.prepare_only and not runner.is_file():
         raise RuntimeError("Metal runner is not ready at the expected path; build it or pass --runner. Legacy build/game is never used.")
@@ -258,6 +356,15 @@ def main():
     run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", app])
     print("Prepared scaffold (incomplete)" if args.prepare_only else "Built Metal-linked app bundle; runtime qualification remains pending")
     print(output)
+    problems = [] if args.prepare_only else audit_bundle(output)
+    for problem in problems:
+        print("audit: " + problem, file=sys.stderr)
+    if problems:
+        raise RuntimeError(f"bundle audit failed ({len(problems)} problems); not installing")
+    if not args.prepare_only:
+        print("audit: clean")
+    if args.install:
+        install(output, args.applications)
     return 0
 
 
@@ -265,5 +372,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        print("package-ps2-app: " + str(error), file=sys.stderr)
+        print("package: " + str(error), file=sys.stderr)
         raise SystemExit(1)

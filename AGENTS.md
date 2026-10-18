@@ -1,6 +1,6 @@
 Keep this repository bring-your-own-disc: never track discs, extracted game data,
 generated game code, symbols, binaries, build products, saves, or captures.
-Use the allowlist and run `python3 scripts/check-repo-hygiene.py --staged` before
+Use the allowlist and run `python3 tools/check-repo-hygiene.py --staged` before
 each commit. Change upstream code in deps/<name> as commits, then `python3 tools/deps.py export`.
 
 Commit only reviewable checkpoints after checks appropriate to the change.

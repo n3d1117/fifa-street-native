@@ -7,7 +7,10 @@
   tz build                 recompiler if stale, generate if inputs changed, release build
   tz test                  ctest --preset tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run | package | where   not yet implemented (Phase 5b)
+  tz run [--seconds N] [--route first-mission] [--user-dir D] [--profile] [--app PATH]
+                           bounded run, isolated saves, summary block (tools/probe/probe.py)
+  tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
+  tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
 
 Full output goes to build/logs/<cmd>-<UTC>.log; -v streams it. Exit codes:
 0 pass, 1 check failed, 2 missing prerequisite (the message names the fix).
@@ -69,6 +72,8 @@ class Run:
         self.log = self.log_path.open("w")
         self.failed = []
         self.notes = []
+        self.shown_log = None   # log path to print instead of the command log
+        self.context = True
 
     def say(self, text):
         self.log.write(text + "\n")
@@ -114,9 +119,9 @@ class Run:
         print(f"{word} {self.name} {elapsed:.1f}s" + (f" - {message}" if message else ""))
         for note in self.notes:
             print(note)
-        if code == 1 and not self.verbose:
+        if code == 1 and not self.verbose and self.context:
             self.print_context()
-        print(f"log: {self.log_path.relative_to(ROOT)}")
+        print(f"log: {(self.shown_log or self.log_path).relative_to(ROOT)}")
         return code
 
     def print_context(self):
@@ -220,8 +225,12 @@ def cmd_disc(args):
     def body(run):
         if not args.iso:
             raise Missing("usage: ./tz disc <path-to-your-iso> (bring your own disc)")
-        run.must([tool_python(), "tools/disc.py", args.iso], "disc")
-        return "disc verified, extracted and configured"
+        cmd = [tool_python(), "tools/disc.py", args.iso]
+        if args.dest:
+            cmd += ["--dest", args.dest, "--report", str(Path(args.dest) / "disc-inventory.json")]
+        run.must(cmd, "disc")
+        last = run.last_message()
+        return last if last.startswith(("disc up to date", "--dest")) else "disc verified, extracted and configured"
     return run_command("disc", args, body)
 
 
@@ -295,7 +304,7 @@ FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_runtime\w*\.h|ps2_syscalls\
 def cmd_check(args):
     def body(run):
         mode = "--tracked" if args.tracked else "--staged"
-        run.must([sys.executable, "scripts/check-repo-hygiene.py", mode], "hygiene")
+        run.must([sys.executable, "tools/check-repo-hygiene.py", mode], "hygiene")
         if not args.tracked:
             staged = subprocess.run(["git", "diff", "--cached", "--name-only", "--", "patches"],
                                     capture_output=True, text=True).stdout.split()
@@ -318,9 +327,71 @@ def cmd_check(args):
     return run_command("check", args, body)
 
 
-def cmd_stub(args):
-    print(f"tz {args.cmd}: not yet implemented (Phase 5b)", file=sys.stderr)
-    return 2
+def fmt(value):
+    return "unknown" if value is None else value
+
+
+def cmd_run(args):
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = ROOT / "build/runs" / stamp
+
+    def body(run):
+        if args.app:
+            require(args.app, "./tz package --install")
+        else:
+            require(ELF, "./tz disc <iso>")
+            require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./tz build")
+        run.shown_log, run.context = out / "run.log", False
+        cmd = [sys.executable, "tools/probe/probe.py", "--out", out, "--route", args.route or "none"]
+        for flag, value in (("--seconds", args.seconds), ("--user-dir", args.user_dir), ("--app", args.app)):
+            if value:
+                cmd += [flag, value]
+        if args.profile:
+            cmd.append("--profile")
+        rc = run.sh(cmd)
+        if rc == 2:
+            raise Missing(run.last_message())
+        summary_path = out / "summary.json"
+        if not summary_path.is_file():
+            run.failed.append("probe")
+            raise Failed("probe produced no summary: " + run.last_message())
+        s = json.loads(summary_path.read_text())
+        crash = s["crash"]
+        stubs = ", ".join(f"{n} x{c}" for n, c in s["stubs"]) or "none"
+        run.notes += [f"reached: {s['reached']}", f"seconds: {s['seconds']:g}",
+                      f"fps_dispfb2: {fmt(s['fps_dispfb2'])}", f"presents_per_s: {fmt(s['presents_per_s'])}",
+                      f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
+                      "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
+                      f"stubs: {stubs}"]
+        if s["black_frames"]:
+            run.notes.append(f"black_frames: {s['black_frames']}")
+        if s["save_dir_changed"]:
+            run.failed.append("save dir changed")
+            run.notes.append("FAIL: the real save dir changed during the run")
+        if rc != 0:
+            run.failed.append(f"reached {s['reached']}, wanted {s['target']}")
+            raise Failed(f"reached {s['reached']} (wanted {s['target']})")
+        return f"reached {s['reached']}"
+    return run_command("run", args, body)
+
+
+def cmd_package(args):
+    def body(run):
+        if not args.install:
+            require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./tz build")
+        require(ELF, "./tz disc <iso>")
+        run.must([sys.executable, "tools/package/package.py"] + (["--install"] if args.install else []), "package")
+        lines = [l for l in run.log_path.read_text().splitlines() if l.startswith(("Installed:", "audit:", "/"))]
+        return "; ".join(lines[-2:]) or "bundle built"
+    return run_command("package", args, body)
+
+
+def cmd_where(args):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import where
+    code, lines = where.where(args.query)
+    print("\n".join(lines))
+    return 2 if code is None else code
 
 
 def main():
@@ -332,16 +403,26 @@ def main():
     d.set_defaults(fn=cmd_deps)
     d = sp.add_parser("disc")
     d.add_argument("iso", nargs="?")
+    d.add_argument("--dest", help="extract only, into this directory (leaves extracted/ and config untouched)")
     d.set_defaults(fn=cmd_disc)
     sp.add_parser("build").set_defaults(fn=cmd_build)
     sp.add_parser("test").set_defaults(fn=cmd_test)
     c = sp.add_parser("check")
     c.add_argument("--tracked", action="store_true")
     c.set_defaults(fn=cmd_check)
-    for name in ("run", "package", "where"):
-        s = sp.add_parser(name)
-        s.add_argument("rest", nargs="*")
-        s.set_defaults(fn=cmd_stub)
+    r = sp.add_parser("run")
+    r.add_argument("--seconds", type=int)
+    r.add_argument("--route", choices=["none", "first-mission"])
+    r.add_argument("--user-dir")
+    r.add_argument("--profile", action="store_true")
+    r.add_argument("--app")
+    r.set_defaults(fn=cmd_run)
+    k = sp.add_parser("package")
+    k.add_argument("--install", action="store_true")
+    k.set_defaults(fn=cmd_package)
+    w = sp.add_parser("where")
+    w.add_argument("query")
+    w.set_defaults(fn=cmd_where)
     argv = sys.argv[1:]
     verbose = any(a in ("-v", "--verbose") for a in argv)
     args, _extra = p.parse_known_args([a for a in argv if a not in ("-v", "--verbose")])

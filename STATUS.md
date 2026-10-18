@@ -36,7 +36,7 @@ Local sequence: `./tz setup`; supply a supported PAL disc with `./tz disc <iso>`
 the symbol map/config); then `./tz build` and `./tz test`. Older steps: 
 prepare the local toolchain under `tools/build` and dependencies; build the Metal
 bridge and game;
-generate the icon with `make-icon.sh`; package with `package-ps2-app.py`.
+package with `./tz package` (icon generation and bundle audit included).
 Setup is `python3 tools/deps.py sync`, `toolchain/bootstrap.sh` (CMake, Ninja,
 LLVM 19 into `tools/build`; set `TARZAN_LLVM` to reuse an existing LLVM 19) and
 `tools/build-deps.sh` (pkgconf, FFmpeg, Metal deps, bridge, SPU2; every

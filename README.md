@@ -6,7 +6,8 @@ Current: first-mission gameplay reached on macOS. EE code is statically recompil
 
 ```text
 host/              Cocoa window/input/audio + Metal GS adapter + CMake
-scripts/           packaging, probes, diagnostics (tz is the entry point; see `tz --help`)
+tools/probe/       native run probe, window capture/OCR helpers (`tz run`)
+tools/package/     app bundle, icon, install and bundle audit (`tz package`)
 patches/           Pinned upstream source changes and dependency manifest
 config/            Portable template; generated/local config stays untracked
 tests/             Focused native/runtime regression checks

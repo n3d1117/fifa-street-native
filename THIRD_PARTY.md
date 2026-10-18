@@ -19,4 +19,4 @@ The published frame-rate patch is an opt-in experiment, not a correctness claim.
 
 No disc, game executable, assets, game-derived generated code, symbol maps or
 prebuilt game app are distributed by this repository. The icon is generated
-from project drawing commands in `scripts/make-icon.m`, without game artwork.
+from project drawing commands in `tools/package/make-icon.m`, without game artwork.
