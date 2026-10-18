@@ -4,7 +4,8 @@
   tz setup                 deps sync, venv, toolchain bootstrap, tools/build-deps.sh
   tz deps [sync|export|status]
   tz disc <iso>            verify SHA-1s, extract, symbol map, config (tools/disc.py)
-  tz build                 recompiler if stale, generate if inputs changed, release build
+  tz build [--reconfigure] recompiler if stale, generate if inputs changed, release build
+                           (refuses, exit 2, if a build tree was configured from another path/case)
   tz test                  ctest --preset tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
   tz run [--seconds N] [--route first-mission] [--user-dir D] [--profile] [--app PATH]
@@ -20,6 +21,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -28,20 +30,27 @@ from pathlib import Path
 
 
 def resolve_root():
+    """Repo root with the on-disk case of every path component.
+
+    os.path.realpath keeps whatever case the caller typed on a case-insensitive
+    volume; F_GETPATH asks the kernel for the canonical spelling, which is what
+    clang compares #include paths against (-Wnonportable-include-path).
+    """
     root = Path(os.path.realpath(__file__)).parent
-    cache = root / "build/game-metal/CMakeCache.txt"
-    if cache.is_file():
-        for line in cache.read_text(errors="replace").splitlines():
-            if line.startswith("CMAKE_HOME_DIRECTORY"):
-                cached = Path(line.split("=", 1)[1])
-                if str(cached).casefold() == str(root).casefold():
-                    return cached
-                break
-    return root
+    try:
+        import fcntl
+        fd = os.open(root, os.O_RDONLY)
+        try:
+            return Path(fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024).split(b"\0")[0].decode())
+        finally:
+            os.close(fd)
+    except (OSError, AttributeError):
+        return root
 
 
 ROOT = resolve_root()
 os.chdir(ROOT)
+os.environ["PWD"] = str(ROOT)  # cmake and ninja take the source dir from $PWD, not getcwd()
 os.environ["TARZAN_ROOT"] = str(ROOT)
 CMAKE = ROOT / "tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 CTEST = CMAKE.with_name("ctest")
@@ -154,6 +163,36 @@ def configured(preset, build_dir):
     return (ROOT / build_dir / "CMakeCache.txt").is_file()
 
 
+BUILD_TREES = ["build/game-metal", "build/tests", "build/recompiler"]
+
+
+def stale_trees():
+    """Build trees whose cached source dir is not exactly ROOT (case-sensitive)."""
+    stale = []
+    for tree in BUILD_TREES:
+        cache = ROOT / tree / "CMakeCache.txt"
+        if not cache.is_file():
+            continue
+        for line in cache.read_text(errors="replace").splitlines():
+            if line.startswith("CMAKE_HOME_DIRECTORY"):
+                if line.split("=", 1)[1] != str(ROOT):
+                    stale.append(tree)
+                break
+    return stale
+
+
+def check_trees(run, reconfigure):
+    stale = stale_trees()
+    if not stale:
+        return
+    if not reconfigure:
+        raise Missing(f"{', '.join(stale)} configured from a different path than {ROOT} "
+                      "(case-sensitive) -> ./tz build --reconfigure")
+    for tree in stale:
+        run.say(f"reconfigure: wiping {tree}")
+        shutil.rmtree(ROOT / tree)
+
+
 def cmake_build(run, preset, build_dir):
     if not configured(preset, build_dir):
         run.must([cmake(), "--preset", preset], f"configure {preset}")
@@ -240,6 +279,7 @@ def cmd_build(args):
     def body(run):
         require(ELF, "./tz disc <iso>")
         require(GEN_CONFIG, "./tz disc <iso>")
+        check_trees(run, args.reconfigure)
         cmake_build(run, "recompiler", "build/recompiler")
         want = generate_inputs_hash()
         have = STAMP.read_text().strip() if STAMP.is_file() else ""
@@ -266,6 +306,7 @@ def parse_replay(text):
 
 def cmd_test(args):
     def body(run):
+        check_trees(run, False)
         cmake_build(run, "tests", "build/tests")
         rc = run.sh([str(CTEST), "--preset", "tests"])
         text = run.log_path.read_text(errors="replace")
@@ -411,7 +452,9 @@ def main():
     d.add_argument("iso", nargs="?")
     d.add_argument("--dest", help="extract only, into this directory (leaves extracted/ and config untouched)")
     d.set_defaults(fn=cmd_disc)
-    sp.add_parser("build").set_defaults(fn=cmd_build)
+    b = sp.add_parser("build")
+    b.add_argument("--reconfigure", action="store_true", help="wipe and reconfigure build trees configured from another path/case")
+    b.set_defaults(fn=cmd_build)
     sp.add_parser("test").set_defaults(fn=cmd_test)
     c = sp.add_parser("check")
     c.add_argument("--tracked", action="store_true")
