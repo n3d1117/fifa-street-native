@@ -76,6 +76,11 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 | 21 | Screen-space presented-frame interpolation between two guest frames in the Metal presenter (opt-in; one field of latency, HUD ghosting) as the alternative to raising the guest rate; per-object interpolation needs the game's matrix setup hooked (L) | smooth 50/60 Hz image at 25 FPS logic | M | medium (artifacts) |
 | 22 | User-supplied texture packs through PCSX2's GS hash-based replacement (dump, then load from the user's own folder; nothing shipped) | blurry tutorial cards, HD UI | S-M | low |
 | 23 | PGO for the runtime and host only (generated units unchanged; FP flags unchanged; profile is a local build product) | CPU | S-M | low |
+| 24 | Guest loads/stores: one-compare RDRAM fast path inline, everything else in cold `preserve_most` helpers (a compiled probe drops from about 60 instructions with a stack frame to about 13 without) | CPU | M | low (regeneration; replay and route gates) |
+| 25 | `SET_GPR_*` writes only the low 64 bits where the upper lanes are dead by construction (5-6 NEON instructions to one store) | CPU | S-M | low (batch the regeneration with 24) |
+| 26 | Direct `jal`: call through the function table with one slow-path check instead of the out-of-line `dispatchGuestBranch` (checkpoint, two lookups, thread-local history push) | CPU | M | medium (hooks and resume points must keep working) |
+| 27 | VU1 AOT: use the generator's existing normalization proof (`compute_norm`) in operand emission, and set FPCR.FZ inside the VU call; the replay corpus is the gate | VU1 cost | M | low (replay-gated) |
+| 28 | Hot-first symbol order file for generated code; then `preserve_none` plus `musttail` (both available in our clang 19 on arm64) if prologues still show in the profile | CPU | S-M | low |
 
 ### Tooling, power and build track
 
