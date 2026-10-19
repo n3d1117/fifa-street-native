@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 21:48:01 +0200
+Subject: [PATCH 64/64] MPEG GetPicture: repeat the nodata callback while it
+ supplies data without a picture
+
+libmpeg calls the input callback until a picture decodes. The HLE parked the
+caller after the first serviced callback, so a movie stalled after the first
+fragment. A callback that added no data still parks the caller.
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+index 5b4a1c46973be97f3505dd1add9f1470ef79c273..0aa1372bcc50be6857c03c2ba23bb580966c5067 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+@@ -508,6 +508,7 @@ namespace ps2_stubs
+             bool streamEnded = false;
+             bool decoderFailed = false;
+             bool nodataCallbackServiced = false;
++            bool addBsSinceNodata = false;
+             uint64_t cdStreamGeneration = 0u;
+             bool waitingForVideoSequenceHeader = true;
+             std::vector<uint8_t> videoSequenceSyncBuffer;
+@@ -2035,6 +2036,8 @@ namespace ps2_stubs
+             std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
+             MpegPlaybackState &playback = getPlaybackState(mpegAddr);
+             const size_t framesBefore = playback.decodedFrames.size();
++            if (byteCount)
++                playback.addBsSinceNodata = true;
+             while (copied < byteCount)
+             {
+                 const uint32_t curAddr = dataAddr + static_cast<uint32_t>(copied);
+@@ -2485,7 +2488,11 @@ namespace ps2_stubs
+                 runtime->guestFree(callbackData);
+                 {
+                     std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
+-                    getPlaybackState(mpegAddr).nodataCallbackServiced = true;
++                    MpegPlaybackState &pb = getPlaybackState(mpegAddr);
++                    // libmpeg repeats the nodata callback until a picture decodes;
++                    // only a callback that supplied no data parks the caller.
++                    pb.nodataCallbackServiced = !pb.addBsSinceNodata;
++                    pb.addBsSinceNodata = false;
+                 }
+                 sceMpegGetPicture(rdram, &parent, runtime);
+             };
+diff --git a/ps2xTest/src/ps2_runtime_expansion_tests.cpp b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
+index 92cf6237a4a6ca46a501804f62d48e7b54dc4010..77c36c86a6912b41a9d84120e873a09c32af048b 100644
+--- a/ps2xTest/src/ps2_runtime_expansion_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
+@@ -423,6 +423,22 @@ namespace
+         ctx->pc = 0u;
+     }
+ 
++    void testMpegFragmentedInputCallback(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const uint32_t call = ++gMpegInputCallbackCalls;
++        if (call < 3u)
++        {
++            setRegU32(*ctx, 5, 0x3000u);
++            setRegU32(*ctx, 6, 2u);
++            ps2_stubs::sceMpegAddBs(rdram, ctx, runtime);
++        }
++        else
++        {
++            ps2_stubs::notifyMpegCdStreamEof(runtime);
++        }
++        ctx->pc = 0u;
++    }
++
+     void testMpegWaitProducer(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         gMpegWaitStage.store(2u, std::memory_order_release);
+@@ -1373,6 +1389,39 @@ void register_ps2_runtime_expansion_tests()
+             t.Equals(gMpegWaitResult.load(), 0, "EOF resumes without inventing a decoded frame");
+         });
+ 
++        tc.Run("MPEG GetPicture requests more input while callbacks make progress without a picture", [](TestCase &t)
++        {
++            PS2Runtime runtime;
++            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
++            ps2_stubs::resetMpegStubState();
++            ps2_stubs::notifyMpegCdStreamStart();
++            runtime.registerFunction(kMpegWaitMainPc, testMpegWaitMain);
++            runtime.registerFunction(kMpegWaitResumePc, testMpegWaitResume);
++            runtime.registerFunction(kMpegWaitProducerPc, testMpegFragmentedInputCallback);
++            runtime.registerFunction(kMpegCallbackStopPc, testStopAfterMpegCallback);
++            gMpegInputCallbackCalls.store(0u);
++            gMpegWaitStage.store(0u);
++            gMpegWaitResult.store(-999);
++            R5900Context main{};
++            main.pc = kMpegWaitMainPc;
++            EeScheduler &ee = runtime.eeScheduler();
++            ee.reset(rdram.data(), main);
++            const int watchdog = ee.createThread(EeThreadCreateParams{
++                0u, kMpegCallbackStopPc, 0u, 0u, 0u, 10, 0u});
++            t.IsTrue(watchdog > 1, "a watchdog should bound a premature MPEG wait");
++            t.Equals(ee.startThread(watchdog, 0u, main, false), 0, "watchdog should become ready");
++            R5900Context registration{};
++            setRegU32(registration, 4, kMpegWaitHandle);
++            setRegU32(registration, 5, 1u);
++            setRegU32(registration, 6, kMpegWaitProducerPc);
++            ps2_stubs::sceMpegAddCallback(rdram.data(), &registration, &runtime);
++            ee.run();
++            t.Equals(gMpegInputCallbackCalls.load(), 3u,
++                     "GetPicture must request subsequent fragments until EOF rather than wait after the first");
++            t.Equals(gMpegWaitStage.load(), 3u, "the GetPicture caller should resume after input completes");
++            t.Equals(gMpegWaitResult.load(), 0, "EOF should complete without inventing a picture");
++        });
++
+         tc.Run("sceMpegGetPicture blocks as a typed scheduler wait and resumes on EOF", [](TestCase &t)
+         {
+             PS2Runtime runtime;
