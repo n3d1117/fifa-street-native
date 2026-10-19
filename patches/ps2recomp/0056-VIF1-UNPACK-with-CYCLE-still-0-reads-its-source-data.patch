@@ -1,0 +1,87 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 20:32:19 +0200
+Subject: [PATCH 56/57] VIF1: UNPACK with CYCLE still 0 reads its source data
+ consecutively (CL treated as WL); PS2X_TRACE_FAULTS logs the codes before an
+ invalid VIF1 code
+
+Evidence: the game sends UNPACK V4-32 before any STCYCL; with CL=0 the size calculation consumed 0 bytes, the float data was decoded as VIF code 0x45000000, ER1 stalled DMA1 and EA's DMA wait timed out into a fatal path.
+
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index 05ac32906b52570e90ee7e4a23b6bda49ffc32a3..0bf7aae107e87cd9de200037b503b83b26a57df5 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -792,6 +792,38 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+         // Track most-recent command for VIFn_CODE emulation.
+         vif1_regs.code = cmd;
+         vif1_regs.num = num;
++        {
++            // PS2X_TRACE_FAULTS=1: remember the last VIF1 codes so an ER1 can be explained.
++            static thread_local std::array<uint32_t, 24> recent{};
++            static thread_local size_t recentCount = 0;
++            recent[recentCount++ % recent.size()] = cmd;
++            static const bool trace = [] {
++                const char *value = std::getenv("PS2X_TRACE_FAULTS");
++                return value && std::strcmp(value, "1") == 0;
++            }();
++            const bool known = opcode == VIF_NOP || opcode == VIF_STCYCL || opcode == VIF_OFFSET || opcode == VIF_BASE ||
++                               opcode == VIF_ITOP || opcode == VIF_STMOD || opcode == VIF_MARK || opcode == VIF_FLUSHE ||
++                               opcode == VIF_FLUSH || opcode == VIF_FLUSHA || opcode == VIF_STMASK || opcode == VIF_STROW ||
++                               opcode == VIF_STCOL || opcode == VIF_MPG || opcode == VIF_DIRECT || opcode == VIF_DIRECTHL ||
++                               opcode == VIF_MSCAL || opcode == VIF_MSCNT || opcode == VIF_MSCALF || (opcode & 0x60u) == 0x60u ||
++                               opcode == VIF_MSKPATH3;
++            static std::atomic<uint32_t> reported{0u};
++            if (trace && !known && reported.fetch_add(1u) < 4u)
++            {
++                std::fprintf(stderr, "[vif1-er1] invalid code 0x%08x at byte %u of %u cycle=0x%04x mode=%u; previous codes (oldest first):", cmd, commandStart, sizeBytes, static_cast<unsigned>(vif1_regs.cycle), static_cast<unsigned>(vif1_regs.mode));
++                const size_t total = std::min(recentCount, recent.size());
++                for (size_t i = 0; i < total; ++i)
++                    std::fprintf(stderr, " %08x", recent[(recentCount - total + i) % recent.size()]);
++                std::fprintf(stderr, "\n[vif1-er1] bytes before:");
++                for (uint32_t b = commandStart >= 64u ? commandStart - 64u : 0u; b < commandStart; b += 4u)
++                {
++                    uint32_t word;
++                    std::memcpy(&word, data + b, 4);
++                    std::fprintf(stderr, " %08x", word);
++                }
++                std::fprintf(stderr, "\n");
++            }
++        }
+         if (opcode == VIF_NOP)
+         {
+             if (stallVif1ForIrq(*this, irq, opcode, data + pos, sizeBytes - pos))
+@@ -1038,6 +1070,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             uint32_t wl = (vif1_regs.cycle >> 8) & 0xFFu;
+             if (wl == 0u)
+                 wl = 256u;
++            // CYCLE left at 0 (no STCYCL yet): UNPACK reads and writes consecutively, like CL >= WL.
++            if (cl == 0u)
++                cl = wl;
+ 
+             uint32_t sourceVectorCount = writeVectorCount;
+             if (cl < wl)
+diff --git a/ps2xTest/src/ps2_vif_error_tests.cpp b/ps2xTest/src/ps2_vif_error_tests.cpp
+index 85fc95ad27450c90950410673c99b38af07aaf33..2edcd5b293f72d1d4775665efda5f4a29541acb5 100644
+--- a/ps2xTest/src/ps2_vif_error_tests.cpp
++++ b/ps2xTest/src/ps2_vif_error_tests.cpp
+@@ -33,6 +33,20 @@ void register_ps2_vif_error_tests()
+ {
+     MiniTest::Case("VIF1Error", [](TestCase &tc)
+     {
++        tc.Run("UNPACK with CYCLE still 0 consumes its source data instead of reading it as VIF codes", [](TestCase &t)
++        {
++            PS2Memory mem;
++            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
++            mem.m_ioRegisters[0x10009000u] = 0x100u; // Active VIF1 DMA: ER1 would stall.
++            std::vector<uint8_t> bytes;
++            appendWord(bytes, 0x6C020000u); // UNPACK V4-32, NUM=2, address 0, no STCYCL before it.
++            for (uint32_t i = 0; i < 8u; ++i)
++                appendWord(bytes, 0x45000000u); // 2048.0f: not a valid VIF code if misread.
++            appendWord(bytes, 0u);              // NOP
++            mem.processVIF1Data(bytes.data(), static_cast<uint32_t>(bytes.size()));
++            t.IsTrue((mem.vif1_regs.stat & kVifStatEr1) == 0u, "source data must not be decoded as VIF codes (no ER1)");
++        });
++
+         tc.Run("invalid opcode with I sets ER1 without IRQ and STC resumes tail", [](TestCase &t)
+         {
+             PS2Memory mem;

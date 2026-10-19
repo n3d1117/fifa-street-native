@@ -1,0 +1,206 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 20:32:19 +0200
+Subject: [PATCH 57/57] Runtime: HLE buffers live in a runtime arena heap below
+ the ELF, not the game's heap; state dump adds registers, DMA/VIF state and
+ PS2X_DUMP_MEM
+
+sceGsResetGraph and other HLE packets were allocated from the game's own heap (SetupHeap range) and overwrote EA allocator free lists, so its allocator spun forever. The arena (stacks 128 KiB, RPC pool 64 KiB, heap) is derived from the ELF's lowest PT_LOAD and tested.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_host_arena.h b/ps2xRuntime/include/runtime/ps2_host_arena.h
+index 838212c4dec4741fde5aead20aa50900381c95c9..f53a5a725e409278296173ef4a57faea7e20b9f9 100644
+--- a/ps2xRuntime/include/runtime/ps2_host_arena.h
++++ b/ps2xRuntime/include/runtime/ps2_host_arena.h
+@@ -33,31 +33,43 @@ struct PS2HostConfig
+ void ps2SetHostConfig(const PS2HostConfig &config);
+ const PS2HostConfig &ps2HostConfig();
+ 
+-// Kernel-side stacks for guest callbacks and interrupts: the highest 256 KiB (at least 64 KiB) of RDRAM
+-// below the lowest load segment and above the 0x80000 kernel-reserved floor, where no game ELF places
+-// data. Segments are half-open [begin, end). Returns false when no such range exists or any segment
+-// overlaps it; otherwise floor/top are 16-byte aligned and ready for ps2SetRuntimeArena(0, 0, floor, top).
+-inline bool ps2KernelStackArena(const std::vector<std::pair<uint32_t, uint32_t>> &loadSegments,
+-                                uint32_t &floor, uint32_t &top)
++// Kernel RAM the runtime owns: below the lowest load segment, where no game ELF places data and the
++// game's own heap and stack never reach. From the top down: callback/interrupt stacks (128 KiB), SIF RPC
++// packets (64 KiB), then the runtime heap used by HLE packets and buffers (the rest, at least 64 KiB, down
++// to the 0x10000 floor). Segments are half-open [begin, end). Returns false when the range does not fit or
++// a segment overlaps it. All bounds are 16-byte aligned.
++struct PS2KernelArena
+ {
+-    constexpr uint32_t kReservedFloor = 0x00080000u;
+-    constexpr uint32_t kMaxSize = 0x00040000u;
+-    constexpr uint32_t kMinSize = 0x00010000u;
++    uint32_t heapBase = 0, heapLimit = 0;
++    uint32_t rpcPoolBase = 0;
++    uint32_t stackFloor = 0, stackTop = 0;
++};
++
++inline bool ps2KernelArena(const std::vector<std::pair<uint32_t, uint32_t>> &loadSegments, PS2KernelArena &arena)
++{
++    constexpr uint32_t kFloor = 0x00010000u;
++    constexpr uint32_t kStackBytes = 0x00020000u;
++    constexpr uint32_t kRpcPoolBytes = 0x00010000u;
++    constexpr uint32_t kMinHeapBytes = 0x00010000u;
+     if (loadSegments.empty())
+         return false;
+     uint32_t lowest = 0xFFFFFFFFu;
+     for (const auto &segment : loadSegments)
+         lowest = std::min(lowest, segment.first);
+-    const uint32_t newTop = lowest & ~0xFu;
+-    if (newTop < kReservedFloor + kMinSize)
++    const uint32_t top = lowest & ~0xFu;
++    if (top < kFloor + kStackBytes + kRpcPoolBytes + kMinHeapBytes)
+         return false;
+-    const uint32_t newFloor = std::max(kReservedFloor, newTop - kMaxSize);
++    PS2KernelArena next;
++    next.stackTop = top;
++    next.stackFloor = top - kStackBytes;
++    next.rpcPoolBase = next.stackFloor - kRpcPoolBytes;
++    next.heapLimit = next.rpcPoolBase;
++    next.heapBase = kFloor;
+     for (const auto &segment : loadSegments)
+     {
+-        if (segment.second > newFloor && segment.first < newTop)
++        if (segment.second > next.heapBase && segment.first < top)
+             return false;
+     }
+-    floor = newFloor;
+-    top = newTop;
++    arena = next;
+     return true;
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 96ab24468965bbef20136b905cd748d07bbcbc4a..4159549bdc6edb6f68da51151c6b0613845d1cc8 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2054,7 +2054,9 @@ void PS2Runtime::configureGuestHeap(uint32_t guestBase, uint32_t guestLimit)
+     if (m_guestSetupHeapLimit <= m_guestSetupHeapBase)
+         m_guestSetupHeapBase = m_guestSetupHeapLimit = 0u;
+     m_guestSetupHeapConfigured = true;
+-    resetGuestHeapLocked(normalizedBase, guestLimit);
++    // The game's own heap (SetupHeap) belongs to the game's libc; HLE buffers stay in the runtime arena when there is one.
++    if (!(g_arenaHeapLimit > g_arenaHeapBase))
++        resetGuestHeapLocked(normalizedBase, guestLimit);
+ }
+ 
+ uint32_t PS2Runtime::guestMalloc(uint32_t size, uint32_t alignment)
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index c6d8f6592d0a5745c0c19807316442926b3da58a..9e427c48a6ec4c0556cc1f9d2859927934ef2c05 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -11,6 +11,8 @@
+ #include <csignal>
+ #include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#include <iomanip>
+ #include <map>
+ #include <sstream>
+ #include <thread>
+@@ -81,6 +83,15 @@ void dumpState(PS2Runtime &runtime)
+     for (const EeEventFlagSnapshot &f : ee.eventFlags)
+         out << "ee eventflag id=" << f.id << std::hex << " bits=0x" << f.bits << std::dec << " waiters=" << f.waiters << "\n";
+ 
++    if (const R5900Context *ctx = runtime.eeScheduler().currentContext())
++    {
++        static const char *names[] = {"zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
++                                      "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
++        out << "ee regs pc=0x" << std::hex << ctx->pc;
++        for (int r = 2; r < 32; ++r)
++            out << ' ' << names[r] << "=" << static_cast<uint32_t>(_mm_extract_epi32(ctx->r[r], 0));
++        out << std::dec << "\n";
++    }
+     std::vector<std::pair<uint32_t, uint32_t>> top(histogram.begin(), histogram.end());
+     std::sort(top.begin(), top.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+     out << "ee pc samples=" << samples << ":";
+@@ -88,6 +99,52 @@ void dumpState(PS2Runtime &runtime)
+         out << std::hex << " 0x" << top[i].first << "x" << std::dec << top[i].second;
+     out << "\n";
+ 
++    // DMA channels (CHCR bits 28-30 are the last DMAtag id) and the global DMA registers.
++    {
++        static const uint32_t bases[] = {0x10008000u, 0x10009000u, 0x1000A000u, 0x1000B000u, 0x1000B400u,
++                                         0x1000C000u, 0x1000C400u, 0x1000C800u, 0x1000D000u, 0x1000D400u};
++        for (int ch = 0; ch < 10; ++ch)
++        {
++            auto &mem = runtime.memory();
++            out << "dma" << std::dec << ch << std::hex << " chcr=0x" << mem.readIORegister(bases[ch])
++                << " madr=0x" << mem.readIORegister(bases[ch] + 0x10u) << " qwc=0x" << mem.readIORegister(bases[ch] + 0x20u)
++                << " tadr=0x" << mem.readIORegister(bases[ch] + 0x30u) << "\n";
++        }
++        auto &m = runtime.memory();
++        out << std::hex << "vif0 stat=0x" << m.readIORegister(0x10003800u) << " vif1 stat=0x" << m.readIORegister(0x10003C00u)
++            << " fbrst=0x" << m.readIORegister(0x10003C10u) << " err=0x" << m.readIORegister(0x10003C20u)
++            << " mark=0x" << m.readIORegister(0x10003C30u) << " code=0x" << m.readIORegister(0x10003C80u)
++            << " gif stat=0x" << m.readIORegister(0x10003020u) << " ctrl=0x" << m.readIORegister(0x10003000u) << "\n";
++        out << "dma ctrl=0x" << runtime.memory().readIORegister(0x1000E000u) << " stat=0x"
++            << runtime.memory().readIORegister(0x1000E010u) << std::dec << "\n";
++    }
++
++    // PS2X_DUMP_MEM=<hexaddr>:<words>[,<hexaddr>:<words>...] adds raw EE words (aligned, rdram only).
++    if (const char *spec = std::getenv("PS2X_DUMP_MEM"))
++    {
++        std::istringstream list(spec);
++        std::string item;
++        while (std::getline(list, item, ','))
++        {
++            const size_t colon = item.find(':');
++            if (colon == std::string::npos)
++                continue;
++            const uint32_t base = static_cast<uint32_t>(std::strtoul(item.c_str(), nullptr, 16)) & ~3u;
++            const uint32_t words = std::min<uint32_t>(static_cast<uint32_t>(std::strtoul(item.c_str() + colon + 1, nullptr, 10)), 256u);
++            const uint8_t *rdram = runtime.memory().getRDRAM();
++            for (uint32_t i = 0; i < words; ++i)
++            {
++                if (i % 4u == 0u)
++                    out << (i ? "\n" : "") << "mem 0x" << std::hex << base + i * 4u << ":";
++                uint32_t word = 0;
++                if (base + i * 4u + 4u <= PS2_RAM_SIZE)
++                    std::memcpy(&word, rdram + base + i * 4u, 4);
++                out << ' ' << std::setw(8) << std::setfill('0') << word << std::setfill(' ');
++            }
++            out << std::dec << "\n";
++        }
++    }
++
+     const ps2x::iop::DebugSnapshot iop = runtime.iopDebugSnapshot();
+     out << "iop cycles=" << iop.emulatorCycles << " instructions=" << iop.emulatorInstructions
+         << " modules=" << iop.emulatorLoadedModules << " threads=" << iop.emulatorThreads
+diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+index 67018066e489cc123eb74c70c889b2e0774c02f3..e043f67a9bb8e5ff0a189ec7632aeb323cffc4bf 100644
+--- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+@@ -1264,19 +1264,21 @@ void register_ps2_runtime_kernel_tests()
+             std::filesystem::remove_all(root, removeError);
+         });
+ 
+-        tc.Run("kernel stack arena sits below every load segment and clear of the game stack and heap", [](TestCase &t)
++        tc.Run("kernel arena sits below every load segment and clear of the game stack and heap", [](TestCase &t)
+         {
+-            uint32_t floor = 0u, top = 0u;
++            PS2KernelArena arena;
+             // FIFA Street: one PT_LOAD 0x100000..0x57E900, SetupThread stack 0x1FF0000..0x2000000, heap 0x57E900..
+-            t.IsTrue(ps2KernelStackArena({{0x00100000u, 0x0057E900u}}, floor, top), "arena exists below the ELF");
+-            t.Equals(top, 0x00100000u, "arena ends at the lowest load address");
+-            t.Equals(floor, 0x000C0000u, "arena is 256 KiB");
+-            t.IsTrue(top <= 0x00100000u && floor >= 0x00080000u, "arena avoids the ELF and the kernel-reserved floor");
+-            t.IsTrue(top <= 0x0057E900u && top <= 0x01FF0000u, "arena is clear of the game heap and stack");
+-
+-            t.IsTrue(!ps2KernelStackArena({{0x00084000u, 0x00200000u}}, floor, top), "too little room below the ELF is refused");
+-            t.IsTrue(!ps2KernelStackArena({}, floor, top), "no segments is refused");
+-            t.IsTrue(ps2KernelStackArena({{0x00300000u, 0x00400000u}, {0x00100000u, 0x00200000u}}, floor, top) && top == 0x00100000u,
++            t.IsTrue(ps2KernelArena({{0x00100000u, 0x0057E900u}}, arena), "arena exists below the ELF");
++            t.Equals(arena.stackTop, 0x00100000u, "stacks end at the lowest load address");
++            t.Equals(arena.stackFloor, 0x000E0000u, "128 KiB of callback stacks");
++            t.Equals(arena.rpcPoolBase, 0x000D0000u, "64 KiB RPC packet pool below the stacks");
++            t.Equals(arena.heapLimit, 0x000D0000u, "runtime heap ends at the pool");
++            t.Equals(arena.heapBase, 0x00010000u, "runtime heap starts at the floor");
++            t.IsTrue(arena.stackTop <= 0x0057E900u && arena.stackTop <= 0x01FF0000u, "arena is clear of the game heap and stack");
++
++            t.IsTrue(!ps2KernelArena({{0x00040000u, 0x00200000u}}, arena), "too little room below the ELF is refused");
++            t.IsTrue(!ps2KernelArena({}, arena), "no segments is refused");
++            t.IsTrue(ps2KernelArena({{0x00300000u, 0x00400000u}, {0x00100000u, 0x00200000u}}, arena) && arena.stackTop == 0x00100000u,
+                      "the lowest of several segments bounds the arena");
+         });
+ 

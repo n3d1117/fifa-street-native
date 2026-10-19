@@ -1,0 +1,261 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 20:32:19 +0200
+Subject: [PATCH 55/57] Discovery: code pointers in data sections (runs of two
+ or more, or a lone pointer at a prologue) and lui/addiu address pairs are
+ entry points
+
+FIFA Street's vtables hold leaf functions no JAL reaches (0x3d10d8 starts with lui); an indirect call there hit guest-branch:missing-target. Test: a data word at a prologue and an adjacent run of pointers are registered, an unaligned word is not.
+
+diff --git a/ps2xRecomp/include/ps2recomp/ps2_recompiler.h b/ps2xRecomp/include/ps2recomp/ps2_recompiler.h
+index dd622753fed37284263325b33132fd9d706b47b0..856609833407b71c49334af7b56d690ba9adef3e 100644
+--- a/ps2xRecomp/include/ps2recomp/ps2_recompiler.h
++++ b/ps2xRecomp/include/ps2recomp/ps2_recompiler.h
+@@ -84,6 +84,7 @@ namespace ps2recomp
+         bool isCorrectnessCriticalFunction(const Function &function) const;
+         bool hasResolvedStubHandler(const Function &function) const;
+         void collectCorrectnessCriticalFunctionStarts();
++        void collectDataPointerEntryStarts();
+         bool generateFunctionHeader();
+         bool generateStubHeader();
+         bool writeToFile(const std::string &path, const std::string &content);
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index a2336cc77bfe36c4380d6d3a3b6a9712504503b9..137701d6df323bac8f53b4e049da33a4edaa9dbd 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -919,6 +919,7 @@ namespace ps2recomp
+             m_sections = m_elfParser->getSections();
+             m_relocations = m_elfParser->getRelocations();
+             collectCorrectnessCriticalFunctionStarts();
++            collectDataPointerEntryStarts();
+ 
+             if (m_functions.empty())
+             {
+@@ -2377,6 +2378,123 @@ namespace ps2recomp
+         }
+     }
+ 
++    // Vtables, callback tables and jump tables in data hold code addresses no JAL reaches. A word in a
++    // data section that points at 4-aligned code and lands on a function prologue (addiu sp,sp,-N) or a
++    // leaf return (jr ra) is an indirect-call target; seed it so dispatch finds it.
++    void PS2Recompiler::collectDataPointerEntryStarts()
++    {
++        uint32_t codeBegin = std::numeric_limits<uint32_t>::max();
++        uint32_t codeEnd = 0u;
++        for (const Section &section : m_sections)
++        {
++            if (section.isCode && section.size != 0u)
++            {
++                codeBegin = std::min(codeBegin, section.address);
++                codeEnd = std::max(codeEnd, section.address + section.size);
++            }
++        }
++        if (codeBegin >= codeEnd)
++            return;
++
++        size_t seeded = 0u;
++        for (const Section &section : m_sections)
++        {
++            if (section.isCode || section.isBSS || section.data == nullptr || section.size < sizeof(uint32_t))
++                continue;
++            if (section.name != ".data" && section.name != ".rodata" && section.name != ".sdata" &&
++                section.name != ".ctors" && section.name != ".init_array")
++                continue;
++            // A run of two or more adjacent code pointers is a vtable or callback table: accept every entry.
++            // A lone code pointer must land on a function prologue or a leaf return.
++            const uint32_t wordCount = section.size / static_cast<uint32_t>(sizeof(uint32_t));
++            std::vector<uint32_t> values(wordCount);
++            std::memcpy(values.data(), section.data, static_cast<size_t>(wordCount) * sizeof(uint32_t));
++            const auto isCodePointer = [&](uint32_t value)
++            { return value >= codeBegin && value < codeEnd && (value & 3u) == 0u; };
++            for (uint32_t i = 0; i < wordCount; ++i)
++            {
++                const uint32_t target = values[i];
++                if (!isCodePointer(target))
++                    continue;
++                const bool inRun = (i > 0u && isCodePointer(values[i - 1u])) || (i + 1u < wordCount && isCodePointer(values[i + 1u]));
++                bool accept = inRun;
++                if (!accept)
++                {
++                    uint32_t word = 0u;
++                    try
++                    {
++                        word = m_elfParser->readWord(target);
++                    }
++                    catch (const std::exception &)
++                    {
++                        continue;
++                    }
++                    accept = ((word >> 16) == 0x27BDu && (word & 0x8000u) != 0u) || word == 0x03E00008u;
++                }
++                if (accept && m_entryPointHintStarts.insert(target).second)
++                    ++seeded;
++            }
++        }
++
++        // Callbacks passed by address: lui rt,hi followed within a few instructions by addiu/ori rt,rt,lo.
++        const auto looksLikeFunctionStart = [&](uint32_t target) -> bool
++        {
++            if (target < codeBegin || target >= codeEnd || (target & 3u) != 0u)
++                return false;
++            try
++            {
++                const uint32_t word = m_elfParser->readWord(target);
++                return ((word >> 16) == 0x27BDu && (word & 0x8000u) != 0u) || word == 0x03E00008u;
++            }
++            catch (const std::exception &)
++            {
++                return false;
++            }
++        };
++        for (const Section &section : m_sections)
++        {
++            if (!section.isCode || section.data == nullptr || section.size < 8u)
++                continue;
++            const uint32_t words = section.size / 4u;
++            for (uint32_t i = 0; i + 1u < words; ++i)
++            {
++                uint32_t lui = 0u;
++                std::memcpy(&lui, section.data + i * 4u, 4);
++                if ((lui >> 26) != 0x0Fu)
++                    continue;
++                const uint32_t rt = (lui >> 16) & 0x1Fu;
++                const uint32_t high = (lui & 0xFFFFu) << 16;
++                for (uint32_t j = i + 1u; j < words && j <= i + 6u; ++j)
++                {
++                    uint32_t next = 0u;
++                    std::memcpy(&next, section.data + j * 4u, 4);
++                    const uint32_t op = next >> 26;
++                    if ((op == 0x09u || op == 0x0Du) && ((next >> 21) & 0x1Fu) == rt && ((next >> 16) & 0x1Fu) == rt)
++                    {
++                        const uint32_t low = next & 0xFFFFu;
++                        const uint32_t target = op == 0x09u ? high + static_cast<uint32_t>(static_cast<int16_t>(low)) : (high | low);
++                        if (looksLikeFunctionStart(target) && m_entryPointHintStarts.insert(target).second)
++                            ++seeded;
++                        break;
++                    }
++                    // Stop at anything that overwrites rt or ends the straight-line window.
++                    if (((next >> 11) & 0x1Fu) == rt && op == 0u)
++                        break;
++                    if (op >= 0x01u && op <= 0x07u)
++                        break;
++                    if (op != 0u && ((next >> 16) & 0x1Fu) == rt && op >= 0x08u && op <= 0x2Fu)
++                        break;
++                }
++            }
++        }
++        if (seeded != 0u)
++        {
++            std::ostringstream msg;
++            msg << "seeded " << seeded << " code pointer(s) found in data sections and lui/addiu pairs as entry points";
++            m_reporter.progress(msg.str());
++        }
++    }
++
+     bool PS2Recompiler::writeToFile(const std::string &path, const std::string &content)
+     {
+         std::ofstream file(path);
+diff --git a/ps2xTest/src/ps2_recompiler_tests.cpp b/ps2xTest/src/ps2_recompiler_tests.cpp
+index fbaf1dbbb998923b5800d8294a3cce75d4b53753..f7b7d853e94923861a1d3fd02a6528754469384a 100644
+--- a/ps2xTest/src/ps2_recompiler_tests.cpp
++++ b/ps2xTest/src/ps2_recompiler_tests.cpp
+@@ -247,6 +247,55 @@ static bool writeMinimalMipsElfWithReginfo(const std::filesystem::path &elfPath,
+     return writer.save(elfPath.string());
+ }
+ 
++static bool writeMinimalMipsElfWithDataCodePointer(const std::filesystem::path &elfPath)
++{
++    ELFIO::elfio writer;
++    writer.create(ELFIO::ELFCLASS32, ELFIO::ELFDATA2LSB);
++    writer.set_os_abi(ELFIO::ELFOSABI_NONE);
++    writer.set_type(ELFIO::ET_EXEC);
++    writer.set_machine(ELFIO::EM_MIPS);
++    writer.set_entry(0x00100000u);
++
++    ELFIO::section *text = writer.sections.add(".text");
++    text->set_type(ELFIO::SHT_PROGBITS);
++    text->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_EXECINSTR);
++    text->set_addr_align(4);
++    text->set_address(0x00100000u);
++    const std::array<uint32_t, 12> textWords = {
++        0x03E00008u, 0x00000000u, // known function at 0x00100000
++        0x00000000u, 0x00000000u,
++        0x27BDFFF0u, 0x00000000u, // 0x00100010: addiu sp,sp,-16, only a vtable reaches it
++        0x27BD0010u, 0x03E00008u, // addiu sp,sp,16 ; jr ra
++        0x00000000u, 0x00000000u,
++        0x03E00008u, 0x00000000u,
++    };
++    text->set_data(reinterpret_cast<const char *>(textWords.data()),
++                   static_cast<ELFIO::Elf_Word>(textWords.size() * sizeof(uint32_t)));
++
++    ELFIO::section *data = writer.sections.add(".data");
++    data->set_type(ELFIO::SHT_PROGBITS);
++    data->set_flags(ELFIO::SHF_ALLOC | ELFIO::SHF_WRITE);
++    data->set_addr_align(4);
++    data->set_address(0x00200000u);
++    const std::array<uint32_t, 6> dataWords = {0x00100010u, 0x00100003u /* unaligned: ignored */, 0x00000042u, 0u,
++                                               0x00100020u, 0x00100024u /* a vtable-like run: no prologue needed */};
++    data->set_data(reinterpret_cast<const char *>(dataWords.data()),
++                   static_cast<ELFIO::Elf_Word>(dataWords.size() * sizeof(uint32_t)));
++
++    ELFIO::segment *textSegment = writer.segments.add();
++    textSegment->set_type(ELFIO::PT_LOAD);
++    textSegment->set_flags(ELFIO::PF_R | ELFIO::PF_X);
++    textSegment->set_align(0x1000);
++    textSegment->add_section_index(text->get_index(), text->get_addr_align());
++    ELFIO::segment *dataSegment = writer.segments.add();
++    dataSegment->set_type(ELFIO::PT_LOAD);
++    dataSegment->set_flags(ELFIO::PF_R | ELFIO::PF_W);
++    dataSegment->set_align(0x1000);
++    dataSegment->add_section_index(data->get_index(), data->get_addr_align());
++
++    return writer.save(elfPath.string());
++}
++
+ static bool writeMinimalMipsElfWithUnmappedEntryHint(const std::filesystem::path &elfPath,
+                                                      uint32_t firstWord = 0x03E00008u)
+ {
+@@ -1541,6 +1590,43 @@ void register_ps2_recompiler_tests()
+             std::filesystem::remove_all(tempRoot, removeError);
+         });
+ 
++        tc.Run("a code pointer in a data section is seeded as an entry point", [](TestCase &t) {
++            const std::string uniqueSuffix =
++                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
++            const std::filesystem::path tempRoot =
++                std::filesystem::temp_directory_path() / ("ps2recomp-dataptr-" + uniqueSuffix);
++            const std::filesystem::path elfPath = tempRoot / "dataptr.elf";
++            const std::filesystem::path configPath = tempRoot / "dataptr.toml";
++            const std::filesystem::path outputPath = tempRoot / "output";
++            std::filesystem::create_directories(tempRoot);
++
++            const bool elfWritten = writeMinimalMipsElfWithDataCodePointer(elfPath);
++            const bool configWritten = writeRecompilerTestConfig(configPath, elfPath, outputPath, {});
++            t.IsTrue(elfWritten && configWritten, "data pointer regression inputs should be generated");
++
++            if (elfWritten && configWritten)
++            {
++                PS2Recompiler recompiler(configPath.string());
++                t.IsTrue(recompiler.initialize(), "data pointer config should initialize");
++                t.IsTrue(recompiler.recompile(), "data pointer ELF should recompile");
++                recompiler.generateOutput();
++
++                std::ifstream registrationFile(outputPath / "register_functions.cpp");
++                const std::string registration{
++                    std::istreambuf_iterator<char>(registrationFile),
++                    std::istreambuf_iterator<char>()};
++                t.IsTrue(registration.find("// 0x100010") != std::string::npos,
++                         "the prologue a data word points at must be registered for guest dispatch");
++                t.IsTrue(registration.find("// 0x100020") != std::string::npos,
++                         "an adjacent run of code pointers is a table: every entry is a target");
++                t.IsTrue(registration.find("// 0x100003") == std::string::npos,
++                         "an unaligned data word is not a function");
++            }
++
++            std::error_code removeError;
++            std::filesystem::remove_all(tempRoot, removeError);
++        });
++
+         tc.Run("standalone entry_ blocks register resume points for their JAL return addresses", [](TestCase &t) {
+             const std::string uniqueSuffix =
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());

@@ -249,13 +249,12 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         // neither slow it down nor accelerate audio during movie playback.
         hostConfig.wallClock = host::active_settings().wallClock;
         ps2SetHostConfig(hostConfig);
-        // Callback and interrupt stacks live in kernel RAM below the ELF, never on the game's stack or heap.
-        uint32_t kernelStackFloor = 0, kernelStackTop = 0;
-        if (!ps2KernelStackArena(elfLoadSegments(elfPath), kernelStackFloor, kernelStackTop))
-            throw std::runtime_error("No kernel stack range below the ELF's load segments");
-        // The first 64 KiB of the arena hold SIF RPC packets; the callback stacks take the rest.
-        ps2SetRpcPacketPoolBase(kernelStackFloor);
-        ps2SetRuntimeArena(0u, 0u, kernelStackFloor + 0x10000u, kernelStackTop);
+        // Runtime-owned RAM (callback stacks, RPC packets, HLE buffers) lives below the ELF, never in the game's heap or stack.
+        PS2KernelArena arena;
+        if (!ps2KernelArena(elfLoadSegments(elfPath), arena))
+            throw std::runtime_error("No kernel RAM range below the ELF's load segments");
+        ps2SetRpcPacketPoolBase(arena.rpcPoolBase);
+        ps2SetRuntimeArena(arena.heapBase, arena.heapLimit, arena.stackFloor, arena.stackTop);
         // Never destroyed: teardown order of the runtime's threads is not worth
         // risking after the window is gone; the process exits right after.
         PS2Runtime &runtime = *new PS2Runtime;
