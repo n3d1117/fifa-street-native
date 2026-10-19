@@ -123,6 +123,10 @@ def main(argv):
     # `git am` needs a committer identity; fall back so it works without global config.
     os.environ.setdefault('GIT_COMMITTER_NAME', 'tarzan-deps')
     os.environ.setdefault('GIT_COMMITTER_EMAIL', 'deps@localhost')
+    # Run from a hook (`git commit -a` -> pre-commit -> tz check), these point at the main
+    # repo's temporary index and would make every deps/<x> checkout read the wrong index.
+    for var in ('GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_PREFIX'):
+        os.environ.pop(var, None)
     try:
         lock = read_lock()
     except (OSError, ValueError) as e:
