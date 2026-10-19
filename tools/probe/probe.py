@@ -175,24 +175,31 @@ def write_run_settings(user_dir, *, skip_logos=False, fps_target=None, unlock_mi
 
 
 def gameplay_start(samples, target=25):
-    low, high = max(15, min(target * 0.6, 36)), min(65, target * 1.1)
-    valid = [(t, fps) for t, fps in samples if low <= fps <= high]
-    return next((valid[i][0] for i in range(len(valid) - 1)
-                 if valid[i + 1][0] - valid[i][0] <= 10
-                 and abs(valid[i + 1][1] - valid[i][1]) <= target * 0.25), None)
+    return next((samples[i][0] for i in range(len(samples) - 1)
+                 if samples[i + 1][0] - samples[i][0] <= 10
+                 and abs(samples[i + 1][1] - samples[i][1]) <= target * 0.25), None)
 
 
 def gameplay_fps(samples, target=25, window_seconds=60):
-    """Average periodic DISPFB2 samples from a stable, movie-free gameplay window."""
-    if not samples:
-        return None
-    low, high = max(15, min(target * 0.6, 36)), min(65, target * 1.1)
-    valid = [(t, fps) for t, fps in samples if low <= fps <= high]
+    """Average periodic DISPFB2 samples from a stable, movie-free window of the confirmed playable scene."""
     start = gameplay_start(samples, target)
     if start is None:
         return None
-    window = [fps for t, fps in valid if start <= t <= start + window_seconds]
+    window = [fps for t, fps in samples if start <= t <= start + window_seconds]
     return round(sum(window) / len(window), 1) if window else None
+
+
+def scene_check(cap, pid, press):
+    """One OCR frame of the live window: tutorial-card (pressing cross to dismiss it), playable or unknown."""
+    lines = cap.grab(pid)
+    if lines is None:
+        return "unknown"
+    good = [l for l in lines if l.get("confidence", 0) >= 0.45 and "native" not in l.get("text", "").casefold()]
+    kind = screen_kind([l["text"].strip().casefold() for l in good], good)
+    if kind == "popup":
+        press()
+        return "tutorial-card"
+    return "playable" if kind == "other" else "unknown"
 
 
 def crash_from(text, returncode, killed_by_us):
@@ -840,6 +847,7 @@ def main():
     next_ocr, profiled = 0.0, None
     route_i, route_delay, seen_len = 0, 0.0, 0
     scan_pos, active_movie, gameplay_samples = 0, False, []
+    scene, scene_seen, scene_ok_at, scene_ok, next_scene = None, None, None, 0, 0.0
     try:
         while time.monotonic() < deadline and not child_exited(exit_watch):
             now = time.monotonic() - started
@@ -853,9 +861,22 @@ def main():
                     active_movie = False
                 pm = PERIODIC_RE.search(line)
                 if pm and not active_movie and float(pm[4]) <= 10 and (not route or route_i == len(route)):
-                    rate = float(pm[3])
-                    if 20 <= rate <= 65:
-                        gameplay_samples.append((time.monotonic() - started, rate))
+                    t = time.monotonic() - started
+                    if route and scene_ok_at is None and scene_seen is None:
+                        scene_seen = t  # first movie-free sample after the route: start checking the scene
+                    elif not route or (scene_ok_at is not None and t - float(pm[4]) >= scene_ok_at):
+                        gameplay_samples.append((t, float(pm[3])))
+            if route and scene_seen is not None and scene_ok_at is None and now >= next_scene:
+                scene = scene_check(cap, proc.pid, lambda: send_key(7))
+                next_scene = now + 1.0
+                if scene == "playable":
+                    scene_ok += 1
+                    if scene_ok == 2:
+                        scene_ok_at = now
+                else:
+                    scene_ok = 0
+                if scene_ok_at is None and now - scene_seen > 60:
+                    scene_ok_at = now  # report the scene that blocked confirmation and measure anyway
             window_seconds = 60 if args.measure else 20
             steady_start = gameplay_start(gameplay_samples, args.fps_target or 25)
             if route and steady_start is not None and now >= steady_start + window_seconds:
@@ -957,6 +978,7 @@ def main():
         "reached": reached, "target": target, "seconds": elapsed,
         "fps_gameplay": gameplay_fps(gameplay_samples, args.fps_target or 25,
                                      60 if args.measure else 20),
+        "scene": scene if not route else ("playable" if scene_ok >= 2 else scene or "unknown"),
         "fps_dispfb2": metrics.get("fps_dispfb2"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),

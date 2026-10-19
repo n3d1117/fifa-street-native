@@ -36,7 +36,7 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | `./tz deps [sync\|export\|status]` | upstream checkouts and our patch stack |
 | `./tz disc <iso>`, `./tz setup`, `./tz package` | disc import, one-time setup, app bundle |
 
-Judge a run by its summary (`reached`, `fps_gameplay`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). `fps_gameplay` is the movie-free DISPFB2 rate over the first steady gameplay window (20 s by default; `--measure` uses 60 s); the first-mission default-target gate is at least 24.9. For performance A/Bs, use `--fps-target 60 --measure`. `fps_dispfb2` is a mixed-phase diagnostic. CPU seconds are for the game child process only. Open the log only when the summary is wrong. Run `./tz run` on a quiet machine; it waits up to 60 s for one.
+Judge a run by its summary (`reached`, `scene`, `fps_gameplay`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). `scene` is `playable` only after OCR confirms the Continue tutorial card is gone (the probe dismisses it); otherwise it names what blocked. `fps_gameplay` is the plain movie-free DISPFB2 rate over the first steady window of that scene (20 s by default; `--measure` uses 60 s); the first-mission default-target gate is at least 24.9. For performance A/Bs, use `--fps-target 60 --measure`. `fps_dispfb2` is a mixed-phase diagnostic. CPU seconds are for the game child process only. Open the log only when the summary is wrong. Run `./tz run` on a quiet machine; it waits up to 60 s for one.
 
 | You changed | Run before committing |
 |---|---|

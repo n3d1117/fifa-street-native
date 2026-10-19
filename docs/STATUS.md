@@ -13,7 +13,7 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Saves | Card save/reload for one slot | All checkpoints, multiple slots |
 | Input | Keyboard remapping, SDL gamepads | Real PS5/Xbox pad testing |
 | Video | Native to 4x internal resolution, 16:9, optional sharpening, UI half-pixel coverage fix | Blurry tutorial text at higher scale |
-| Performance | Original 25 FPS; `tz run` reports movie-free `fps_gameplay` from periodic DISPFB2 samples after route inputs. A rate alone does not confirm the Continue card was dismissed; `fps_dispfb2` remains a mixed-phase diagnostic | VU1 flag work, VIF/GS submission and guest rendering; guard the Continue card and retain sub-36 FPS intervals at the 60 target; B14 needs a steady gameplay comparison |
+| Performance | Original 25 FPS; `tz run` reports movie-free `fps_gameplay` from periodic DISPFB2 samples after route inputs. the probe dismisses the Continue card and reports `scene`; `fps_dispfb2` remains a mixed-phase diagnostic | VU1 flag work, VIF/GS submission and guest rendering; B14 needs a steady gameplay comparison |
 | Process | One app process; one build tree `build/game-metal`; settings in one plist | Settings window and fullscreen not scriptable, unverified after the in-process change |
 | Platforms | macOS arm64 | iOS/tvOS: feasibility only, see "iOS / tvOS track" |
 
