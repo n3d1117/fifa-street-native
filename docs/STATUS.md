@@ -1,17 +1,9 @@
-## Resume
-
-- Intent: get past the select-language menu to the EA movies and main menu. Verified and pushed: boot reaches the menu (loadfile client HLE, vtable/lui pointer seeding); scripted input reaches the game (`PS2X_TRACE_PAD`: Cross shows as buttons 0xffbf) but the menu does not react and the main loop runs slowly (about 5 pad polls per second per port).
-- Measured: the main thread spends ~90% of its samples in `sub_003C18D0` (0x3c1900..0x3c1998), a spin on the word at object+0x82C that the VIF1/GIF DMAC and INTC handlers (0x3bf238, 0x3bf138, 0x3bf010) should clear. `PS2X_TRACE_IRQ=1`: per second intc2=50 intc3=50 intc5(VIF1)=1650 dmac1=50 dmac2(GIF)=1650, none masked. Next: find which handler should clear the flag and why delivery does not, using the state dump and `PS2X_DUMP_MEM`; no lldb launches (macOS prompts).
-- Audio: underruns are one startup burst (first 1 s health line: pull=49952/236544, later lines 0), so ~180.7k is deterministic boot stall accounting; rms/peak stay 0 (nothing mixed to the host ring). Check SPU2 core start and the host ring connection first (`PS2X_TRACE_SPU2=1`, `host/spu2-host.cpp`).
-- Movies: no `DATA/FEMOVIES` read seen before the language menu (`PS2X_TRACE_CD_IO=1` logs every file change); likely after language selection.
-- Key files: `deps/ps2recomp/ps2xRuntime/src/lib/{ps2_state_dump.cpp,Kernel/EeScheduler.cpp,ps2_memory.cpp (DMA completion),Kernel/Stubs/Pad.cpp}`, `tools/probe/probe.py`; scratch drivers in the session scratchpad (`drive.py` scripts input over `PS2X_DIAGNOSTIC_INPUT_FIFO`, key bit 5 = Cross).
-
 ## Current
 
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots: reads `IOP.BIG` by real LBN, loads its 7 IRX modules on the virtual IOP, and shows the FIFA Street loading screen with a progress bar, then stops (see Next 1). Movies and menus not reached |
+| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots to the language menu; scripted Cross is accepted and reads `DATA/FEMOVIES/EABIGEN.MPC`, then faults on a null indirect call at `0x2A5A0C`. Movie playback, main menu and gameplay not verified |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -28,9 +20,9 @@
 
 ## Next
 
-1. **Loadfile RPC.** The loading bar stops at about a third: the game polls `BindRpc` for SID `0x80000006` (IOP loadfile) from `sub_0044A588` (called through `sub_003E0698` / `sub_003DF818`, loading something beyond the 7 `IOP.BIG` modules). No IOP module serves it: `IOPRP280.IMG`'s Sony modules (loadfile, cdvdfsv, ...) are not run. Decision: HLE the loadfile RPC server (functions load module / load buffer / start / stop through the existing IOP loader) or load the IOPRP280 modules as LLE IRX. Check first what the game loads (path) with `PS2X_TRACE_RPC=1`.
-2. **Movies and menus.** `DATA/FEMOVIES/*.MPC` (EA `MPCh` wrapper, raw MPEG-2) not reached yet; EA `SCHl`/`.MUS` audio decoders. The run shows 224 audio underruns (measured, cause not looked at).
-3. **Play a match.** Add a scripted fast-match gate for `./rx run`.
+1. **Movie startup.** Language input requires the pressure-mode packet ID `0x79`. Cross reaches `DATA/FEMOVIES/EABIGEN.MPC`; startup faults on `JALR` at `0x2A5A0C` with target zero. Diagnose the callback owner and initialization before changing bindings.
+2. **Audio.** Host pulls silent samples (rms/peak zero); initial underrun burst remains. Trace SPU2 master volumes, MMIX, key-ons and sample DMA; the host ring is connected.
+3. **Menus and match.** Verify intro movies with sound, reach the main menu, start a match, then add `./rx run --route match` with scene checks.
 4. **Whole-game faithful pass** against PCSX2 behavior.
 5. **Performance.** Profile first. Native VU is a later step.
 6. **iOS/tvOS.** See the plan below.

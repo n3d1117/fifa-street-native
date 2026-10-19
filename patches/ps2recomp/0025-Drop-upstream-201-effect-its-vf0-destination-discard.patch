@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:27:12 +0200
-Subject: [PATCH 25/61] Drop upstream #201 effect: its vf0-destination discard
+Subject: [PATCH 25/62] Drop upstream #201 effect: its vf0-destination discard
  empties the result that our VU0 macro MAC-flag fixup reads; keep QMTC2/LQC2
  vf0 discards and raw-field LQI/SQI decode
 

@@ -77,6 +77,10 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |
 | `PS2X_VU1_CAPTURE[_EVERY\|_SKIP]`, `PS2X_VU1_DIFF[_LOG]`, `PS2X_VU0_DIFF[_COMMIT]` | VU capture and differential tooling; diff modes run each call three times, never time with them |
 
+## Controller packets
+
+Pressure mode reports packet ID `0x79`; analog mode without pressure reports `0x73`, digital `0x41` (PCSX2 `SIO/Pad/PadTypes.h`). The game validates `data[0] == 0` and `data[1] == 0x79` at `0x103750..0x10376C` before consuming buttons.
+
 ## Patch stack
 
 `deps.lock` pins each upstream (`ps2recomp`, `pcsx2`, `fukami`) by SHA. `./rx deps sync` creates `deps/<name>` at the pin on branch `rx` and applies `patches/<name>/*.patch` with `git am -3`. `./rx deps export` rewrites `patches/<name>/` with `git format-patch` (byte-stable) and refuses dirty trees. `./rx deps status` shows pin, commits and exported state; `./rx check` fails on unexported commits. Pull upstream in themed batches with a verifying test each; regenerate into a separate directory first (`tools/generate.py --out DIR`) to review output diffs.
@@ -84,6 +88,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 ## Tried and rejected
 
 - Fast-math or FP contraction: breaks PS2 arithmetic.
+- Treating the `sub_003C18D0` spin as a lost DMA IRQ: `sub_003C4ED0` clears object+0x82C on VBlank after the VIF1 END tag and configured field count; the language-menu rejection was the pad packet ID.
 - FPCR.FZ around native VU calls: inexact (`FLT_MIN + FLT_MIN * 0.5` gives `0x00800000`, the PS2 result is `0x00C00000`).
 
 ## Function discovery and SDK binding (stripped ELF)
