@@ -1,3 +1,11 @@
+## Resume
+
+- Intent: get past the select-language menu to the EA movies and main menu. Verified and pushed: boot reaches the menu (loadfile client HLE, vtable/lui pointer seeding); scripted input reaches the game (`PS2X_TRACE_PAD`: Cross shows as buttons 0xffbf) but the menu does not react and the main loop runs slowly (about 5 pad polls per second per port).
+- Measured: the main thread spends ~90% of its samples in `sub_003C18D0` (0x3c1900..0x3c1998), a spin on the word at object+0x82C that the VIF1/GIF DMAC and INTC handlers (0x3bf238, 0x3bf138, 0x3bf010) should clear. `PS2X_TRACE_IRQ=1`: per second intc2=50 intc3=50 intc5(VIF1)=1650 dmac1=50 dmac2(GIF)=1650, none masked. Next: find which handler should clear the flag and why delivery does not, using the state dump and `PS2X_DUMP_MEM`; no lldb launches (macOS prompts).
+- Audio: underruns are one startup burst (first 1 s health line: pull=49952/236544, later lines 0), so ~180.7k is deterministic boot stall accounting; rms/peak stay 0 (nothing mixed to the host ring). Check SPU2 core start and the host ring connection first (`PS2X_TRACE_SPU2=1`, `host/spu2-host.cpp`).
+- Movies: no `DATA/FEMOVIES` read seen before the language menu (`PS2X_TRACE_CD_IO=1` logs every file change); likely after language selection.
+- Key files: `deps/ps2recomp/ps2xRuntime/src/lib/{ps2_state_dump.cpp,Kernel/EeScheduler.cpp,ps2_memory.cpp (DMA completion),Kernel/Stubs/Pad.cpp}`, `tools/probe/probe.py`; scratch drivers in the session scratchpad (`drive.py` scripts input over `PS2X_DIAGNOSTIC_INPUT_FIFO`, key bit 5 = Cross).
+
 ## Current
 
 | Area | State |
