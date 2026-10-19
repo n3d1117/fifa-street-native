@@ -3,7 +3,7 @@
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Recompiles and links (see `./rx build` for translation counts). Boots to the language menu; scripted Cross is accepted and reads `DATA/FEMOVIES/EABIGEN.MPC`, and plays about the first half of the EA SPORTS BIG intro movie (video, no sound; frames show horizontal field striping), then freezes on one frame without a crash. Main menu and gameplay not verified |
+| Game | Recompiles and links (see `./rx build` for translation counts). Boots to the language menu; scripted Cross is accepted; EA SPORTS BIG and FIFA Street intro movies play with sound (SPU2 rms non-zero), then the legal screen, front-end menus and a loading screen. A crash follows (below). Match gameplay not verified |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -20,10 +20,10 @@
 
 ## Next
 
-1. **Movie refill waits on audio completion.** Cross reaches `EABIGEN.MPC`; nine 0x40-sector chunks are read before the packet loop `sub_00367678` stalls. The shared stream is full; its oldest packet carries audio channel 5 token `0x105` and awaits completion callback `0x37F2F0`. The CD worker and request queue are idle; TIM1 and guest timer callbacks advance. No accepted EE SendCmd reaches dispatch with `PS2X_TRACE_RPC=1`; inspect the guest sound-engine pump (`0x382128`, enable/count at `0x561740/0x561743`, stream-slot table `0x561484`) before the command sender. Retail MPEG Create/ClearRefBuff initialize the SDK work layout; GetPicture/Reset preserve private work fields.
-2. **Movie striping.** Frames show line striping (interlaced fields combed); compare PCSX2 default deinterlace and the bridge's field presentation.
-3. **Audio.** Host pulls silent samples (rms/peak zero); initial underrun burst remains. Trace SPU2 master volumes, MMIX, key-ons and sample DMA; the host ring is connected.
-4. **Menus and match.** Verify intro movies with sound, reach the main menu, start a match, then add `./rx run --route match` with scene checks.
+1. **Crash after front-end music starts.** After `PRIME.MUS`/`RAM6.MUS` reads the main thread returns to guest pc `0x2e0000` (mid-function in `sub_002DE7F8`, not a function entry; `sub_00275EC8` loop calls a vtable entry through `jalr $a1`, then `jr $ra` lands there). Find the stack or vtable value that is wrong; suspects: sound-bank routines run by the EE interpreter, HLE return values.
+2. **Audio start-up underruns.** The first second reports a burst of underruns (host ring primed late); steady state is clean.
+3. **Movie striping.** Earlier frames showed line combing; the last runs did not. Re-check against PCSX2 deinterlace.
+4. **Menus and match.** Reach the main menu, start a match, then add `./rx run --route match` with scene checks.
 5. **Whole-game faithful pass** against PCSX2 behavior.
 6. **Performance.** Profile first. Native VU is a later step.
 7. **iOS/tvOS.** See the plan below.

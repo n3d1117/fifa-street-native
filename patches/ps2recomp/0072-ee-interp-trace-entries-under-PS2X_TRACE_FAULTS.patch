@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 01:47:04 +0200
+Subject: [PATCH 72/72] ee-interp: trace entries under PS2X_TRACE_FAULTS
+
+
+diff --git a/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp b/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
+index 6df0a0552e0c888318accccd3f33b23e121f33a0..a48bfa5974456a4185398f8e4dcac5061d7da84f 100644
+--- a/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
+@@ -10,6 +10,7 @@
+ #include "ps2_runtime_macros.h"
+ 
+ #include <cstdio>
++#include <cstdlib>
+ 
+ namespace
+ {
+@@ -47,6 +48,11 @@ bool ps2IsInterpretedCodeAddress(const PS2Runtime &runtime, uint32_t address)
+ 
+ void ps2EeInterpret(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+ {
++    static const bool trace = std::getenv("PS2X_TRACE_FAULTS") != nullptr;
++    static uint32_t traced = 0u;
++    if (trace && traced++ < 64u)
++        std::fprintf(stderr, "[ee-interp] enter pc=0x%08x ra=0x%08x a0=0x%08x a1=0x%08x\n", ctx->pc, GPR_U32(ctx, 31),
++                     GPR_U32(ctx, 4), GPR_U32(ctx, 5));
+     const auto fail = [&](uint32_t pc, uint32_t word, const char *why)
+     {
+         std::fprintf(stderr, "[ee-interp] %s at pc=0x%08x word=0x%08x ra=0x%08x\n", why, pc, word, GPR_U32(ctx, 31));
