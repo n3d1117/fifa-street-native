@@ -56,6 +56,39 @@ Mechanisms, invariants and constants. Read the section for the area you touch. C
 - Overrides for the harness build: `PS2X_VU1_RUNTIME`, `PS2X_LLVM19_ROOT`, `PS2X_LIBCXX_INCLUDE`, `PS2X_SSE2NEON_DIR`, `PS2X_VU1GEN_DIR`, `PS2X_VU1TEST_OUT`.
 - `tools/vu` is adapted from the Road-trip-Adventure VU1 tools (GPL-3.0-or-later; upstream and license in `tools/vu/LICENSE`).
 
+## Performance attribution mechanisms
+
+Use the card-free first-mission scene and sampling procedure in `docs/STATUS.md`. These are diagnostic measurements at target 60, not optimization A/B results; no diagnostic instrumentation remains in the product.
+
+Temporary dispatcher timers keyed by full-bank hash, entry and resume bit bracket lookup, input staging, native call and publication. Their wall-time shares are 0.15%, 1.24%, 31.64% and 8.78%; publication includes nested GIF/GS and must not be added to the sample table. All steady images select guarded program 2 (first-pair signature `080002ff800506bc`):
+
+| Bank hash | Entry | Calls/frame | Guest cycles/call | Native call % of wall, including XGKICK |
+|---|---:|---:|---:|---:|
+| `4cf75c5af9706b9e` | `0` | 180.2 | 6484 | 10.37 |
+| `4ad89786d3fe5680` | `0` | 281.3 | 2564 | 7.56 |
+| `a56054169c2d2401` | `0` | 74.1 | 7064 | 5.62 |
+| `c1ae250a3450d5a0` | `0` | 103.1 | 4353 | 4.55 |
+| `e5d087db502bc345` | `0` | 54.1 | 3563 | 1.69 |
+| `6350f9a03526f258` | `0` | 16.0 | 5625 | 0.93 |
+| `72c322aaeabb5b5e` | `0` | 10.0 | 8428 | 0.71 |
+| `a486b26c52116853` | `0` | 6.0 | 2626 | 0.15 |
+| All continuations | `0x05e8` | 242.3 | 2 | 0.07 |
+
+Top ten guest functions by **self-time as a percentage of the entire game thread**, mapped with `./tz where <address>`; these exclude runtime callees:
+
+| Guest PC | Function | Self |
+|---|---|---:|
+| `0x3df8b0` | `osrPSX2SendStripToVU` | 4.26% |
+| `0x3ec3d0` | `CRenderBatchUnit::RenderOpaqueStatic` | 0.80% |
+| `0x3f43e0` | `osrSetObjectMatrix` | 0.70% |
+| `0x3c8470` | `osr_compute_fog` | 0.60% |
+| `0x3d8a60` | `memcpyAlignedQW` | 0.48% |
+| `0x3ec910` | `CRenderBatchUnit::RenderTransparent` | 0.41% |
+| `0x3e9960` | `osrIsSphereCulled` | 0.36% |
+| `0x3f8b20` | `osrSwapBuffer` | 0.34% |
+| `0x319920` | `CInterpolation::InterpolateBetweenKeys` | 0.32% |
+| `0x3dd720` | `osrUpdateJumpTable` | 0.29% |
+
 ## Game hooks and constants
 
 PS2Recomp has no mid-function override, so our dep patch adds config `[[hooks]]` (address, `before`/`after`, optional `redirect`). The recompiler emits a call through `g_ps2InstructionHooks[]` at that instruction; `host/game-hooks.cpp` registers the handlers (`PS2_REGISTER_GAME_OVERRIDE`) and installs them only if every guest instruction word they depend on matches the retail ELF. `generated/` is pure recompiler output. Each hook does nothing when its setting is off.
@@ -129,6 +162,9 @@ All experiments default off and apply after restart: `highFPS` off (`targetFPS` 
 - The audio double-count tweak (IOP RPC cycles counted twice): the fix was IOP budget accounting, not a tweak on top.
 - The 50 FPS gate byte alone: no swap-rate gain.
 - Fast-math or FP contraction: breaks PS2 arithmetic semantics.
+- R18 inline checkpoint cycle budget: exact accounting, reported 60-target steady-window A/B +0.77%; no measurable FPS gain.
+- R27 VU1 operand-normalization elision using `compute_norm`: exact, 38% fewer normalization calls, reported 60-target steady-window A/B +0.25%; no measurable FPS gain.
+- R27 FPCR.FZ around native VU calls: inexact intermediate-product flushing; `FLT_MIN + FLT_MIN * 0.5` gives `0x00800000` with FZ versus required `0x00C00000`; reject independently of FPS.
 - Sprite Round=2/Align=1, Native+TextureOffset=5, half-texel ST inset, and HPO=1 for the world-menu grid: none removed it (the coverage correction did).
 - A fixed EE-clock correction alone for audio lead: insufficient without the IOP budget fix.
 
