@@ -5,12 +5,10 @@ You supply your own disc. This repository contains no game code, data or assets.
 
 ## Status
 
-- Boots, plays movies with sound, and reaches first-mission gameplay at the original 25 FPS.
-- Later missions, full progression and every save path are not yet tested.
-- EE code is recompiled ahead of time. VU1 and known VU0 programs run natively with an interpreter fallback. The IOP is interpreted.
+- Boots, plays movies with sound, and plays the first mission and most map missions at the original 25 FPS. Full progression and every save path are untested.
 - Options, off by default: internal resolution up to 4x, 16:9, 60/120 FPS targets, logo skip, remember language, and the game's own cheats.
 
-Details: [docs/STATUS.md](docs/STATUS.md).
+Details: [docs/STATUS.md](docs/STATUS.md). Contributors: [AGENTS.md](AGENTS.md).
 
 ## Requirements
 
@@ -28,44 +26,20 @@ Details: [docs/STATUS.md](docs/STATUS.md).
 ```sh
 git clone https://github.com/n3d1117/tarzan-freeride-native.git
 cd tarzan-freeride-native
-./tz setup                      # upstream checkouts (deps.lock + patches/), Python venv, toolchain, FFmpeg/SDL3/PCSX2 deps, pre-commit hook (once)
+./tz setup                      # once: upstream checkouts, venv, toolchain, dependencies, pre-commit hook
 ./tz disc ~/path/to/Tarzan.iso  # verify and extract your disc, derive symbols and config
 ./tz build                      # generate the game code and build build/game-metal
-./tz test                       # optional: quick test tier (no disc needed); --full adds slow tests and the VU regression
-                                # corpus (skipped if you do not have it locally)
-./tz run                        # play from the build tree; --route first-mission scripts a bounded run to gameplay
-./tz run --save runtime/regression/saves/<name> --seconds 60  # boot with that fixture's memcards/ in an isolated user dir
+./tz test                       # optional: quick tests, no disc needed
+./tz run                        # play from the build tree
 ./tz package --install          # optional: /Applications/Tarzan Freeride PS2.app
 ```
 
-Apple builds link only the required static FFmpeg archives directly through CMake.
-
-`./tz setup` also installs a pinned, SHA-256-verified official ccache binary under
-`tools/build` (pins in `toolchain/bootstrap.sh`). Builds automatically use it when
-available, with the PCH settings in `cmake/ccache.cmake`; without it, compilation
-works as before. The cache lives in `build/game-metal/ccache`, capped at 5 GiB.
-Inspect it with `CCACHE_DIR="$PWD/build/game-metal/ccache" tools/build/ccache/ccache -s`.
-Use `CCACHE_DISABLE=1 ./tz build` to bypass caching or `CCACHE_RECACHE=1 ./tz build`
-to compile again and replace cached results (these affect work Ninja schedules;
-they do not force a rebuild). Generated-source glob lists are sorted by CMake,
-keeping unity batch membership stable across unchanged regenerations.
+`./tz setup` also installs a pinned, checksum-verified ccache under `tools/build`; builds use it automatically.
+`CCACHE_DISABLE=1 ./tz build` bypasses it.
 
 Saves and settings live in `~/Library/Application Support/TarzanFreeridePS2`.
 Controls: keyboard (remap in Settings, Keyboard) or any SDL-supported gamepad.
 `./tz --help` lists every command.
-
-## Layout
-
-| Path | What |
-|---|---|
-| `host/` | macOS app: window, input, audio, Metal GS adapter, settings, game hooks |
-| `deps.lock`, `patches/` | pinned PS2Recomp, PCSX2 and fukami revisions and our changes to them; `./tz setup` checks them out into `deps/` |
-| `tools/` | disc extraction, code generation, VU compiler, packaging, probes |
-| `config/` | recompiler configuration for SLES-50350 |
-| `tests/`, `cmake/` | host tests, CMake modules |
-| `docs/` | `STATUS.md` (state and roadmap), `internals.md` (mechanisms) |
-
-Local only, never committed: `deps/`, `disc/`, `extracted/`, `generated/`, `build/`, `runtime/`, `dist/`.
 
 ## License
 
