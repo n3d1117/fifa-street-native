@@ -8,11 +8,12 @@
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run [--seconds N] [--route first-mission|missions] [--fps-target 60|120] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
+  tz run [--seconds N] [--route first-mission|missions] [--fps-target 60|120] [--measure] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
                            --route missions: new game with unlockAllMissions (this run only), then every Story Mode map
                            mission (~45 s scripted play each, quit via pause menu); per-mission table (default 3600 s)
                            --fps-target: opt into high FPS in isolated settings for this run; title and missions runs skip logos
+                           --measure: collect a 60-second steady gameplay window (first-mission routes stop after it)
                            --no-skip-logos: control run for measuring the title boot saving
   tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
@@ -507,6 +508,8 @@ def cmd_run(args):
             cmd.append("--profile")
         if args.no_skip_logos:
             cmd.append("--no-skip-logos")
+        if args.measure:
+            cmd.append("--measure")
         rc = run.sh(cmd)
         if rc == 2:
             raise Missing(run.last_message())
@@ -594,6 +597,7 @@ def main():
     r.add_argument("--seconds", type=int)
     r.add_argument("--route", choices=["none", "first-mission", "missions"])
     r.add_argument("--fps-target", type=int, choices=[60, 120], help="opt into a high-FPS target in isolated settings for this run")
+    r.add_argument("--measure", action="store_true", help="collect a 60-second steady gameplay window")
     r.add_argument("--no-skip-logos", action="store_true", help="control run for measuring the title boot saving")
     r.add_argument("--user-dir")
     r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")

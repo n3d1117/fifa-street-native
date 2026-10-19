@@ -174,18 +174,24 @@ def write_run_settings(user_dir, *, skip_logos=False, fps_target=None, unlock_mi
     path.write_bytes(plistlib.dumps(settings))
 
 
-def gameplay_fps(samples, target=25):
+def gameplay_start(samples, target=25):
+    low, high = max(15, min(target * 0.6, 36)), min(65, target * 1.1)
+    valid = [(t, fps) for t, fps in samples if low <= fps <= high]
+    return next((valid[i][0] for i in range(len(valid) - 1)
+                 if valid[i + 1][0] - valid[i][0] <= 10
+                 and abs(valid[i + 1][1] - valid[i][1]) <= target * 0.25), None)
+
+
+def gameplay_fps(samples, target=25, window_seconds=60):
     """Average periodic DISPFB2 samples from a stable, movie-free gameplay window."""
     if not samples:
         return None
-    low, high = max(15, target * 0.6), target * 1.1
+    low, high = max(15, min(target * 0.6, 36)), min(65, target * 1.1)
     valid = [(t, fps) for t, fps in samples if low <= fps <= high]
-    start = next((valid[i][0] for i in range(len(valid) - 1)
-                  if valid[i + 1][0] - valid[i][0] <= 10
-                  and abs(valid[i + 1][1] - valid[i][1]) <= target * 0.25), None)
+    start = gameplay_start(samples, target)
     if start is None:
         return None
-    window = [fps for t, fps in valid if start <= t <= start + 60]
+    window = [fps for t, fps in valid if start <= t <= start + window_seconds]
     return round(sum(window) / len(window), 1) if window else None
 
 
@@ -700,6 +706,7 @@ def main():
     ap.add_argument("--seconds", type=int)
     ap.add_argument("--no-skip-logos", action="store_true", help="control run for measuring the isolated logo-skip boot saving")
     ap.add_argument("--fps-target", type=int, choices=(60, 120), help="opt into a high-FPS target in this isolated run")
+    ap.add_argument("--measure", action="store_true", help="collect a 60-second steady gameplay window")
     ap.add_argument("--route", choices=("none", "first-mission", "missions"), default="none")
     ap.add_argument("--user-dir", type=Path)
     ap.add_argument("--save", type=Path, help="fixture directory containing a non-empty memcards/ subtree")
@@ -735,7 +742,7 @@ def main():
         if not fixture.is_dir() or not fixture_cards.is_dir() or not any(p.is_file() for p in fixture_cards.rglob("*")):
             print(f"save fixture missing or empty: {fixture} (copy a user dir's memcards/ subtree into it)", file=sys.stderr)
             return 2
-    seconds = args.seconds or (210 if args.route == "first-mission" else 60)
+    seconds = args.seconds or ((240 if args.measure else 180) if args.route == "first-mission" else 60)
     if args.route == "first-mission" and seconds < 140:
         ap.error("--route first-mission needs --seconds >= 140")
     if not 1 <= args.capture_frames <= 120 or args.capture_interval < 1 or args.capture_start_field < 0:
@@ -849,6 +856,10 @@ def main():
                     rate = float(pm[3])
                     if 20 <= rate <= 65:
                         gameplay_samples.append((time.monotonic() - started, rate))
+            window_seconds = 60 if args.measure else 20
+            steady_start = gameplay_start(gameplay_samples, args.fps_target or 25)
+            if route and steady_start is not None and now >= steady_start + window_seconds:
+                break
             if not args.keep_running_on_failure and any(m in text_now[seen_len:] for m in FAULT_MARKERS):
                 fault_stop = True
                 break
@@ -944,7 +955,8 @@ def main():
     target = "first-mission" if route else "title"
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
-        "fps_gameplay": gameplay_fps(gameplay_samples, args.fps_target or 25),
+        "fps_gameplay": gameplay_fps(gameplay_samples, args.fps_target or 25,
+                                     60 if args.measure else 20),
         "fps_dispfb2": metrics.get("fps_dispfb2"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
