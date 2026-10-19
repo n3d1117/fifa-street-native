@@ -1,14 +1,10 @@
-## Resume (wip)
+## Resume
 
-- Intent: boot FIFA Street past the first fault. Verified: tail-call discovery, gp from .reginfo, JALR bloat fix (pushed); sceCdCallback completion (pushed); boot reaches EA's allocator, which memsets 0xCC55CC55 over .data at 0x480250 (fault 0x2a62c0 sub_002A62A0).
-- Unverified wip: LBN map (`./rx disc` writes extracted/disc/.lbn-map + .lbn-gaps.bin; `ps2x/iop/lbn_map.h` serves sceCdRead/sceCdSearchFile and IOP CDVD; `--disc` flag removed). Built, `./rx test` not run (rewritten tests in ps2_runtime_io_tests/kernel_tests/expansion_tests), not run on the game; re-run `./rx disc <iso>` first, then test, run, commit as one unit.
-- Queued, not done: (1) unbind 10 TODO stubs (done in template, build check in `rx build` added, regenerated, untested at runtime); (2) move EeScheduler invocation/callback stacks (default 0x1F00000..) out of the game's stack 0x1FF0000 and heap 0x57E900.. via ps2SetRuntimeArena below the ELF's lowest PT_LOAD, with an overlap test (likely the cause of the garbage pointer); (3) probe.py: child in its own process group, TERM then KILL, record `killed:` in summary, and `rx run` refuses when a ps2EntryRunner is running; (4) then continue the boot loop (IOP.BIG modules as LLE IRX, MPC movies).
-- Key files: deps/ps2recomp/ps2xRuntime/src/lib/Kernel/Stubs/{CD.cpp,Helpers/Support.h}, ps2xIOP/src/emulator/imports/iop_cdvd.cpp, tools/disc.py, tools/probe/probe.py, rx.
-- Gotchas: debug with lldb (watchpoints on rdram+addr work; x0=rdram, x1=ctx, r[i] at ctx+16*i); PS2X_TRACE_SYSCALLS/RPC/CD_IO; never leave runners alive.
-
-# Status
-
-Experimental static recompilation. Not a decompilation, and not a verified port of any part of the game yet.
+- Intent: boot FIFA Street past the first fault. Verified and pushed: tail-call discovery, gp from `.reginfo`, JALR fix, `sceCdCallback` completion, LBN map, TODO-stub unbind and build check, probe child kill.
+- Next: the boot stops at fault 0x2a62c0 (`sub_002A62A0`): EA's allocator memsets 0xCC55CC55 over `.data` at 0x480250. Suspect: EeScheduler invocation/callback stacks default to 0x1F00000.. (game stack 0x1FF0000, heap 0x57E900..). Move them below the ELF's lowest PT_LOAD via `ps2SetRuntimeArena` from the launcher, with an overlap test; re-run.
+- Then: IOP.BIG modules as LLE IRX on the virtual IOP kernel, MPC movies.
+- Key files: `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp`, `ps2_runtime.cpp` (arena), `host/launcher.cpp`.
+- Gotchas: lldb watchpoints on `rdram+addr` work (x0 = rdram, x1 = ctx, r[i] at ctx+16*i); `PS2X_TRACE_SYSCALLS/RPC/CD_IO`.
 
 ## Current
 

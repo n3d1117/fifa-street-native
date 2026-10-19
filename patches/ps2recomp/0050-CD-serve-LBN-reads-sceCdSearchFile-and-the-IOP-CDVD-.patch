@@ -1,10 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
-Date: Mon, 19 Oct 2026 18:44:47 +0200
-Subject: [PATCH 50/50] wip: serve CD LBN reads and sceCdSearchFile from the
- disc LBN map (lbn_map.h); drop pseudo LBNs, leaf indexes and cdImage use on
- the EE side; tests rewritten, not yet run
+Date: Mon, 19 Oct 2026 19:33:37 +0200
+Subject: [PATCH 50/50] CD: serve LBN reads, sceCdSearchFile and the IOP CDVD
+ from the disc's real LBN map (lbn_map.h); remove pseudo LBNs, leaf/loose
+ indexes and the cdImage read path on the EE side
 
+The game reads by real disc LBN. ./rx disc writes <root>/.lbn-map (volume, file extents, non-file gap sectors) and .lbn-gaps.bin; a missing map reports '-> ./rx disc <iso>'. Tests: mid-file read, read across a file boundary, gap sector, zero inside the volume, failure past the volume, sceCdSearchFile returns the real LBN and size. IOP CDVD tries the map first and keeps its virtual ISO only for map-less fixtures.
 
 diff --git a/ps2xIOP/include/ps2x/iop/lbn_map.h b/ps2xIOP/include/ps2x/iop/lbn_map.h
 new file mode 100644
@@ -868,10 +869,10 @@ index 41f283cd7fa4d5018f25f2eb52ee1e4e7e07af0a..351ae395898c308b8d59edb5591eb4a4
              paths.cdRoot = directory;
              paths.cdImage.clear();
 diff --git a/ps2xTest/src/ps2_runtime_io_tests.cpp b/ps2xTest/src/ps2_runtime_io_tests.cpp
-index 4f979be0d62c05f3422480c4de12ce3e3e877231..beaf0884491863e6efb6185494926e64695110ef 100644
+index 4f979be0d62c05f3422480c4de12ce3e3e877231..03a5ed6be82bdcd44c08dc018df5feaf6d558b9a 100644
 --- a/ps2xTest/src/ps2_runtime_io_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_io_tests.cpp
-@@ -680,67 +680,92 @@ void register_ps2_runtime_io_tests()
+@@ -680,67 +680,91 @@ void register_ps2_runtime_io_tests()
              t.Equals(state, 0u, "sceIoctl cmd1 should clear wait state from busy to ready");
          });
  
@@ -1005,7 +1006,6 @@ index 4f979be0d62c05f3422480c4de12ce3e3e877231..beaf0884491863e6efb6185494926e64
 +            t.Equals(read(199, 2), 0, "a read past the volume end fails");
          });
      });
-+    });
  }
 diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 index 403e5cf6c515341d2623f2157b7443d6232c3770..10bf4e397e8d00508c42c02f8984b4f1405829ca 100644

@@ -92,4 +92,4 @@ No symbol map exists: the recompiler discovers functions itself (entry, JAL targ
 
 ## Disc access
 
-The game reads by real disc LBN (it opens `DATA/IOP.BIG` at its ISO extent), so the launcher takes `--disc <image.iso>` and sets it as the runtime CD image for `sceCdRead` and the IOP CDVD; `./rx run` passes the `source_iso` recorded in `reports/disc-inventory.json`. The extracted tree stays the host file view. `sceCdRead` completes through the callback registered with `sceCdCallback`, run from an alarm event after the call returns.
+The game reads by real disc LBN (it opens `DATA/IOP.BIG` at its ISO extent). `./rx disc` writes `extracted/disc/.lbn-map` (volume size, each file's extent, and the non-file sectors) and `.lbn-gaps.bin` (those sectors); both are local and bundled with the extraction. `ps2x/iop/lbn_map.h` serves `sceCdRead`, `sceCdSearchFile` and the IOP CDVD from them: one numbering scheme, no ISO at runtime; a missing map reports `-> ./rx disc <iso>`. `sceCdRead` completes through the callback registered with `sceCdCallback`, run from an alarm event after the call returns. `./rx build` fails if a configured stub resolves to a TODO handler.
