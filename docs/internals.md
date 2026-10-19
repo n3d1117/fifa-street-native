@@ -77,7 +77,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |
 | `PS2X_VU1_CAPTURE[_EVERY\|_SKIP]`, `PS2X_VU1_DIFF[_LOG]`, `PS2X_VU0_DIFF[_COMMIT]` | VU capture and differential tooling; diff modes run each call three times, never time with them |
 
-MPEG Create must clear work+0/+4/+8 even for reused nonzero memory: guest `sceMpegIsEnd` at `0x40A3E8` reads work+0 directly. Retail Create calls Reset, which clears those words.
+MPEG work layouts vary by SDK revision. Run retail Create and ClearRefBuff; the host decoder must not write private work fields or executable-specific globals. Reset clears the common work+0/+4/+8 state. Retail `sceMpegIsEnd` at `0x40A3E8` is `8C830040 03E00008 8C620000` (load handle+0x40, return work+0); its HLE binding reads host decoder completion. GetPicture publishes dimensions in the public handle and writes the decoded image.
 
 ## Controller packets
 

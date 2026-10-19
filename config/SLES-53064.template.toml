@@ -20,11 +20,10 @@ patch_cache = false
 
 stubs = [
   "sceMpegInit@0x0040A088",
-  "sceMpegCreate@0x0040A138",
   "sceMpegAddBs@0x0040A350",
   "sceMpegGetPicture@0x0040A390",
+  "sceMpegIsEnd@0x0040A3E8",
   "sceMpegReset@0x0040A3F8",
-  "sceMpegClearRefBuff@0x0040A458",
   "sceMpegAddCallback@0x0040A4B0",
   "_sceMpegFlush@0x0040AAF0",
   "sceIpuStopDMA@0x00410F88",

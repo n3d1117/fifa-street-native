@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 21:21:07 +0200
-Subject: [PATCH 61/65] Diagnostics: PS2X_TRACE_IRQ counts raised and masked
+Subject: [PATCH 61/66] Diagnostics: PS2X_TRACE_IRQ counts raised and masked
  interrupts per cause each second
 
 

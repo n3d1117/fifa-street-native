@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 22:12:17 +0200
-Subject: [PATCH 65/65] EeScheduler: let interrupt-context invocations nest on
+Subject: [PATCH 65/66] EeScheduler: let interrupt-context invocations nest on
  an HLE callback
 
 A guest callback run by an HLE call (libmpeg nodata) polls state that timer and VBlank handlers update; pending invocations only started on a thread with an empty invocation stack, so TIM1 stopped (game tick 1/s instead of 60/s). Interrupt, Alarm and GsCallback invocations now nest on an HleCall.
