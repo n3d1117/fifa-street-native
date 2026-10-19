@@ -29,6 +29,7 @@ TARZAN_MATERIAL_EXTRA_WRITERS = {
     0x3DE338: (0x22B8, 3, 6, 0x3DE334),
     0x3DE28C: (0x0F80, 4, 4, 0x3DE284),
     0x3DE4B4: (0x2AE0, 3, 6, 0x3DE4AC),
+    0x3DE63C: (0x2548, 3, 6, 0x3DE638),
 }
 
 
@@ -193,7 +194,7 @@ def tarzan_patch_candidates(data: bytes, segments: list[dict], source_code: byte
 
     groups = {
         "light": {"targets": light_targets, "patch_pcs": list(range(0x3138, 0x3199, 0x10)), "link_register": 14},
-        "material": {"targets": material_targets, "patch_pcs": list(range(0xE8, 0x259, 0x10)), "link_register": 15},
+        "material": {"targets": material_targets, "patch_pcs": list(range(0xE8, 0x2B9, 0x10)), "link_register": 15},
     }
     candidates = []
     for group_name, group in groups.items():
@@ -266,9 +267,15 @@ def extract(elf_path: Path, out_dir: Path, banks: list[Path], tarzan_patches: bo
         digest = hashlib.sha256(code).hexdigest()
         name = f"chain-{i:03d}-dst-{packets[0]['destination']:04x}-{digest[:16]}.vu1"
         (out_dir / name).write_bytes(code)
+        bank = bytearray(struct.pack("<II", 0x8000033C, 0x000002FF) * VU1_SLOTS)
+        destination = packets[0]["destination"] * 8
+        bank[destination:destination + len(code)] = code
+        bank_name = f"banks/{name}"
+        (out_dir / "banks").mkdir(exist_ok=True)
+        (out_dir / bank_name).write_bytes(bank)
         source_start = packets[0]["nop_offset"]
         record = {
-            "index": i, "file": name, "source_file_offset": source_start,
+            "index": i, "file": name, "bank_file": bank_name, "source_file_offset": source_start,
             "source_virtual_address": chain["segment"]["vaddr"] + source_start - chain["segment"]["offset"],
             "segment_index": chain["segment"]["index"], "destination_start": packets[0]["destination"],
             "destination_end": packets[-1]["destination"] + packets[-1]["count"],

@@ -20,6 +20,24 @@ def put_pair(code, pc, lower, upper):
 
 
 class GuardedPoolTests(unittest.TestCase):
+    def test_distinct_uploads_keep_separate_graphs_and_exact_guards(self):
+        first = bytearray(vu1recomp.VU1_CODE_SIZE)
+        second = bytearray(vu1recomp.VU1_CODE_SIZE)
+        for code in (first, second):
+            for pc in range(0, len(code), 8):
+                put_pair(code, pc, NOP, UPPER_NOP)
+            put_pair(code, 8, NOP, UPPER_NOP | 0x40000000)
+        put_pair(second, 0, NOP, UPPER_NOP | 0x00010000)
+        source, stats = vu1recomp.generate_guarded_pool([bytes(first), bytes(second)], [0], {})
+        self.assertEqual(source.count('const Vu1RecRegistrar kRegistrar('), 1)
+        self.assertEqual(source.count('static void vu1rec_guarded_program_'), 2)
+        for code in (first, second):
+            signature = int.from_bytes(code[:8], 'little')
+            self.assertIn(f'case 0x{signature:016x}ull: return vu1rec_guarded_program_', source)
+        self.assertEqual(source.count('default: ctx.failPc = 0x0000u; goto FAIL;'), 2)
+        self.assertIn('ctx.failed = true; ctx.failPc = 0;', source)
+        self.assertEqual(stats['entries'], [0, 24])
+
     def test_selector_dispatches_distinct_pairs_and_unknown_fails(self):
         first = bytearray(vu1recomp.VU1_CODE_SIZE)
         second = bytearray(vu1recomp.VU1_CODE_SIZE)

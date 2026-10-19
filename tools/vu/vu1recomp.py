@@ -1711,7 +1711,8 @@ def compute_live_exit(images_info: List[Optional[dict]]) -> Tuple[set, list]:
 
 def generate_image(code: bytes, entries: List[int], name: str, live_exit: Optional[set] = None,
                    dynamic_targets: Optional[Dict[int, List[int]]] = None,
-                   unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None) -> Tuple[str, dict]:
+                   unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None,
+                   register: bool = True) -> Tuple[str, dict]:
     info = analyze_image(code, entries, name, dynamic_targets, unit, pool_codes)
     g = info['cont_g'] if info['cont_g'] is not None else info['g']
     compute_norm(g)
@@ -1750,17 +1751,54 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
             stats['clip_producers'] = cl
             stats['clip_producers_live'] = cl_live
             stats['fast_commits'] = dict(sorted(em.commit_counts.items()))
-    ent = ", ".join(f"0x{e:04x}u" for e in sorted(g.entry_nodes))
-    out.append(f"const uint32_t kEntries[] = {{{ent}}};\n")
-    registrar = 'Vu0RecRegistrar' if g.unit == 'vu0' else 'Vu1RecRegistrar'
-    prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
-    hash_literal = '0ull' if g.guarded else f'0x{name}ull'
-    guarded_arg = ', true' if g.guarded else ''
-    fast_name = 'full' if g.guarded else 'fast'
-    out.append(f"const {registrar} kRegistrar({hash_literal}, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
-               f"                                 &{prefix}_{name}_{fast_name}, &{prefix}_{name}_full, {'true' if g.dt_pcs else 'false'}{guarded_arg});\n")
+    if register:
+        ent = ", ".join(f"0x{e:04x}u" for e in sorted(g.entry_nodes))
+        out.append(f"const uint32_t kEntries[] = {{{ent}}};\n")
+        registrar = 'Vu0RecRegistrar' if g.unit == 'vu0' else 'Vu1RecRegistrar'
+        prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
+        hash_literal = '0ull' if g.guarded else f'0x{name}ull'
+        guarded_arg = ', true' if g.guarded else ''
+        fast_name = 'full' if g.guarded else 'fast'
+        out.append(f"const {registrar} kRegistrar({hash_literal}, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
+                   f"                                 &{prefix}_{name}_{fast_name}, &{prefix}_{name}_full, {'true' if g.dt_pcs else 'false'}{guarded_arg});\n")
     out.append("} // namespace\n")
     return "".join(out), stats
+
+
+def generate_guarded_pool(pool_codes: List[bytes], entries: List[int], dynamic_targets: dict) -> Tuple[str, dict]:
+    # Overlapping uploads with different entry pairs have unrelated schedulers.
+    # Pooling them together admits arbitrary cross-program instruction sequences.
+    groups = defaultdict(list)
+    for code in pool_codes:
+        groups[struct.unpack_from('<Q', code)[0]].append(code)
+    if len(groups) == 1:
+        return generate_image(pool_codes[0], entries, 'guarded', set(FLAG_REGS),
+                              dynamic_targets, 'vu1', pool_codes)
+    out, programs = [], []
+    for i, (signature, codes) in enumerate(sorted(groups.items())):
+        name = f'guarded_program_{i}'
+        src, stats = generate_image(codes[0], entries, name, set(FLAG_REGS),
+                                    dynamic_targets, 'vu1', codes, register=False)
+        out.append(src)
+        programs.append((signature, name, stats))
+    entries = sorted({e for _, _, stats in programs for e in stats['entries']})
+    out.append(HEADER)
+    out.append('static void vu1rec_guarded_full(Vu1RecContext &ctx, uint32_t entryPc)\n{\n')
+    out.append('    if (ctx.code) {\n        uint64_t signature;\n'
+               '        std::memcpy(&signature, ctx.code, sizeof(signature));\n'
+               '        switch (signature) {\n')
+    for signature, name, _ in programs:
+        out.append(f'        case 0x{signature:016x}ull: return vu1rec_{name}_full(ctx, entryPc);\n')
+    out.append('        }\n    }\n    ctx.failed = true; ctx.failPc = 0;\n}\n')
+    ent = ', '.join(f'0x{e:04x}u' for e in entries)
+    dt_pcs = sorted({pc for _, _, stats in programs for pc in stats['dt_pcs']})
+    out.append(f'const uint32_t kEntries[] = {{{ent}}};\n'
+               'const Vu1RecRegistrar kRegistrar(0ull, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n'
+               f'    &vu1rec_guarded_full, &vu1rec_guarded_full, {"true" if dt_pcs else "false"}, true);\n'
+               '} // namespace\n')
+    return ''.join(out), {'entries': entries, 'dt_pcs': dt_pcs,
+                         'nodes': sum(s['nodes'] for _, _, s in programs),
+                         'pairs': sum(s['pairs'] for _, _, s in programs)}
 
 
 def read_catalog(cat: str) -> Dict[str, List[int]]:
@@ -1887,10 +1925,8 @@ def main():
                     if not pair.ibit and lower_name(pair.lower) in ('JR', 'JALR'):
                         pooled_targets[pc].update(args.indirect_entry)
         try:
-            src, stats = generate_image(pool_codes[0], sorted(pool_entries), 'guarded',
-                                        set(FLAG_REGS),
-                                        {pc: sorted(ts) for pc, ts in pooled_targets.items()},
-                                        'vu1', pool_codes)
+            src, stats = generate_guarded_pool(pool_codes, sorted(pool_entries),
+                                              {pc: sorted(ts) for pc, ts in pooled_targets.items()})
         except GenError as ex:
             print(f"[vu1recomp] guarded pool FAILED: {ex}", file=sys.stderr)
             return 1

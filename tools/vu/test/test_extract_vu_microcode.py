@@ -44,6 +44,9 @@ class ExtractVuMicrocodeTests(unittest.TestCase):
         self.assertEqual(EXTRACTOR.encode_bal(0x1C8, 0x22B8, 15), 0x420F041D)
         self.assertEqual(EXTRACTOR.encode_bal(0x1F8, 0x0F80, 15), 0x420F01B0)
         self.assertEqual(EXTRACTOR.encode_bal(0x1A8, 0x2AE0, 15), 0x420F0526)
+        self.assertEqual(EXTRACTOR.encode_bal(0x278, 0x05F8, 15), 0x420F006F)
+        self.assertEqual(EXTRACTOR.encode_bal(0x288, 0x2548, 15), 0x420F0457)
+        self.assertEqual(EXTRACTOR.encode_bal(0x2B8, 0x0F80, 15), 0x420F0198)
         with self.assertRaises(ValueError):
             EXTRACTOR.encode_bal(0x3159, 0x3670, 14)
         with self.assertRaises(ValueError):
@@ -95,6 +98,26 @@ class ExtractVuMicrocodeTests(unittest.TestCase):
             self.assertEqual(entry["source_file_offset"], 88)
             self.assertEqual(entry["destination_end"], 2)
             self.assertEqual((output / entry["file"]).read_bytes(), slot + slot)
+            bank = (output / entry["bank_file"]).read_bytes()
+            self.assertEqual(len(bank), EXTRACTOR.VU1_SLOTS * 8)
+            self.assertEqual(bank[:16], slot + slot)
+            self.assertEqual(bank[16:], struct.pack("<II", 0x8000033C, 0x000002FF)
+                             * (EXTRACTOR.VU1_SLOTS - 2))
+
+    def test_every_upload_gets_a_bank_at_its_vu_destination(self):
+        slot = struct.pack("<II", 0x8000033C, 0x400002FF)
+        payload = b"\0" * 4 + mpg(1, 0) + slot + mpg(1, 7) + slot
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "game.elf"
+            source.write_bytes(make_elf(payload))
+            output = Path(tmp) / "out"
+            report = EXTRACTOR.extract(source, output, [])
+            self.assertEqual(report["chain_count"], 2)
+            for chain, destination in zip(report["chains"], (0, 7)):
+                bank = (output / chain["bank_file"]).read_bytes()
+                self.assertEqual(len(bank), EXTRACTOR.VU1_SLOTS * 8)
+                self.assertEqual(bank[destination * 8:destination * 8 + 8], slot)
+                self.assertEqual(bank.count(slot), 1)
 
     def test_truncated_payload_is_rejected_without_reading_next_file_bytes(self):
         payload = bytearray(16)

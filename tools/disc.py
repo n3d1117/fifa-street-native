@@ -323,10 +323,13 @@ def configure(vu1_only: bool) -> None:
     catalog.mkdir(exist_ok=True)
     (catalog / "index.txt").write_text("")
     (catalog / "jr_targets.txt").write_text("")
-    manifest = json.loads((vu / "coverage.json").read_text())["tarzan_patch_candidates"]
+    coverage = json.loads((vu / "coverage.json").read_text())
+    manifest = coverage["tarzan_patch_candidates"]
     args = [sys.executable, str(ROOT / "tools/vu/vu1recomp.py"),
             "--catalog", str(catalog), "--out", str(ROOT / "generated/vu1-disc-native"),
             "--guarded", "--entry", "0"]
+    for chain in coverage["chains"]:
+        args.extend(["--pool-code", str(vu / chain["bank_file"])])
     for candidate in manifest["candidates"]:
         args.extend(["--pool-code", str(vu / "tarzan-patch-candidates" / candidate["file"])])
     for pc in sorted({pc for group in manifest["groups"].values() for pc in group["entry_vu_pcs"]}):

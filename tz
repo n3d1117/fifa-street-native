@@ -374,6 +374,9 @@ def cmd_test(args):
             run.failed += names or ["ctest"]
             run.notes += [f"  failing: {n}" for n in names[:10]]
             raise Failed(summary)
+        run.must([sys.executable, "-m", "unittest", "discover", "-s", "tools/vu/test", "-p", "test_*.py"],
+                 "VU generator tests")
+        summary += "; VU generator tests passed"
         if not args.full:
             return f"{summary} (quick tier; ./tz test --full adds slow tests and the VU1 replay)"
         if run.sh([str(CTEST), "--preset", "slow", "--no-tests=ignore", "-j", jobs.jobs()]) != 0:
@@ -391,10 +394,11 @@ def cmd_test(args):
                 run.failed.append("vu1_replay")
                 raise Failed(f"{summary}; vu1 replay produced no result")
             runs, mismatches, rejected, skipped = result
-            if runs != 1106 or mismatches or rejected or skipped:
+            expected = sum(len(list(Path(d).glob("snap_*"))) for d in dirs)
+            if runs < 1106 or runs != expected or mismatches or rejected or skipped:
                 run.failed.append("vu1_replay")
                 raise Failed(f"{summary}; vu1 replay runs={runs} mismatch={mismatches} rejected={rejected} skipped={skipped}")
-            return f"{summary}; vu1 replay runs={runs} mismatch=0 rejected=0"
+            return f"{summary}; vu1 replay runs={runs} mismatch=0 rejected=0 skipped=0"
         return f"{summary}; vu1 replay skipped (generated/vu1-disc-native or runtime/regression/vu1 missing)"
     return run_command("test", args, body)
 

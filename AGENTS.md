@@ -24,7 +24,7 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | Command | Use |
 |---|---|
 | `./tz build` | generate if inputs changed, build `build/game-metal` (0.2 s no-op; long after a recompiler/config change). `--reconfigure` after exit 2 about path/case |
-| `./tz test` / `--full` | quick tier (ctest, no disc, seconds) / adds slow tests and the 1,106-run VU1 replay |
+| `./tz test` / `--full` | quick tier (ctest + VU generator tests, no disc, seconds) / adds slow tests and the local VU1 replay corpus |
 | `./tz run --seconds 60` | bounded boot check with a summary |
 | `./tz run --route first-mission` | scripted new game to first gameplay, isolated saves (about 3 min) |
 | `./tz run --route missions` | new game with Unlock all missions (this run only), then every Story Mode map mission: guarded select, ~45 s scripted play, quit via pause menu; per-mission table (about 25 min) |
