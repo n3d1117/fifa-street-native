@@ -61,7 +61,12 @@ struct LaunchOptions
     std::filesystem::path elfPath;
     std::filesystem::path userDirectory;
     bool userDirectorySpecified = false;
+    std::filesystem::path discImage;
 };
+
+// The game reads by real disc LBN, so the user's own image backs sceCdRead and
+// the IOP CDVD. Set by main() before ps2x_app_run.
+std::filesystem::path g_discImage;
 
 std::filesystem::path defaultUserDirectory()
 {
@@ -113,7 +118,7 @@ std::filesystem::path resolveDefaultElf(const std::filesystem::path &relative)
 
 void printUsage(const char *program)
 {
-    std::cerr << "Usage: " << program << " [--user-dir DIRECTORY] [GAME.ELF]\n";
+    std::cerr << "Usage: " << program << " [--user-dir DIRECTORY] [--disc IMAGE.iso] [GAME.ELF]\n";
 }
 
 bool parseOptions(int argc, char *argv[], LaunchOptions &options)
@@ -135,6 +140,13 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
             }
             options.userDirectory = argv[++i];
             options.userDirectorySpecified = true;
+            continue;
+        }
+        if (argument == "--disc")
+        {
+            if (!options.discImage.empty() || i + 1 >= argc || !argv[i + 1] || argv[i + 1][0] == '\0')
+                throw std::runtime_error("--disc requires one image path and may be specified once");
+            options.discImage = argv[++i];
             continue;
         }
         if (argument.starts_with('-'))
@@ -239,6 +251,8 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         // memory card location after loading it and before the runtime starts.
         PS2Runtime::IoPaths ioPaths = PS2Runtime::getIoPaths();
         ioPaths.mcRoot = memoryCardDirectory;
+        if (!g_discImage.empty())
+            ioPaths.cdImage = std::filesystem::absolute(g_discImage, error).lexically_normal();
         PS2Runtime::setIoPaths(ioPaths);
 
         std::cout << "Game ELF: " << elfPath << std::endl;
@@ -276,6 +290,7 @@ int main(int argc, char *argv[])
         if (!parseOptions(argc, argv, options))
             return 0;
         const std::string elf = options.elfPath.string(), user = options.userDirectory.string();
+        g_discImage = options.discImage;
         Ps2xAppConfig config{elf.c_str(), user.c_str()};
         status = ps2x_app_run(&config);
     }

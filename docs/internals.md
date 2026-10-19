@@ -69,6 +69,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_SCALE=1..4`, `PS2X_SHARP=1` | override render scale and sharpening for this process |
 | `PS2X_DIAGNOSTIC_INPUT_FIFO=<fifo>` | process-local scripted input |
 | `PS2X_TRACE_FAULTS=1`, `PS2X_TRACE_SPU2=1`, `PS2X_TRACE_CD_IO=1` | fault, audio-health and disc-read traces |
+| `PS2X_TRACE_SYSCALLS=1`, `PS2X_TRACE_RPC=1` | first calls per EE syscall number; first 2000 SIF RPC events |
 | `PS2X_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture |
 | `PS2X_AUDIO_STRETCH=0` | no audio time stretching |
 | `PS2X_VU1_WORKER=0\|sync` | inline or drained data side |
@@ -88,3 +89,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 ## Function discovery and SDK binding (stripped ELF)
 
 No symbol map exists: the recompiler discovers functions itself (entry, JAL targets, prologues) and `generate.py` requires processed == discovered. `./rx where` reads the map from generated file names. SDK stubs in `config/SLES-53064.template.toml` come from `ps2_analyzer`'s embedded SDK signatures plus unique masked byte-pattern matches of the Tarzan port's SDK bodies (jal targets and non-stack immediates masked); libm/libc stay guest code.
+
+## Disc access
+
+The game reads by real disc LBN (it opens `DATA/IOP.BIG` at its ISO extent), so the launcher takes `--disc <image.iso>` and sets it as the runtime CD image for `sceCdRead` and the IOP CDVD; `./rx run` passes the `source_iso` recorded in `reports/disc-inventory.json`. The extracted tree stays the host file view. `sceCdRead` completes through the callback registered with `sceCdCallback`, run from an alarm event after the call returns.
