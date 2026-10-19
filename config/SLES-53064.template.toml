@@ -183,6 +183,8 @@ stubs = [
   "sceSifInitIopHeap@0x0044A3E8",
   "sceSifAllocIopHeap@0x0044A470",
   "sceSifFreeIopHeap@0x0044A4E0",
+  "_lf_bind@0x0044A588",
+  "sceSifSearchModuleByName@0x0044A958",
   "sceSifLoadFileReset@0x0044A718",
   "_sceSifLoadModuleBuffer@0x0044A750",
   "sceSifLoadModuleBuffer@0x0044A9F8",

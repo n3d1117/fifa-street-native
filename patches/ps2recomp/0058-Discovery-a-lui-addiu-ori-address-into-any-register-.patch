@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 20:56:00 +0200
+Subject: [PATCH 58/59] Discovery: a lui/addiu|ori address into any register
+ within 16 instructions is a code pointer (leaf functions start with any
+ instruction)
+
+FIFA Street's vtable slot 0x70 holds 0x433bb8 (starts with a move), built by lui/addiu into another register; the indirect call hit guest-branch:missing-target. Test: lui t0 / addiu a0,t0 registers its target.
+
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index 137701d6df323bac8f53b4e049da33a4edaa9dbd..66b9ba61d980d1e4c993cb4c930c2b9e6a48077d 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -2437,20 +2437,6 @@ namespace ps2recomp
+         }
+ 
+         // Callbacks passed by address: lui rt,hi followed within a few instructions by addiu/ori rt,rt,lo.
+-        const auto looksLikeFunctionStart = [&](uint32_t target) -> bool
+-        {
+-            if (target < codeBegin || target >= codeEnd || (target & 3u) != 0u)
+-                return false;
+-            try
+-            {
+-                const uint32_t word = m_elfParser->readWord(target);
+-                return ((word >> 16) == 0x27BDu && (word & 0x8000u) != 0u) || word == 0x03E00008u;
+-            }
+-            catch (const std::exception &)
+-            {
+-                return false;
+-            }
+-        };
+         for (const Section &section : m_sections)
+         {
+             if (!section.isCode || section.data == nullptr || section.size < 8u)
+@@ -2464,25 +2450,29 @@ namespace ps2recomp
+                     continue;
+                 const uint32_t rt = (lui >> 16) & 0x1Fu;
+                 const uint32_t high = (lui & 0xFFFFu) << 16;
+-                for (uint32_t j = i + 1u; j < words && j <= i + 6u; ++j)
++                for (uint32_t j = i + 1u; j < words && j <= i + 16u; ++j)
+                 {
+                     uint32_t next = 0u;
+                     std::memcpy(&next, section.data + j * 4u, 4);
+                     const uint32_t op = next >> 26;
+-                    if ((op == 0x09u || op == 0x0Du) && ((next >> 21) & 0x1Fu) == rt && ((next >> 16) & 0x1Fu) == rt)
++                    if ((op == 0x09u || op == 0x0Du) && ((next >> 21) & 0x1Fu) == rt)
+                     {
+                         const uint32_t low = next & 0xFFFFu;
+                         const uint32_t target = op == 0x09u ? high + static_cast<uint32_t>(static_cast<int16_t>(low)) : (high | low);
+-                        if (looksLikeFunctionStart(target) && m_entryPointHintStarts.insert(target).second)
++                        // An address built into a register is a code pointer wherever it lands in code
++                        // (leaf functions start with any instruction, e.g. a move).
++                        if (target >= codeBegin && target < codeEnd && (target & 3u) == 0u &&
++                            m_entryPointHintStarts.insert(target).second)
+                             ++seeded;
+-                        break;
++                        if (((next >> 16) & 0x1Fu) == rt)
++                            break;
++                        continue;
+                     }
+-                    // Stop at anything that overwrites rt or ends the straight-line window.
+-                    if (((next >> 11) & 0x1Fu) == rt && op == 0u)
+-                        break;
+-                    if (op >= 0x01u && op <= 0x07u)
+-                        break;
+-                    if (op != 0u && ((next >> 16) & 0x1Fu) == rt && op >= 0x08u && op <= 0x2Fu)
++                    // Stop once rt is overwritten: R-type destination, or an I-type/load that writes rt.
++                    const bool writesRtImmediate = (op >= 0x08u && op <= 0x0Fu) || (op >= 0x18u && op <= 0x1Bu) ||
++                                                   op == 0x1Eu || (op >= 0x20u && op <= 0x27u) || op == 0x37u;
++                    if ((op == 0u && ((next >> 11) & 0x1Fu) == rt) ||
++                        (writesRtImmediate && ((next >> 16) & 0x1Fu) == rt))
+                         break;
+                 }
+             }
+diff --git a/ps2xTest/src/ps2_recompiler_tests.cpp b/ps2xTest/src/ps2_recompiler_tests.cpp
+index f7b7d853e94923861a1d3fd02a6528754469384a..8a4770a0cb415d1b0bd93de29dbd9d67ebd9f662 100644
+--- a/ps2xTest/src/ps2_recompiler_tests.cpp
++++ b/ps2xTest/src/ps2_recompiler_tests.cpp
+@@ -266,7 +266,7 @@ static bool writeMinimalMipsElfWithDataCodePointer(const std::filesystem::path &
+         0x00000000u, 0x00000000u,
+         0x27BDFFF0u, 0x00000000u, // 0x00100010: addiu sp,sp,-16, only a vtable reaches it
+         0x27BD0010u, 0x03E00008u, // addiu sp,sp,16 ; jr ra
+-        0x00000000u, 0x00000000u,
++        0x3C080010u, 0x2504002Cu, // lui t0,0x10 ; addiu a0,t0,0x2C: a code pointer built in a register
+         0x03E00008u, 0x00000000u,
+     };
+     text->set_data(reinterpret_cast<const char *>(textWords.data()),
+@@ -1619,6 +1619,8 @@ void register_ps2_recompiler_tests()
+                          "the prologue a data word points at must be registered for guest dispatch");
+                 t.IsTrue(registration.find("// 0x100020") != std::string::npos,
+                          "an adjacent run of code pointers is a table: every entry is a target");
++                t.IsTrue(registration.find("// 0x10002c") != std::string::npos,
++                         "an address built by lui/addiu into another register is a target");
+                 t.IsTrue(registration.find("// 0x100003") == std::string::npos,
+                          "an unaligned data word is not a function");
+             }

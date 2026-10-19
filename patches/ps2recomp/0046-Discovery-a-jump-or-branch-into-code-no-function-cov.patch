@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 18:00:27 +0200
-Subject: [PATCH 46/57] Discovery: a jump or branch into code no function
+Subject: [PATCH 46/59] Discovery: a jump or branch into code no function
  covers (or only a stub's extent) is a function start
 
 
