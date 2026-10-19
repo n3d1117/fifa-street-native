@@ -328,6 +328,11 @@ def cmd_build(args):
         if not TEMPLATE.is_file():
             raise Missing(f"{TEMPLATE.relative_to(ROOT)} missing -> the recompiler config for {game.GAME['title']} "
                           f"({game.ID}) is not written yet")
+        import where
+        todo = where.unimplemented()[1][1:]
+        if todo:
+            raise Failed("configured stubs bound to TODO handlers (unbind them so the guest code runs, or implement them):\n"
+                         + "\n".join(todo))
         derived = TEMPLATE.read_text().replace("@ROOT@", str(ROOT))
         if not CONFIG.is_file() or CONFIG.read_text() != derived:
             CONFIG.write_text(derived)

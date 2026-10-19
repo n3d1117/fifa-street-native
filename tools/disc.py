@@ -92,6 +92,44 @@ def read_boot_elf(iso) -> bytes:
     return buf.getvalue()
 
 
+LBN_MAP = ".lbn-map"
+LBN_GAPS = ".lbn-gaps.bin"
+SECTOR = 2048
+
+
+def write_lbn_map(iso_path: Path, dest: Path, records, volume_sectors: int) -> None:
+    """The game reads by disc LBN. Record every file's extent, plus the non-zero sectors no file covers
+    (volume descriptors, path tables, directory records) in a blob, so any LBN read is servable from
+    the extraction. Format, one line each: `volume <sectors>`, `file <lbn> <sectors> <relative path>`,
+    `gap <lbn> <sectors> <blob offset>`. Sectors outside both read as zero."""
+    extents = sorted((r["lbn"], (r["size_bytes"] + SECTOR - 1) // SECTOR, r["relative_path"]) for r in records)
+    lines = [f"volume {volume_sectors}"]
+    lines += [f"file {lbn} {count} {path}" for lbn, count, path in extents]
+    blob = bytearray()
+    zero = bytes(SECTOR)
+    with iso_path.open("rb") as image:
+        cursor = 0
+        spans = [(lbn, lbn + count) for lbn, count, _ in extents] + [(volume_sectors, volume_sectors)]
+        for start, end in spans:
+            run_start = None
+            for lbn in range(cursor, start):
+                image.seek(lbn * SECTOR)
+                data = image.read(SECTOR)
+                if data and data != zero:
+                    if run_start is None:
+                        run_start, run_offset = lbn, len(blob)
+                    blob += data.ljust(SECTOR, b"\0")
+                elif run_start is not None:
+                    lines.append(f"gap {run_start} {lbn - run_start} {run_offset}")
+                    run_start = None
+            if run_start is not None:
+                lines.append(f"gap {run_start} {start - run_start} {run_offset}")
+            cursor = max(cursor, end)
+    (dest / LBN_MAP).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (dest / LBN_GAPS).write_bytes(bytes(blob))
+    print(f"lbn map: {len(extents)} files, {len(blob) // SECTOR} non-file sectors")
+
+
 def extract(iso_path: Path, dest: Path, report_path: Path) -> None:
     import pycdlib
     iso = pycdlib.PyCdlib()
@@ -109,8 +147,9 @@ def extract(iso_path: Path, dest: Path, report_path: Path) -> None:
                 if key in seen:
                     raise Fail(f"duplicate path after stripping ISO version suffix: {relative}")
                 seen.add(key)
+                record = iso.get_record(iso_path=source)
                 records.append({"iso_path": source, "relative_path": relative.as_posix(),
-                                "size_bytes": iso.get_record(iso_path=source).data_length})
+                                "size_bytes": record.data_length, "lbn": record.extent_location()})
         records.sort(key=lambda r: r["relative_path"].casefold())
         dest.mkdir(parents=True, exist_ok=True)
         for record in records:
@@ -123,6 +162,7 @@ def extract(iso_path: Path, dest: Path, report_path: Path) -> None:
                     raise Fail(f"existing extraction path conflicts or has wrong size: {target}")
                 continue
             iso.get_file_from_iso(local_path=str(target), iso_path=record["iso_path"])
+        write_lbn_map(iso_path, dest, records, iso.pvd.space_size)
         extensions = {}
         for record in records:
             suffix = Path(record["relative_path"]).suffix.lower() or "[no extension]"

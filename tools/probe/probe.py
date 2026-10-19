@@ -219,13 +219,7 @@ def main():
         if not ELF.is_file():
             print(f"{ELF.relative_to(ROOT)} missing -> ./rx disc <iso>", file=sys.stderr)
             return 2
-        command = [str(runner), "--user-dir", str(user_dir)]
-        inventory = ROOT / "reports/disc-inventory.json"
-        if inventory.is_file():
-            iso = json.loads(inventory.read_text()).get("source_iso")
-            if iso and Path(iso).is_file():
-                command += ["--disc", iso]
-        command.append(str(ELF))
+        command = [str(runner), "--user-dir", str(user_dir), str(ELF)]
 
     notes = []
     started = time.monotonic()

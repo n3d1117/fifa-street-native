@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 23:12:34 +0200
-Subject: [PATCH 35/49] Let FileIO semaphore helpers execute their guest bodies
+Subject: [PATCH 35/50] Let FileIO semaphore helpers execute their guest bodies
 
 The generated FileIO guest test reproduced sceFsSemInit throwing. Removing config entries alone still auto-bound the registry aliases. Remove both TODO registry entries and dead handlers so the original initializer and SignalSema tail call execute against guest state.
 
