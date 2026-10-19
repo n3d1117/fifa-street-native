@@ -163,7 +163,7 @@ stubs = [
   "sceSifExitCmd@0x00448040",
   "sceSifAddCmdHandler@0x00448090",
   "sceSifRemoveCmdHandler@0x00448108",
-  "_sceSifSendCmd@0x00448158",
+  "sceSifSendCmdInternal@0x00448158",
   "sceSifSendCmd@0x00448290",
   "sceSifWriteBackDCache@0x00448458",
   "sceSifInitRpc@0x00448508",

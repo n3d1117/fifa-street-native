@@ -1,0 +1,130 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 01:40:26 +0200
+Subject: [PATCH 71/71] SIF: public sceSifSendCmd (0x448290) and internal
+ _sceSifSendCmd (0x448158) bind to separate handlers (EA snd command thread
+ was sending shifted arguments); interpreter only above the ELF
+
+
+diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
+index ceb0ee1ec3884131b463fb6ee7a3c007b3065497..d885cec02503776854e2fdf26b8bf48828542a9f 100644
+--- a/ps2xRuntime/include/ps2_call_list.h
++++ b/ps2xRuntime/include/ps2_call_list.h
+@@ -90,7 +90,7 @@
+     X(SifRemoveRpcQueue)       \
+     X(SifRemoveRpc)            \
+     X(sceSifCallRpc)           \
+-    X(sceSifSendCmd)           \
++    X(sceSifSendCmdInternal)           \
+     X(sceRpcGetPacket)         \
+                                \
+     X(fioOpen)                 \
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index 6cbc5ff885b98196b6557d7147805d2082cebd85..cf226f337062245f581c23fcf3ebc37a472c0666 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -388,6 +388,8 @@ public:
+ 
+     // Track code modifications for self-modifying code
+     void registerCodeRegion(uint32_t start, uint32_t end);
++    // Highest end address over all registered code regions; 0 when none are registered.
++    uint32_t codeRegionsEnd() const;
+     bool isCodeAddress(uint32_t address) const;
+     bool isCodeModified(uint32_t address, uint32_t size);
+     void clearModifiedFlag(uint32_t address, uint32_t size);
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+index 3e7645c43093d2b8538b22df8d001d3d54c2cc24..9a5882026b5200278cc4493a328e8d91786ca88a 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.cpp
+@@ -986,6 +986,10 @@ namespace ps2_syscalls
+     {
+         constexpr uint32_t kHeaderSize = 16u;
+         constexpr uint32_t kMaxPacketSize = 112u;
++        static const bool traceSend = std::getenv("PS2X_TRACE_RPC") != nullptr;
++        if (traceSend)
++            std::fprintf(stderr, "[sif-send ee] cid=0x%x packet=0x%x size=%u extraSrc=0x%x extraDst=0x%x extraSize=0x%x\n", cid,
++                         packetAddr, packetSize, srcExtra, destExtra, sizeExtra);
+         if (!runtime || packetSize < kHeaderSize || packetSize > kMaxPacketSize || packetAddr == 0u)
+         {
+             setReturnS32(ctx, 0);
+@@ -1051,9 +1055,9 @@ namespace ps2_syscalls
+         setReturnS32(ctx, 1);
+     }
+ 
+-    void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    void sceSifSendCmdInternal(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        // _sceSifSendCmd includes a mode argument; the EE ABI passes arguments five through eight in t0-t3.
++        // sceSifSendCmdInternal includes a mode argument; the EE ABI passes arguments five through eight in t0-t3.
+         sendSifCommand(rdram, ctx, runtime, getRegU32(ctx, 4), getRegU32(ctx, 6),
+                        getRegU32(ctx, 7), getRegU32(ctx, 8), getRegU32(ctx, 9), getRegU32(ctx, 10));
+     }
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h
+index d71ef1c1cd578012fa33f6a2198377092dcf220a..c6ea1035aab933a13a7a0a086e863353106d1d8f 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/RPC.h
+@@ -18,6 +18,6 @@ namespace ps2_syscalls
+     void sendSifCommand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime,
+                         uint32_t commandId, uint32_t packetAddress, uint32_t packetSize,
+                         uint32_t extraSource, uint32_t extraDestination, uint32_t extraSize);
+-    void sceSifSendCmd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
++    void sceSifSendCmdInternal(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceRpcGetPacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+ }
+diff --git a/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp b/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
+index 2b81dfbd82eb193f0a7b98951471e7092e0d1a78..6df0a0552e0c888318accccd3f33b23e121f33a0 100644
+--- a/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
+@@ -13,8 +13,6 @@
+ 
+ namespace
+ {
+-constexpr uint32_t kDynamicCodeFloor = 0x100000u;
+-
+ inline int64_t sext32(uint32_t value) { return static_cast<int64_t>(static_cast<int32_t>(value)); }
+ 
+ struct Decoded
+@@ -42,8 +40,9 @@ Decoded decode(uint32_t word)
+ 
+ bool ps2IsInterpretedCodeAddress(const PS2Runtime &runtime, uint32_t address)
+ {
+-    return (address & 3u) == 0u && address >= kDynamicCodeFloor && address < PS2_RAM_SIZE &&
+-           !runtime.memory().isCodeAddress(address);
++    // Only RAM above the loaded ELF: the retail executable is entirely recompiled.
++    const uint32_t floor = runtime.memory().codeRegionsEnd();
++    return (address & 3u) == 0u && floor != 0u && address >= floor && address < PS2_RAM_SIZE;
+ }
+ 
+ void ps2EeInterpret(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 357a02cd498f0159ac9d5f8f2b48bca3eadac453..ad8859e1ed78f97d093344f2973c8438bd57a1e5 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -3051,6 +3051,14 @@ bool PS2Memory::isAddressInRegion(uint32_t address, const CodeRegion &region)
+     return (address >= region.start && address < region.end);
+ }
+ 
++uint32_t PS2Memory::codeRegionsEnd() const
++{
++    uint32_t end = 0u;
++    for (const auto &region : m_codeRegions)
++        end = std::max(end, region.end);
++    return end;
++}
++
+ bool PS2Memory::isCodeAddress(uint32_t address) const
+ {
+     for (const auto &region : m_codeRegions)
+diff --git a/ps2xTest/src/ps2_runtime_io_tests.cpp b/ps2xTest/src/ps2_runtime_io_tests.cpp
+index 92bdf795d099f997fb003e111199751ad9af71ea..5236af3e4755b6f4cfb342397587d64f9666317e 100644
+--- a/ps2xTest/src/ps2_runtime_io_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_io_tests.cpp
+@@ -207,7 +207,7 @@ void register_ps2_runtime_io_tests()
+                     setRegU32(ctx, 8, kSource);
+                     setRegU32(ctx, 9, destination);
+                     setRegU32(ctx, 10, 32u);
+-                    ps2_syscalls::sceSifSendCmd(rdram.data(), &ctx, &runtime);
++                    ps2_syscalls::sceSifSendCmdInternal(rdram.data(), &ctx, &runtime);
+                 }
+                 t.IsTrue(getRegS32(&ctx, 2) > 0, "a valid SIF command DMA should complete");
+                 uint8_t transferred[32]{};
