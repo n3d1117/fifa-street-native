@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 19:34:57 +0200
-Subject: [PATCH 51/53] Runtime: ps2KernelStackArena derives the
+Subject: [PATCH 51/54] Runtime: ps2KernelStackArena derives the
  callback/interrupt stack range below the lowest PT_LOAD (never on the game
  stack or heap); test
 

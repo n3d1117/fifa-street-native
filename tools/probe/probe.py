@@ -165,6 +165,40 @@ class Capture:
             self.black += float(m[1]) < 0.02
 
 
+def state_block(text):
+    """The runtime's [state-begin]..[state-end] block, with sampled pcs resolved to generated function names."""
+    lines = []
+    for block in re.findall(r"\[state-begin\]\n(.*?)\[state-end\]", text, re.S)[-1:]:
+        lines = block.strip().splitlines()
+    if not lines:
+        return None
+    starts = []
+    for path in (ROOT / "generated" / game.ID).glob("sub_*_0x*.cpp"):
+        match = re.match(r"(sub_[0-9A-Fa-f]+)_0x([0-9a-f]+)\.cpp$", path.name)
+        if match:
+            starts.append((int(match[2], 16), match[1]))
+    starts.sort()
+    def name(pc):
+        best = None
+        for start, label in starts:
+            if start > pc:
+                break
+            best = label
+        return best or "?"
+    out = []
+    for line in lines:
+        if line.startswith("ee pc samples"):
+            parts = []
+            for tok in line.split(":", 1)[1].split():
+                pc, count = tok.rsplit("x", 1)
+                parts.append(f"{pc}({name(int(pc, 16))}) x{count}")
+            line = line.split(":", 1)[0] + ": " + ", ".join(parts)
+        elif re.search(r" pc=0x([0-9a-f]+)", line) and line.startswith("ee thread"):
+            line += f"  [{name(int(re.search(r' pc=0x([0-9a-f]+)', line).group(1), 16))}]"
+        out.append(line)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, help="run directory (default build/runs/<UTC>)")
@@ -243,6 +277,7 @@ def main():
     cap = Capture(out)
     deadline = started + args.seconds
     killed_by_us = fault_stop = False
+    state_asked = False
     profiled = None
     next_black = started + BLACK_SAMPLE_START
     seen_len = 0
@@ -256,6 +291,9 @@ def main():
             seen_len = len(text_now)
             if args.profile and profiled is None and now - started >= args.profile_after:
                 profiled = sample_game_thread(proc.pid, out / "game-thread.sample") or []
+            if not state_asked and args.seconds >= 8 and now >= deadline - 3.5:
+                state_asked = True
+                os.kill(proc.pid, signal.SIGUSR1)  # one-block runtime state dump, see [state-begin] in run.log
             if now >= next_black:
                 cap.sample(proc.pid)
                 next_black = time.monotonic() + BLACK_SAMPLE_EVERY
@@ -306,6 +344,7 @@ def main():
     text = log_path.read_text(errors="replace")
     metrics = parse_log(text)
     crash = crash_from(text, proc.returncode, killed_by_us)
+    state = state_block(text)
     report = None
     if proc.returncode and proc.returncode < 0 and not killed_by_us:
         reports = Path.home() / "Library/Logs/DiagnosticReports"
@@ -333,7 +372,7 @@ def main():
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
-        "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
+        "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if scratch:
