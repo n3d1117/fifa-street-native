@@ -40,6 +40,8 @@ uses that same linkage. Verify the runner with `nm` and `otool -L` after
 
 ## Next
 
+macOS first: the CPU rows (18, 25, 24, 26) and the remaining macOS items come before the iOS/tvOS track.
+
 1. Play every mission beyond the sweep's 45 s: completion, boss outcomes, `Into the Caverns` (needs 45 film reels or an override of its requirement card), audio/video issues. Intermittent audio underrun bursts during mission transitions still need diagnosis; the game requests intro movies that are not on the disc for 9 mission entries (`W1_2_RAF` `W1_4_WAT` `W1_5_BOS` `W2_2_WAT` `W2_3_GM` `W2_5_BOS` `W3_3_RAF` `W3_4_GM` `W3_5_BOS`), which the game skips; `W1_1_GM` and `W2_1_GM` played to the end (about 40 s and 31 s wall); `Crocodile Clash` can end by itself inside 45 s of scripted play.
 2. Cut guest render/culling CPU time without changing timing.
 3. Reach 60/120 FPS in gameplay without changing game speed.
@@ -91,8 +93,8 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 | 21 | Screen-space presented-frame interpolation between two guest frames in the Metal presenter (opt-in; one field of latency, HUD ghosting) as the alternative to raising the guest rate; per-object interpolation needs the game's matrix setup hooked (L) | smooth 50/60 Hz image at 25 FPS logic | M | medium (artifacts) |
 | 22 | User-supplied texture packs through PCSX2's GS hash-based replacement (dump, then load from the user's own folder; nothing shipped) | blurry tutorial cards, HD UI | S-M | low |
 | 23 | PGO for the runtime and host only (generated units unchanged; FP flags unchanged; profile is a local build product) | CPU | S-M | low |
-| 24 | Guest loads/stores: one-compare RDRAM fast path inline, everything else in cold `preserve_most` helpers (a compiled probe drops from about 60 instructions with a stack frame to about 13 without) | CPU | M | low (regeneration; replay and route gates) |
-| 25 | `SET_GPR_*` writes only the low 64 bits where the upper lanes are dead by construction (5-6 NEON instructions to one store) | CPU | S-M | low (batch the regeneration with 24) |
+| 24 | Guest loads/stores: inline fast path when `(addr & (0x5E000000 \| alignmask)) == 0` (aligned RDRAM through kuseg, its 0x20000000 mirror, kseg0/kseg1 below 32 MB); everything else goes to the unchanged code in a cold `preserve_most` helper, so behavior is identical. Header-only (`ps2_runtime_macros.h`), no regeneration; a `-D` switch restores the old path. Standalone probe: LW 62 to 22 instructions, SW 51 to 15 | CPU | S-M | low (parity unit tests, route A/B) |
+| 25 | `SET_GPR_*` as one 64-bit store: `Ps2SetGprLow64` already preserves the upper 64 bits, so this is bit-exact for every use, not a semantic change. Header-only, `-D` switch; do before 24 | CPU | S | none (upper-lane unit tests, route A/B) |
 | 26 | Direct `jal`: call through the function table with one slow-path check instead of the out-of-line `dispatchGuestBranch` (checkpoint, two lookups, thread-local history push) | CPU | M | medium (hooks and resume points must keep working) |
 | 27 | VU1 AOT: use the generator's existing normalization proof (`compute_norm`) in operand emission, and set FPCR.FZ inside the VU call; the replay corpus is the gate | VU1 cost | M | low (replay-gated) |
 | 28 | Hot-first symbol order file for generated code; then `preserve_none` plus `musttail` (both available in our clang 19 on arm64) if prologues still show in the profile | CPU | S-M | low |
@@ -144,8 +146,8 @@ Planned `tz package --platform ios|tvos --iso <disc> [--developer-dir PATH]` (no
 
 | Step | Work | Effort |
 |---|---|---|
-| 1 | Host-agnostic core (also simplifies macOS): Cocoa behind a `HostSurface` interface in `host/metal-host.mm`; C API `tarzan_core_start`, `set_paths`, `pad_state`, `pause`, `stop` (the in-process `tarzan_run`/`tarzan_stop` in `host/tarzan-app.hpp` are the start); no `getenv("HOME")` | M |
-| 2 | Cross-build `arm64-apple-ios` and simulator static libs: GS bridge, SoundTouch, sse2neon, movies-only FFmpeg; measure generated-code compile time and binary size early | M |
+| 1 | Host-agnostic core (also simplifies macOS). Already true: one process (`host/launcher.cpp` calls `tarzan_run` in-process), settings in a struct (`host/settings.hpp`); the only `getenv("HOME")` is `defaultUserDirectory()`. The real change is thread ownership: `PS2Runtime::run()` makes its caller the host poll loop, GS teardown relies on that loop pumping the main thread, and the runtime calls `tarzan_metal_host_start`, `tarzan_metal_key_down` and `tarzan_gamepad_read` directly. Invert it: the host owns the main thread, the core runs on its own thread behind a C API (`tarzan_core_start`, `set_paths`, `pad_state`, `pause`, `stop`) and a `HostSurface` interface. Commit order, each keeping the macOS app working: paths/HOME; settings struct as input; input feed pushed by the host; GS glue out of the runtime; `HostSurface`; core on its own thread (gated by `tz run --app ... --quit-cycles` and the first-mission route); pause/resume; remove dead seams | M |
+| 2 | Cross-build `arm64-apple-ios` and simulator static libs: GS bridge, SoundTouch, sse2neon, movies-only FFmpeg; measure generated-code compile time and binary size early; `tools/build-deps.sh` is macOS-host only; the GS bridge becomes a static lib on iOS; check `ps2_memory.cpp` for large virtual reservations | M |
 | 3 | PCSX2 GS Metal on iOS (about 8 small fixes, below) | M |
 | 4 | UIKit host: `CAMetalLayer` view, lifecycle, audio-session interruptions, GameController input (SDL stays on macOS) | M |
 | 5 | Disc import: document picker, verify hashes, copy into the container (staged, swap on activate); saves in Application Support; never bundle game data | M |
