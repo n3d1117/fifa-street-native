@@ -13,25 +13,25 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Saves | Card save/reload for one slot | All checkpoints, multiple slots |
 | Input | Keyboard remapping, SDL gamepads | Real PS5/Xbox pad testing |
 | Video | Native to 4x internal resolution, 16:9, optional sharpening, UI half-pixel coverage fix | Blurry tutorial text at higher scale |
-| Performance | Default 25 FPS PAL. The 60 target reaches 60.0 `fps_gameplay` in first-mission gameplay with the data-side worker (36.2 inline; the target caps the result, so headroom is unmeasured). Gameplay is CPU-bound | later missions at 60 not measured; guest render/culling and VU1 flag helpers dominate the profile |
+| Performance | Default 25 FPS PAL. Target 60: mission 1/8 reach about 60 FPS (`./tz run --mission N --fps-target 60 --measure`); gameplay CPU cost ≈25.5/27.4 ms per DISPFB2 update. Both threads profiled; method and attribution in `internals.md` | Target 120: disabling FIFO gives no throughput gain in first-mission gameplay; coupled EE/worker work and barriers remain |
 | Process | One app process, one build tree `build/game-metal`, settings in one plist | Settings window and fullscreen are not scriptable |
 | Platforms | macOS arm64 | iOS/tvOS: plan only (below) |
 
-Measuring: `./tz run --route first-mission --fps-target 60 --measure` (60 s steady window, `scene` must be `playable`). Profile by sampling the game thread with `sample <child-pid> 20` after confirming gameplay; the built-in `--profile` defaults to boot.
+Measuring: `./tz run --route first-mission --fps-target 60 --measure` (60 s steady window, `scene` must be `playable`). Take gameplay task/thread CPU counter deltas, then attribute both EE and worker with `sample <child-pid> 20`; the built-in `--profile` defaults to boot. Never use sampled FPS as throughput evidence.
 
 ## Next
 
 macOS first, in this order.
 
-1. **Offline GS replay benchmark** from local captures, with no game launch; first prove the bridge's headless lifecycle on macOS 11.
-2. **Profile-first CPU work.** VU1 FMAC flag cost, guest code speed (memory fast path, register stores, direct calls), native IOP. Only what the profile prices above about 3% of the game thread. Every change gets a kill-switch and, where results must match, a verify mode.
+1. **Lower CPU per frame.** Reduce swap-buffer polling/checkpoint overhead while preserving guest deadlines and IOP/SPU2 service; then VU1, useful guest/VU0 work and IOP/SPU2. For 120 headroom, prioritize VU1 flags/native work, useful guest/VU0, GS bridge, then IOP/SPU2. Every change gets a kill-switch and, where results must match, a verify mode.
+2. **Small offline GS replay benchmark for 120 work.** Bridge work ranks narrowly third (≈11% of combined active samples) with FIFO disabled, versus outside the top three at target 60 (≈5%). Replay local streams without game launch; first prove the bridge's headless lifecycle on macOS 11.
 3. **Smaller app and faster builds, by build profile.** Minimal FFmpeg (MPEG-2 decoder and parser only; PSS frames must stay bit-identical), split the largest translation units and the PCH, trim the GS bridge.
-4. **Later, nice-to-haves.** Apple GameController backend in place of SDL. Cheat-section features: FPS overlay, invincibility, character and trick unlocks, button-swap remap. Visual toggles: frame pacing, sharper tutorial text. 120 FPS: test on a 120 Hz display (60 Hz display measured 55.7, presentation-paced).
+4. **Later, nice-to-haves.** Apple GameController backend in place of SDL. Cheat-section features: FPS overlay, invincibility, character and trick unlocks, button-swap remap. Visual toggles: frame pacing, sharper tutorial text. 120 FPS: validate on a 120 Hz display after CPU work; FIFO-off first-mission measurements on a 60 Hz display did not improve throughput.
 5. **iOS/tvOS, last.** See the plan below.
 
 ## Open questions / known issues
 
-- Whether the 60 target holds in later missions (unmeasured).
+- Whether target 60 holds beyond the measured mission 1 and 8 windows.
 - Mission completion, boss outcomes and every save path are untested.
 - Intermittent audio underrun bursts at mission transitions are undiagnosed.
 

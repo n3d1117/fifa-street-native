@@ -8,7 +8,7 @@ Mechanisms, invariants and constants. Commands are in `AGENTS.md`; state and roa
 - Interactive hardware time follows the monotonic host clock (`PS2X_WALLCLOCK=0` selects deterministic estimated-cycle time). Estimated block costs never accelerate it. EE, COP0 and IOP/SPU clocks are never changed to raise FPS; no overclock. The 60/120 experiment changes only the guest VBlank period and the FPS gate.
 - Synchronous guest IOP RPCs must not advance the SPU timeline on top of the EE-issued IOP budget: the scheduler accumulates an absolute issued target and credits work already executed; reset clears the target and the fractional 1:8 carry; the SPU epoch stays monotonic.
 - Movie presentation epoch is fixed. Late frames present promptly without shifting the PTS epoch or dropping decoded frames. PTS and PTS-less intervals use the effective VBlank period.
-- DISPFB2 changes, guest updates and presents are different metrics. `fps_dispfb2` in the `tz run` summary is the first; gameplay is 25/s, movies 50/s. Gameplay is CPU-bound (GPU about 3.5 ms per 20 ms field, no readbacks). Guest render/culling (`HIE_fn_vSendBufferedCharacterToViewport` and its VIF/MFIFO/VU1 children) dominates. Metal drawable waits matter only at 120 Hz without the upstream display-rate throttle, which is enabled.
+- DISPFB2 changes, guest updates and presents are different metrics. `fps_dispfb2` in the `tz run` summary is the first; gameplay is 25/s, movies 50/s. With the data-side worker, target-60 gameplay reaches its cap while EE polls and VU1/GS overlap; target-120 attribution is in the profile section below. The upstream display-rate present throttle is enabled for high FPS.
 
 ## Game clock and FPS mechanism
 
@@ -62,18 +62,16 @@ Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity ac
 
 ## Profile attribution (decision basis)
 
-Game-thread leaf samples at target 60 in the confirmed playable first-mission scene, measured before the worker; regenerate by sampling per `docs/STATUS.md`. Profiled FPS is not throughput evidence.
-
-| Work | % of game thread |
-|---|---:|
-| VU1 native bodies and helpers (FMAC flag helpers 13.7, range correction 3.0, rest 11.8) | 28.5 |
-| Guest, VU0 and remaining helpers (guest function self-time 19.3) | 28.6 |
-| GS bridge submission and presentation | 8.8 |
-| IOP execution plus scheduling/HLE | 9.6 |
-| VIF1 interpreter 5.8, GIF 2.0, DMA/MFIFO 1.2, native staging 4.2, XGKICK 3.5, lookup 0.1 | 16.8 |
-| SPU2 mixing and stretcher 3.7, EE scheduler/checkpoints 4.4 | 8.1 |
-
-Transactional bank copies cost 3.1%; lookup is generation-cached and not a target. Per-frame work: about 725 MSCAL and 242 MSCNT, 4,470 guest cycles per MSCAL; MSCNT at `0x05e8` takes two cycles but still stages both banks.
+- Reproduce with `./tz run --mission 1 --fps-target 60 --measure`, then mission 8; take gameplay CPU counter deltas before `sample <child-pid> 20`. Sampling is attribution, never throughput evidence.
+- Use `proc_pidinfo` task/thread user+system deltas: task times need `mach_timebase_info` conversion, thread times are nanoseconds. Divide by window wall time for busy %, and by DISPFB2 rate × wall time for approximate CPU seconds/frame; exclude boot/loading.
+- Measured mission 1/8: EE busy 99.3/99.4%, worker 48.5/59.5%, main 0.49/0.44%, audio callbacks 0.56/0.51%; unnamed dispatch/driver pool 3.9/4.6% (queue identity inferred). Total CPU/frame ≈0.0255/0.0274 s at ≈60 updates/s.
+- EE leaf attribution (% of thread wall samples, mission 1/8): guest/VU0/helpers 41.0/38.9, IOP 17.0/14.9, SPU2 5.9/5.6, scheduler/checkpoints 33.0/34.7, VIF/DMA/queue 2.6/2.7, blocked 0.5/3.3. IOP and mixing remain on EE; audio callbacks are separate.
+- `osrSwapBuffer` polls `0x6B04F0 != 0x6B04F8` at `0x3F8B98`; inclusive cost 47.5/52.3% of EE samples includes required IOP/SPU2 work. Poll-loop guest self plus checkpoint accounting is 34.9/38.8%, a power target rather than a promised saving.
+- Worker attribution (% wall samples, mission 1/8): VU1 31.7/53.2 (native bodies/helpers 25.4/44.1, including FMAC flags 12.2/21.7); unpack 1.7/2.9, GIF arbitration 1.8/2.2, GS bridge 6.9/8.5, waits 56.3/32.0; remainder ring/other.
+- At target 60 the cap is reached: the worker regularly finishes ahead of EE and sleeps on an empty ring; EE-to-worker drain blocking is small. A busy EE core includes guest polling, so it does not establish useful-work saturation.
+- Presentation isolation: pair `./tz run --route first-mission --fps-target 120 --measure` with `RRV_GATE3_FAST_FORWARD=1000000000` on the second run. This existing bridge knob keeps FIFO, display-rate skipping and the atTime pacer disabled during the run; rendering still happens. Unprofiled windows measured 52.4→51.5 updates/s (−1.8%): no throughput gain.
+- At 120 EE waits at the vsync drain for 35/37% of wall samples with/without FIFO; worker empty-ring waits are 28/27%, and drawable blocking is negligible. Inferred limit: coupled EE/worker work and barriers, not display pacing alone; FIFO-off VU1/guest/GS bridge/IOP+SPU2 shares are 49% worker/39% EE/15% worker/14% EE.
+- Power priorities: polling/checkpoint overhead, VU1, useful guest/VU0, IOP/SPU2. Headroom priorities: VU1 (flags are about two-fifths of VU1 cost), useful guest/VU0, GS bridge, IOP/SPU2. Test VU changes with `./tz bench vu1`, the rest with the same mission runs. A small GS-stream bench is justified for FIFO-off 120: bridge work ranks narrowly third (≈11% of combined active samples), versus outside the top three at 60 (≈5%).
 
 ## Audio and movies
 
