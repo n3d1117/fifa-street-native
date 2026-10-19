@@ -5,9 +5,9 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Area | Works | Open |
 |---|---|---|
 | EE recompile | 10,171 functions mapped: 9,806 translated, 365 HLE-bound, none skipped | 28 configured HLE names map to unimplemented handlers (`./tz where --unimplemented`) |
-| Gameplay | Boot, story movie, first mission | Later missions, full progression, ending |
+| Gameplay | Boot, story movie, first mission; `tz run --route missions` (unlock-all, ~45 s scripted play each) ran 11 of the 12 Story Mode map missions at 24.9-25.0 FPS with no crash, hang or unimplemented stub (measured) | Play beyond 45 s per mission, mission completion, Terk's challenges, full progression, ending; `Into the Caverns` is gated by a film-reel requirement card the unlock override does not cover |
 | Audio / movies | Startup and first story movie in sync, no clipping; movie PES accepted packet by packet | Later movies; startup pre-roll vs. hardware; occasional 64-multiple underrun count on title boots |
-| VU1 | Native, guarded, generated from the disc; no fallbacks in first mission; replay corpus 1,106 runs, 0 mismatches | Programs only seen in later missions |
+| VU1 | Native, guarded, generated from the disc; no fallbacks in first mission; replay corpus 1,106 runs, 0 mismatches | Interpreter fallbacks (native program rejected, state untouched) in 8 of the 11 swept missions in the last run (the set varies slightly by run), from about 10 to 6,800 per mission; logged images `0785d8c727a7a1fb`, `476c479186e0c7a0`, `4a4b16036a677c9a`, all entry 0; the log prints only the first 16 per process, so the sweep's per-mission counts are the evidence for the rest |
 | VU0 | Captured skinning program native, others interpreted | Capture later-level programs |
 | IOP | Interpreted; LWL/LWR pairs forward pending load values | |
 | Saves | Card save/reload for one slot | All checkpoints, multiple slots |
@@ -25,7 +25,7 @@ The FP/VU0 correctness batch covers macro FMAC Z/S/U/O and FDIV I/D status, FPU 
 
 ## Next
 
-1. Play every mission; log crashes, hangs, audio/video issues.
+1. Play every mission beyond the sweep's 45 s: completion, boss outcomes, `Into the Caverns` (needs 45 film reels or an override of its requirement card), audio/video issues. Sweep findings (measured, one run each, scripted input): fps 24.9-25.0 in every swept mission; steady-state audio underruns 0 except one intermittent burst of about 20k in one mission per run (varies by run: `Skiing the Swamp` in one, `Subterranean Search` in another); the game requests intro movies that are not on the disc for 9 mission entries (`W1_2_RAF` `W1_4_WAT` `W1_5_BOS` `W2_2_WAT` `W2_3_GM` `W2_5_BOS` `W3_3_RAF` `W3_4_GM` `W3_5_BOS`), which the game skips; `W1_1_GM` and `W2_1_GM` played to the end (about 40 s and 31 s wall); `Crocodile Clash` can end by itself inside 45 s of scripted play. Captured VU1 snapshots of the fallback programs stay in the run's `vu1-snapshots` (local); they are not in `runtime/regression/vu1` because the replay harness skips them (`skipped=24`) and `tz test --full` requires zero skipped.
 2. Cut guest render/culling CPU time without changing timing.
 3. Reach 60/120 FPS in gameplay without changing game speed.
 4. Faster mission loading (guest texture conversion/initialization, not disk reads).
@@ -82,7 +82,7 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 
 | # | Item | Why | Effort |
 |---|---|---|---|
-| T1 | **Mission jump.** `tz run --save <fixture>` copies local memory-card fixtures into a fresh isolated user dir; verified route to first mission can seed fixtures. Unlock-all half done as the opt-in `unlockAllMissions` setting (Settings window, cheats section; off by default): a display/selection-only override of the map lock queries, no progress written. Verified in a fresh save: later map entries become selectable and the water-ski mission (map entry 3) loads and runs; its VU1 run showed one native-program rejection (interpreter fallback) and nothing else was checked beyond that mission. | reach later missions in seconds; multi-mission regression routes | S-M |
+| T1 | **Mission jump.** `tz run --save <fixture>` copies local memory-card fixtures into a fresh isolated user dir; verified route to first mission can seed fixtures. Unlock-all half done as the opt-in `unlockAllMissions` setting (Settings window, cheats section; off by default): a display/selection-only override of the map lock queries, no progress written. Verified in a fresh save: later map entries become selectable and `tz run --route missions` plays them (see Gameplay). | reach later missions in seconds; multi-mission regression routes | S-M |
 | T2 | **Deadline sleep instead of spinning** in the host/VBlank wait: sleep to about 0.5 ms before the boundary, then spin | biggest power/heat win, no game-speed change | S |
 | T3 | **Thread QoS per role** (game/render `USER_INTERACTIVE`, workers `UTILITY`); App Nap off while playing; thermal-state observer that drops the internal scale or FPS target at `.serious` | pacing stability, thermals | S |
 | T4 | **Build speed.** ccache with PCH (`CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime`, `-Xclang -fno-pch-timestamp`) and stable sorted unity batches; one `-ftime-trace` pass for slow TUs; `-g0`/`-gline-tables-only` for generated code; try `-fuse-ld=lld` | rebuild time | S-M |

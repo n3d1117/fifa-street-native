@@ -8,8 +8,10 @@
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run [--seconds N] [--route first-mission] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
+  tz run [--seconds N] [--route first-mission|missions] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
+                           --route missions: new game with unlockAllMissions (this run only), then every Story Mode map
+                           mission (~45 s scripted play each, quit via pause menu); per-mission table (default 3600 s)
   tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
   tz where --unimplemented  audit configured direct TODO handlers
@@ -514,6 +516,18 @@ def cmd_run(args):
                       f"audio_boundary_underruns: {fmt(s.get('audio_boundary_underruns'))}",
                       "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
                       f"stubs: {stubs}"]
+        for m in s.get("missions", []):
+            vu = f" vu1:{','.join(m['vu1_programs'])}" if m.get("vu1_programs") else ""
+            mv = "".join(f" movie:{v['name']}:{'end' if v['to_end'] else 'open' if v['played'] else 'missing'}"
+                         + (f"({v['seconds']:g}s)" if v["seconds"] else "") for v in m.get("movies", []))
+            stubs = ",".join(f"{n}x{c}" for n, c in m.get("stubs", []))
+            run.notes.append(f"  mission {m['index'] + 1} {m['name']} [{m.get('type', '')}]: {m['result']}; gameplay "
+                             f"{'yes' if m.get('reached') else 'no'}; {fmt(m.get('play_seconds'))} s play, fps {fmt(m.get('fps_dispfb2'))} "
+                             f"(min {fmt(m.get('fps_min'))}), cpu {fmt(m.get('cpu_user_s'))} s, fallbacks {fmt(m.get('fallbacks'))}, "
+                             f"underruns {fmt(m.get('underruns'))}, stubs {stubs or 'none'}{vu}{mv}")
+        if s.get("missions"):
+            run.notes.append(f"vu1 snapshots: {s['vu1_snapshots']} ({s['snapshot_files']} files); movies not on disc: "
+                             f"{', '.join(s['missing_movies']) or 'none'}")
         if s["black_frames"]:
             run.notes.append(f"black_frames: {s['black_frames']}")
         if s["save_dir_changed"]:
@@ -570,7 +584,7 @@ def main():
     c.set_defaults(fn=cmd_check)
     r = sp.add_parser("run")
     r.add_argument("--seconds", type=int)
-    r.add_argument("--route", choices=["none", "first-mission"])
+    r.add_argument("--route", choices=["none", "first-mission", "missions"])
     r.add_argument("--user-dir")
     r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")
     r.add_argument("--profile", action="store_true")

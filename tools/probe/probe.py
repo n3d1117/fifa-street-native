@@ -4,6 +4,9 @@
 Merges the former run-native-check / diagnose-native / probe-first-level scripts.
   --route first-mission  scripted new-game route through process-local diagnostic input
                          (OCR guard on the language menu before the first key)
+  --route missions       needs unlockAllMissions (written into its own isolated user dirs, this run only): new game, then every
+                         mission on the Story Mode map in order: select, wait for gameplay (OCR guards), ~45 s scripted play,
+                         quit to the map through the pause menu. Per-mission table in summary.json ("missions").
   --save DIR             seed a fresh isolated user dir from DIR/memcards
   --profile              macOS `sample` of the GameThread after --profile-after seconds
   --gpu-capture          bounded Metal frame capture (TARZAN_CAPTURE_*)
@@ -18,6 +21,7 @@ import collections
 import hashlib
 import json
 import os
+import plistlib
 import re
 import shutil
 import select
@@ -27,6 +31,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from difflib import SequenceMatcher
+from string import capwords
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +54,13 @@ TOOL_FRAMEWORKS = {
     "send-native-key": ["-framework", "Cocoa", "-framework", "ApplicationServices", "-framework", "Carbon"],
 }
 LOGICAL_KEY = {7: 5, 36: 17, 125: 2, 126: 1, 8: 7}
+PAD = {"up": 1, "down": 2, "left": 3, "right": 4, "cross": 5, "circle": 7, "square": 9, "triangle": 11, "start": 17}
+PLAY_SECONDS = 45
+PERIODIC_RE = re.compile(r"\[vu1rec\] periodic: mscal=\d+ native=\d+ fallback=(\d+) .*?nativeFail=(\d+) .*?\(DISPFB2 ([0-9.]+)\)")
+MOVIE_RE = re.compile(r'\[sceCdSearchFile:ok\] path="[^"]*?([^\\"]+\.PSS)|sceCdSearchFile failed: [^\n]*?([^\\\n]+\.PSS)|'
+                      r"\[iop-audio-rpc\] fn=11 [^\n]*?\binit=0\b")
+VU_FALLBACK_RE = re.compile(r"\[vu1rec\] VU1 image ([0-9a-f]{16})(?: entry (0x[0-9a-f]+))? has no native code|"
+                            r"\[vu1rec\] native program failed[^\n]*?image=([0-9a-f]{16}) entry=(0x[0-9a-f]+)")
 # (second, macOS key code): the validated menu route, new-game variant with three name characters.
 ROUTE_FIRST_MISSION = [(47, 7), (53, 36), (61, 7), (68, 7), (75, 7), (82, 7),
                        (89, 7), (90, 7), (91, 7), (98, 7), (105, 7)]
@@ -220,11 +233,440 @@ class Capture:
             return None
 
 
+class Game:
+    """One game process with a diagnostic input FIFO, an incrementally parsed log and window OCR."""
+
+    def __init__(self, out, tag, user_dir, capture_dir):
+        self.out, self.user_dir = out, user_dir
+        self.log_path = out / f"run-{tag}.log"
+        fifo = out / f"input-{tag}.fifo"
+        os.mkfifo(fifo, 0o600)
+        self.fifo_fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
+        env = os.environ.copy()
+        env.setdefault("TARZAN_TRACE_FAULTS", "1")
+        env.setdefault("TARZAN_TRACE_SPU2", "1")
+        env["TARZAN_DIAGNOSTIC_INPUT_FIFO"] = str(fifo)
+        env["PS2X_VU1_CAPTURE"] = str(capture_dir)
+        env["PS2X_VU1_CAPTURE_EVERY"] = "1000000"  # first 8 MSCALs per (program, entry) only
+        runner = DEFAULT_RUNNER.resolve(strict=True)
+        self.logf = self.log_path.open("wb")
+        self.started = time.monotonic()
+        self.proc = subprocess.Popen([str(runner), "--user-dir", str(user_dir), str(ELF)], cwd=ROOT, env=env,
+                                     stdout=self.logf, stderr=subprocess.STDOUT)
+        self.exit_watch = select.kqueue()
+        self.exit_watch.control([select.kevent(self.proc.pid, filter=select.KQ_FILTER_PROC,
+                                               flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
+                                               fflags=select.KQ_NOTE_EXIT)], 0, 0)
+        self.cap = Capture(out)
+        self.pos, self.tail = 0, ""
+        self.periodic = []  # (monotonic, log position, fallback, nativeFail, fps)
+        self.movies = []  # dicts: name, opened/missing, seconds, ended
+        self.killed = False
+        self.cpu_user_s = self.cpu_sys_s = 0.0
+        self.returncode = None
+
+    def alive(self):
+        return not self.exit_watch.control(None, 0, 0)
+
+    def poll(self):
+        """Parse log text appended since the last call."""
+        with self.log_path.open("rb") as f:
+            f.seek(self.pos)
+            chunk = f.read().decode(errors="replace")
+        if not chunk:
+            return
+        now, old = time.monotonic(), len(self.tail)
+        text = self.tail + chunk
+        for m in PERIODIC_RE.finditer(text):
+            if m.end() > old:
+                self.periodic.append((now, self.pos, int(m[1]), int(m[2]), float(m[3])))
+        for m in MOVIE_RE.finditer(text):
+            if m.end() <= old:
+                continue
+            if m[1] or m[2]:
+                self.movies.append({"name": m[1] or m[2], "opened": bool(m[1]), "t0": now, "ended": None, "pos": self.pos})
+            elif self.movies and self.movies[-1]["opened"] and self.movies[-1]["ended"] is None:
+                self.movies[-1]["ended"] = now
+        self.pos += len(chunk.encode())
+        self.tail = text[-300:]
+
+    def text(self, a=0, b=None):
+        with self.log_path.open("rb") as f:
+            f.seek(a)
+            return (f.read() if b is None else f.read(max(0, b - a))).decode(errors="replace")
+
+    def mask(self, bits):
+        os.write(self.fifo_fd, struct.pack("<I", sum(1 << PAD[b] for b in bits)))
+
+    def press(self, *names, hold=0.15):
+        self.mask(names)
+        time.sleep(hold)
+        self.mask(())
+
+    def cpu_user(self):
+        r = subprocess.run(["ps", "-o", "utime=", "-p", str(self.proc.pid)], capture_output=True, text=True)
+        m = re.fullmatch(r"\s*(\d+):([0-9.]+)\s*", r.stdout)
+        return int(m[1]) * 60 + float(m[2]) if m else None
+
+    def screen(self):
+        """(texts casefolded, raw lines) of the live window at confidence >= 0.45, or ([], None) when capture failed."""
+        lines = self.cap.grab(self.proc.pid)
+        if lines is None:
+            return [], None
+        good = [l for l in lines if l.get("confidence", 0) >= 0.45 and "native" not in l.get("text", "").casefold()]
+        return [l["text"].strip().casefold() for l in good], good
+
+    def stop(self):
+        if self.alive():
+            self.killed = True
+            self.proc.send_signal(signal.SIGTERM)  # the GS dependency can swallow SIGTERM: escalate
+            end = time.monotonic() + 2
+            while time.monotonic() < end and self.alive():
+                time.sleep(0.01)
+            if self.alive():
+                self.proc.kill()
+        _, status, usage = os.wait4(self.proc.pid, 0)
+        self.returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)
+        self.cpu_user_s, self.cpu_sys_s = round(usage.ru_utime, 3), round(usage.ru_stime, 3)
+        self.exit_watch.close()
+        self.logf.close()
+        os.close(self.fifo_fd)
+        self.poll()
+
+
+def screen_kind(texts, lines):
+    """Classify an OCR frame: map, mode, pause, confirm, popup or other."""
+    has = lambda t: t in texts
+    if map_mission(lines):
+        return "map"
+    if has("story mode") and any("challenges" in t for t in texts):
+        return "mode"
+    if has("yes") and has("no"):
+        return "confirm"
+    if has("quit level") or (has("continue") and any(t.endswith("go back") for t in texts)):
+        return "pause"
+    if has("hall of fame"):
+        return "options"
+    if has("continue"):
+        return "popup"
+    if any(t.startswith("select") for t in texts):
+        return "maplike" if any("challenges" in t for t in texts) else "briefing"
+    return "other"
+
+
+def map_mission(lines):
+    """(name, type, confidence) of the highlighted map entry: the two lines just below the Story Mode title (the title
+    sits at the top of the map in the first world and at the bottom in later ones)."""
+    story = next((l for l in lines or [] if l["text"].strip().casefold() == "story mode"), None)
+    if not story:
+        return None
+    sy = story["bbox"]["y"]
+    names = sorted((l for l in lines if sy - 0.2 < l["bbox"]["y"] < sy - 0.005 and re.search(r"[a-z]{4}", l["text"].casefold())
+                    and not re.search(r"challenges|\bback\b|select|^terk\W*$", l["text"].casefold())), key=lambda l: -l["bbox"]["y"])
+    if not names:
+        return None
+    pair = names[:2]
+    return (capwords(pair[0]["text"].strip()), capwords(pair[1]["text"].strip()) if len(pair) > 1 else "",
+            sum(l["confidence"] for l in pair) / len(pair))
+
+
+def read_map(game):
+    """Best of two OCR frames for the highlighted map entry, or None."""
+    best = None
+    for i in range(2):
+        cur = map_mission(game.screen()[1])
+        best = cur if cur and (not best or cur[2] > best[2]) else best
+        time.sleep(1.0)
+    return best
+
+
+def wait_screen(game, kinds, timeout, want=None, confirm=2):
+    """Poll OCR every ~1 s until the frame is one of `kinds` (and want(texts) holds) on `confirm` consecutive frames."""
+    end, hits = time.monotonic() + timeout, 0
+    while time.monotonic() < end:
+        game.poll()
+        if not game.alive():
+            return None
+        texts, lines = game.screen()
+        kind = screen_kind(texts, lines)
+        hits = hits + 1 if lines is not None and kind in kinds and (want is None or want(texts)) else 0
+        if hits >= confirm:
+            return kind, texts, lines
+        time.sleep(1.0)
+    return None
+
+
+def boot_to_map(game, deadline):
+    """Language menu to the Story Mode map with a new game (three-character name), each step guarded by OCR."""
+    steps = [
+        ("language", lambda t: "language" in t and "english" in t, "cross"),
+        ("title", lambda t: any("press start" in x for x in t), "start"),
+        ("main menu", lambda t: "main menu" in t, "cross"),
+        ("memory card", lambda t: any("memory card" in x for x in t), "cross"),
+        ("file select", lambda t: "game file select" in t, "cross"),
+        ("name entry", lambda t: "new game" in t and any("tuv" in x or "mno" in x for x in t), None),
+    ]
+    for name, pred, key in steps:
+        if not wait_screen(game, ("other", "briefing"), max(5, min(70, deadline - time.monotonic())), pred):
+            return f"boot stopped before the {name} screen"
+        if key:
+            game.press(key)
+        else:
+            for _ in range(4):  # three characters, then END
+                game.press("cross")
+                time.sleep(1.5)
+    if not wait_screen(game, ("mode",), 30):
+        return "no Story Mode / Terk's Challenges screen after the name"
+    game.press("cross")
+    if not wait_screen(game, ("map",), 40):
+        return "no Story Mode map"
+    return None
+
+
+def same_name(a, b):
+    return SequenceMatcher(None, a.casefold(), b.casefold()).ratio() > 0.8
+
+
+def mission_slice_stats(game, t0, t1, pos0, pos1):
+    ps = [p for p in game.periodic if t0 <= p[0] <= t1]
+    base = next((p for p in reversed(game.periodic) if p[0] < t0), None)
+    text = game.text(pos0, pos1)
+    out = parse_log(text)
+    return {"fallbacks": (ps[-1][2] - (base[2] if base else 0)) if ps else None,
+            "native_fail": (ps[-1][3] - (base[3] if base else 0)) if ps else None,
+            "vu1_programs": sorted({f"{m[0] or m[2]}@{m[1] or m[3] or 'image'}" for m in VU_FALLBACK_RE.finditer(text)}),
+            "stubs": out["stubs"], "faults": out["faults"]}
+
+
+def play_mission(game, rec, deadline):
+    """Select the highlighted mission and play it; returns when back on the map or when the game must be restarted."""
+    t_sel, pos_sel = time.monotonic(), game.pos
+    nmovies = len(game.movies)
+    game.press("cross")
+    popups = quiet = 0
+    reached = healthy = False
+    result = card = map_since = None
+    while not reached and result is None:
+        game.poll()
+        now = time.monotonic()
+        movie = game.movies[-1] if len(game.movies) > nmovies else None
+        in_movie = bool(movie and movie["opened"] and movie["ended"] is None)
+        if not game.alive():
+            result = "crash"
+        elif now > deadline:
+            result = "stopped at the --seconds limit"
+        elif now - t_sel > 300 or (in_movie and now - movie["t0"] > 150):
+            result = "no gameplay within 300 s" if not in_movie else "movie did not end within 150 s"
+        elif not in_movie and game.periodic and now - game.periodic[-1][0] > 60:
+            result = "hang (no VU1 stats for 60 s)"
+        elif in_movie:
+            time.sleep(1.0)
+        else:
+            texts, lines = game.screen()
+            kind = screen_kind(texts, lines)
+            if lines is None:
+                time.sleep(1.0)
+            elif kind in ("popup", "briefing"):
+                game.press("cross")  # tutorial card, or a character card shown over the map
+                popups += 1
+                quiet = 0
+                map_since = None
+                if kind == "briefing":
+                    card = " ".join(t for t in texts if not t.startswith("select"))
+            elif kind in ("map", "maplike"):
+                quiet = 0
+                map_since = map_since or now
+                if popups == 0 and now - t_sel > 60:
+                    result = "mission did not start from the map"
+                elif card and now - map_since > 15:  # the card sent us back to the map: a gate the unlock override does not cover
+                    result = f'locked by a requirement card: "{card}"'
+                    healthy = True
+            elif kind == "options":
+                game.press("triangle")
+            elif kind == "other":
+                map_since = None
+                quiet += 1
+                steady = len(game.periodic) >= 2 and all(23 <= p[4] <= 27 for p in game.periodic[-2:]) \
+                    and now - game.periodic[-1][0] < 8  # loading and transitions present at 50 fields/s
+                reached = (popups > 0 and quiet >= 2) or (quiet >= 6 and steady)
+            time.sleep(1.0)
+    rec["reached"] = reached
+    if result is None:
+        t_play, p_play, cpu_play = time.monotonic(), game.pos, game.cpu_user()
+        tick = 0
+        while time.monotonic() - t_play < PLAY_SECONDS and game.alive():
+            t = time.monotonic() - t_play
+            bits = {"up"}
+            if tick % 12 < 2: bits.add("cross")
+            if 5 <= tick % 20 < 7: bits.add("square")
+            if 10 <= tick % 35 < 12: bits.add("circle")
+            if int(t // 6) % 4 == 1: bits.add("left")
+            if int(t // 6) % 4 == 3: bits.add("right")
+            game.mask(bits)
+            tick += 1
+            time.sleep(0.1)
+        game.mask(())
+        game.poll()
+        t_end = time.monotonic()
+        rec["play_seconds"] = round(t_end - t_play, 1)
+        fps = [p[4] for p in game.periodic if t_play + 5.5 <= p[0] <= t_end]
+        rec["fps_dispfb2"] = round(sum(fps) / len(fps), 1) if fps else None
+        rec["fps_min"] = round(min(fps), 1) if fps else None
+        cpu_end = game.cpu_user()
+        rec["cpu_user_s"] = round(cpu_end - cpu_play, 1) if cpu_play is not None and cpu_end is not None else None
+        rec["underruns"] = parse_log(game.text(p_play, game.pos)).get("audio_underruns")
+        if not game.alive():
+            result = "crash"
+        else:
+            result = return_to_map(game, deadline, rec)
+    rec["result"] = result or "ok"
+    if result:
+        texts, _ = game.screen()
+        rec["last_screen"] = texts[:12]
+        shutil.copy2(game.out / "frames/window-000.png", game.out / f"fail-{rec['index'] + 1:02d}.png")
+    rec["seconds"] = round(time.monotonic() - t_sel, 1)
+    game.poll()
+    rec.update(mission_slice_stats(game, t_sel, time.monotonic(), pos_sel, game.pos))
+    rec["movies"] = [{"name": m["name"], "played": m["opened"],
+                      "to_end": bool(m["ended"]) if m["opened"] else None,
+                      "seconds": round(m["ended"] - m["t0"], 1) if m["ended"] else None} for m in game.movies[nmovies:]]
+    return result is not None and not healthy
+
+
+def return_to_map(game, deadline, rec):
+    """Pause menu > Quit Level > Yes, handling stray popups; None on success, else a failure description."""
+    end = min(deadline, time.monotonic() + 90)
+    quit_sent = None
+    last_start = 0.0
+    while time.monotonic() < end:
+        game.poll()
+        if not game.alive():
+            return "crash"
+        texts, lines = game.screen()
+        kind = screen_kind(texts, lines)
+        now = time.monotonic()
+        if kind == "map":
+            if not quit_sent:
+                rec["note"] = "the level ended by itself before Quit Level"
+            return None
+        if kind == "pause" and not quit_sent:
+            game.press("down")
+            time.sleep(0.5)
+            game.press("cross")
+        elif kind == "confirm":
+            game.press("up")
+            time.sleep(0.5)
+            game.press("cross")
+            quit_sent = now
+        elif kind == "popup":
+            game.press("cross")
+        elif kind == "options":
+            game.press("triangle")
+        elif kind == "other" and not quit_sent and now - last_start > 10:
+            game.press("start")
+            last_start = now
+        elif kind == "maplike" and now - last_start > 10:
+            game.press("circle")  # the Terk's Challenges map (a stray Circle); Circle switches back to Story Mode
+            last_start = now
+            last_start = now
+        time.sleep(1.0)
+    return "could not quit to the map (pause menu not reached)" if not quit_sent else "map did not return after Quit Level"
+
+
+def run_missions(args):
+    seconds = args.seconds or 3600
+    out = (args.out or ROOT / "build/runs" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    capture = out / "vu1-snapshots"
+    capture.mkdir(exist_ok=True)
+    if not ELF.is_file():
+        print("extracted/disc/SLES_503.50 missing -> ./tz disc <iso>", file=sys.stderr)
+        return 2
+    before = save_hash(REAL_SUPPORT)
+    started = time.monotonic()
+    deadline = started + seconds
+    missions, notes, games = [], [], []
+    names, idx, launches, done = [], 0, 0, False
+    while not done and time.monotonic() < deadline:
+        launches += 1
+        user_dir = out / f"user-dir-{launches}"
+        user_dir.mkdir()
+        (user_dir / "experimental-settings.plist").write_bytes(plistlib.dumps({"unlockAllMissions": True}))
+        game = Game(out, f"{launches}", user_dir, capture)
+        games.append(game)
+        try:
+            err = boot_to_map(game, deadline)
+            for _ in range(max(0, idx - 1) if not err else 0):  # after a restart: walk back to the last played entry
+                game.press("right")
+                time.sleep(2.5)
+            if err:
+                notes.append(f"game {launches}: {err}")
+                missions.append({"index": idx, "name": "?", "result": err, "reached": False})
+                break
+            restart = False
+            while not restart and time.monotonic() < deadline:
+                if idx > 0:
+                    here = read_map(game)  # a level that ends by itself can leave the cursor on another entry
+                    at = next((i for i, n in enumerate(names) if here and same_name(n, here[0])), None)
+                    for _ in range(abs(idx - 1 - at) if at is not None else 0):
+                        game.press("right" if at < idx - 1 else "left")
+                        time.sleep(2.5)
+                    game.press("right")
+                    time.sleep(2.0)
+                cur = read_map(game)
+                if cur is None and wait_screen(game, ("map",), 20):
+                    cur = read_map(game)
+                if cur is None:
+                    missions.append({"index": idx, "name": "?", "result": "map name not readable", "reached": False})
+                    done = True
+                elif idx > 0 and same_name(cur[0], names[-1]):
+                    done = True  # Right no longer advances: end of the map
+                elif idx >= 24:
+                    notes.append("stopped at 24 missions")
+                    done = True
+                if done:
+                    break
+                names.append(cur[0])
+                rec = {"index": idx, "name": cur[0], "type": cur[1]}
+                missions.append(rec)
+                restart = play_mission(game, rec, deadline)
+                rec["restarted"] = restart
+                idx += 1
+        finally:
+            game.stop()
+    missing_movies = sorted({m["name"] for g in games for m in g.movies if not m["opened"]})
+    for g in games:
+        g.poll()
+    crash = None
+    for g in games:
+        c = crash_from(g.text(), g.returncode, g.killed)
+        crash = crash or c
+    # A mission behind a requirement card the unlock override does not cover is a recorded finding, not a failure.
+    all_ok = bool(missions) and done and all(m.get("result") == "ok" or str(m.get("result")).startswith("locked") for m in missions)
+    summary = {
+        "reached": "missions" if all_ok else ("crash" if crash else "missions-incomplete"), "target": "missions",
+        "seconds": round(time.monotonic() - started, 1),
+        "fps_dispfb2": min((m["fps_dispfb2"] for m in missions if m.get("fps_dispfb2")), default=None),
+        "cpu_user_s": round(sum(g.cpu_user_s for g in games), 3), "cpu_sys_s": round(sum(g.cpu_sys_s for g in games), 3),
+        "vu_fallbacks": sum(m.get("fallbacks") or 0 for m in missions),
+        "audio_underruns": None, "audio_boundary_underruns": None, "audio_overruns": None, "vu_native_fail": sum(m.get("native_fail") or 0 for m in missions),
+        "crash": crash, "stubs": [], "faults": [f for m in missions for f in m.get("faults", [])][:10],
+        "black_frames": None, "save_dir_changed": save_hash(REAL_SUPPORT) != before, "exit_code": 0,
+        "profile_top": None, "menu_confirmed_s": None, "keys": [], "notes": notes, "crash_report": None,
+        "log": str(games[0].log_path), "user_dir": str(out), "quit_clean": None,
+        "missions": missions, "locked": [m["name"] for m in missions if str(m.get("result")).startswith("locked")],
+        "missing_movies": missing_movies, "vu1_snapshots": str(capture),
+        "snapshot_files": len(list(capture.glob("snap_*.bin"))), "games_launched": launches,
+    }
+    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return 0 if all_ok and not summary["save_dir_changed"] else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, help="run directory (default build/runs/<UTC>)")
     ap.add_argument("--seconds", type=int)
-    ap.add_argument("--route", choices=("none", "first-mission"), default="none")
+    ap.add_argument("--route", choices=("none", "first-mission", "missions"), default="none")
     ap.add_argument("--user-dir", type=Path)
     ap.add_argument("--save", type=Path, help="fixture directory containing a non-empty memcards/ subtree")
     ap.add_argument("--runner", type=Path)
@@ -242,6 +684,10 @@ def main():
     ap.add_argument("--desktop-input", action="store_true",
                     help="synthetic desktop key events instead of the diagnostic FIFO (needs Accessibility)")
     args = ap.parse_args()
+    if args.route == "missions":
+        if args.app or args.save or args.user_dir or args.runner or args.desktop_input:
+            ap.error("--route missions uses its own isolated user dirs and the build runner; no --app/--save/--user-dir/--runner/--desktop-input")
+        return run_missions(args)
     if args.quit_at_end and not args.app:
         ap.error("--quit-at-end needs --app")
     if args.runner and args.app:
