@@ -11,22 +11,32 @@ Experimental static recompilation. Not a decompilation, and not a verified port 
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
+## Disc
+
+`./rx disc <iso>` writes `reports/disc-inventory.json` (untracked): 169 files, 1.73 GB, all under `DATA/` except `SLES_530.64`, `IOPRP280.IMG`, `SYSTEM.CNF` (PAL). Measured from the extracted files:
+
+- **Containers** (magic): `BIGF` (16 `.BIG`, 2 `.VIV`, with `.BH` index `VivF`/`Viv3`), `BIG4` (`MODELS`, `ANIMS`, `DATAFILE`), `BIG3` (`PRELOADZ`), `c0fb`/`10fb` refpack-compressed wrappers (`FEMAN`, `INGAME`, `IOP.BIG`). Stadiums are one `BIGF` each.
+- **Audio**: `SCHl` EA streams (`.AST`, and `PBPDAT_{E,F,D}.BIG` commentary data, 330-450 MB each), `ABKC` banks (`.ABK`), `.MUS` with no magic (`PRIME`, `SECOND` are 173/19 MB), `MOIR` `.CSI`, `xDFP` `.MPF`, `FX` `.FX`. Format internals not yet read.
+- **Movies**: `DATA/FEMOVIES/*.MPC` (5), magic `MPCh`, then a raw MPEG-2 elementary stream (`00 00 01 B3`, 640x512, "Encoded with MPEG Gimex module"). Not PSS. The ELF has `PsIIlibmpeg`/`PsIIlibipu`, so decoding is via IPU (inferred).
+- **IOP**: `IOPRP280.IMG` is a ROMDIR image of 16 Sony modules: sysmem, loadcore, sifcmd, sifman, threadman, ioman, modload, fileio, cdvdman (2.23), cdvdfsv (2.23), loadfile, timemani, romdrv, eesync, sysclib, stdio (extinfo versions; dated 2003). Name `280` and the ELF's `PsIIlib* 2800` markers point to SDK 2.8.0 (inferred).
+- **IOP.BIG** (refpack of `BIG4`) holds 7 `.irx` the ELF loads from the disc ("Loading IOP module %s from IOP bigfile"): Sony `sio2man` 3.00, `mtapman` 3.02, `padman` 4.05, `libsd` 3.03, `mcman` 2.34, `mcserv` 2.16, and EA `snddrv` 9.02 (`SND_Library_EE_Driver`, on top of libsd). No `.IRX` files sit loose on the disc.
+- The ELF also names `usbd`, `inet`, `dev9`, `smap` and other net/USB IRX paths (strings only; no evidence they are loaded in normal play). The ELF opens files as `DATA/...` and references `C:/fifast/source/...` paths.
+
 ## Next
 
-1. **Disc import.** `./rx disc <iso>`, then inventory the disc: IOP modules, `IOPRP280.IMG`, FMV and audio formats.
-2. **First recompile.** Function discovery with ps2recomp's analyzer (`ps2_analyzer`) from entry `0x100008`; a first `config/SLES-53064.template.toml`.
-3. **Boot to menus.** EA FMV, audio and IOP formats are unknown. Re-derive the runtime arena and IOP heap layout for this ELF: the launcher's previous fixed ranges were removed, and the ELF loads at `0x100000` to about `0x5A0000`, so any fixed arena there would overlap it.
-4. **Play a match.** Add a scripted fast-match gate for `./rx run`.
-5. **Whole-game faithful pass** against PCSX2 behavior.
-6. **Performance.** Profile first. Native VU is a later step.
-7. **iOS/tvOS.** See the plan below.
+1. **First recompile.** Function discovery with ps2recomp's analyzer (`ps2_analyzer`) from entry `0x100008`; a first `config/SLES-53064.template.toml`.
+2. **Boot to menus.** IOP boot needs `IOPRP280.IMG` plus the 7 modules in `IOP.BIG` (refpack `BIG4`; the IOP layer must read them, including EA `snddrv`). EA `MPC` movies and `SCHl`/`.MUS` audio need decoders. Re-derive the runtime arena and IOP heap layout for this ELF: the launcher's previous fixed ranges were removed, and the ELF loads at `0x100000` to about `0x5A0000`, so any fixed arena there would overlap it.
+3. **Play a match.** Add a scripted fast-match gate for `./rx run`.
+4. **Whole-game faithful pass** against PCSX2 behavior.
+5. **Performance.** Profile first. Native VU is a later step.
+6. **iOS/tvOS.** See the plan below.
 
 Known risk: PCSX2 needs GIF FIFO and EE cycle-rate accuracy for FIFA Street 2; watch both.
 
 ## Open questions
 
 - Gameplay frame rate on this title (not known; do not assume 25 or 50).
-- Movie and audio paths, including any PSS or MPEG streams.
+- Whether MPC movies decode through the existing MPEG/IPU HLE as raw MPEG-2 elementary streams, and the `.MUS` format.
 
 ## iOS / tvOS plan
 
