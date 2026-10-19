@@ -227,7 +227,15 @@ def main():
     if args.save:
         logf.write(f"[probe] seeded {card_files} memory-card files from fixture into {user_dir / 'memcards'}\n".encode())
         logf.flush()
-    proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT)
+    # Own process group so nothing the game spawns outlives the run; probe death (SIGTERM, SIGHUP, a
+    # closed pipe) unwinds through the same cleanup as a timeout.
+    def _unwind(signum, _frame):
+        raise KeyboardInterrupt
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _unwind)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT,
+                            start_new_session=True)
     exit_watch = select.kqueue()
     exit_watch.control([select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
@@ -264,14 +272,17 @@ def main():
             if not quit_ok:
                 notes.append("quit did not exit within 30 s")
         exited_early = child_exited(exit_watch) and not args.quit_at_end and time.monotonic() < deadline
+        killed = None
         if not child_exited(exit_watch):
             killed_by_us = True
-            proc.send_signal(signal.SIGTERM)  # the GS dependency can swallow SIGTERM: escalate
+            killed = "term"
+            os.killpg(proc.pid, signal.SIGTERM)  # the GS dependency can swallow SIGTERM: escalate
             end = time.monotonic() + 2
             while time.monotonic() < end and not child_exited(exit_watch):
                 time.sleep(0.01)
             if not child_exited(exit_watch):
-                proc.kill()
+                killed = "kill"
+                os.killpg(proc.pid, signal.SIGKILL)
         _, status, usage = os.wait4(proc.pid, 0)
         proc.returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)
         if args.quit_at_end and quit_ok:
@@ -279,6 +290,16 @@ def main():
         _EXITED_WATCHES.discard(exit_watch.fileno())
         exit_watch.close()
         cpu_user_s, cpu_sys_s = round(usage.ru_utime, 3), round(usage.ru_stime, 3)
+        try:  # reap stragglers in the group, then prove it is empty
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        else:
+            time.sleep(0.2)
+            notes.append("killed stragglers in the game's process group")
+        gone = subprocess.run(["pgrep", "-g", str(proc.pid)], capture_output=True).returncode != 0
+        if not gone:
+            notes.append(f"process group {proc.pid} still alive after SIGKILL")
         logf.close()
 
     elapsed = round(time.monotonic() - started, 1)
@@ -312,7 +333,7 @@ def main():
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
-        "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
+        "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if scratch:

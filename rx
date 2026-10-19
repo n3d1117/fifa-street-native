@@ -443,6 +443,11 @@ def cmd_run(args):
     out = ROOT / "build/runs" / stamp
 
     def body(run):
+        alive = subprocess.run(["pgrep", "-f", str(ROOT / "build/game-metal") + "/.*/ps2EntryRunner"],
+                               capture_output=True, text=True).stdout.split()
+        if alive:
+            raise Missing(f"a ps2EntryRunner from this checkout is already running (pid {', '.join(alive)}); "
+                          "one run at a time -> kill it")
         wait_for_quiet_machine(run)
         if args.app:
             require(args.app, "./rx package --install")
