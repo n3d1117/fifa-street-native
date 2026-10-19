@@ -77,6 +77,8 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |
 | `PS2X_VU1_CAPTURE[_EVERY\|_SKIP]`, `PS2X_VU1_DIFF[_LOG]`, `PS2X_VU0_DIFF[_COMMIT]` | VU capture and differential tooling; diff modes run each call three times, never time with them |
 
+MPEG Create must clear work+0/+4/+8 even for reused nonzero memory: guest `sceMpegIsEnd` at `0x40A3E8` reads work+0 directly. Retail Create calls Reset, which clears those words.
+
 ## Controller packets
 
 Pressure mode reports packet ID `0x79`; analog mode without pressure reports `0x73`, digital `0x41` (PCSX2 `SIO/Pad/PadTypes.h`). The game validates `data[0] == 0` and `data[1] == 0x79` at `0x103750..0x10376C` before consuming buttons.

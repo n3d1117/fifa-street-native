@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 21:39:02 +0200
+Subject: [PATCH 63/63] Initialize MPEG end state when creating a decoder
+
+Retail Create calls Reset, clearing work offsets 0, 4 and 8. A reused work buffer contained 0xbb55bb55 at offset zero, so the guest IsEnd getter returned nonzero before decoding and the movie drawable was never created.
+
+The dirty-work-buffer regression fails before this fix. rx build and rx test --full pass; a 60-second scripted run no longer hits the movie-start null call, but remains black waiting for MPEG input.
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+index 087b5c6f0eac3b2a497012bf63fc4fa0634915fa..5b4a1c46973be97f3505dd1add9f1470ef79c273 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+@@ -2197,6 +2197,7 @@ namespace ps2_stubs
+         mpegGuestWrite64(rdram, param_1 + 0x38, 0);
+ 
+         static const unsigned s_zeroOffsets[] = {
++            0x00, 0x04, 0x08,
+             0xB4, 0xB8, 0xBC, 0xC0, 0xC4, 0xC8, 0xCC, 0xD0, 0xD4, 0xD8, 0xDC, 0xE0, 0xE4, 0xE8, 0xF8,
+             0x0C, 0x14, 0x2C, 0x34, 0x3C,
+             0x48, 0xFC, 0x100, 0x104, 0x70, 0x90, 0xAC};
+diff --git a/ps2xTest/src/ps2_runtime_expansion_tests.cpp b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
+index 351ae395898c308b8d59edb5591eb4a438285b05..92cf6237a4a6ca46a501804f62d48e7b54dc4010 100644
+--- a/ps2xTest/src/ps2_runtime_expansion_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_expansion_tests.cpp
+@@ -771,6 +771,30 @@ void register_ps2_runtime_expansion_tests()
+             t.Equals(getRegS32(ctx, 2), 1, "logical EOF must complete without requiring 2044 padding bytes");
+         });
+ 
++        tc.Run("MPEG create initializes guest end state in reused work memory", [](TestCase &t)
++               {
++            PS2Runtime runtime;
++            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0);
++            constexpr uint32_t kMpegAddr = 0x1000u;
++            constexpr uint32_t kWorkAddr = 0x130000u;
++            std::memset(rdram.data() + kWorkAddr, 0xBB, 0x4000u);
++            R5900Context ctx{};
++            setRegU32(ctx, 4, kMpegAddr);
++            setRegU32(ctx, 5, kWorkAddr);
++            setRegU32(ctx, 6, 0x4000u);
++            ps2_stubs::sceMpegCreate(rdram.data(), &ctx, &runtime);
++            t.IsTrue(::getRegU32(&ctx, 2) != 0u, "create should succeed with reusable work memory");
++            uint32_t inner = 0u;
++            std::memcpy(&inner, rdram.data() + kMpegAddr + 0x40u, sizeof(inner));
++            t.Equals(inner, kWorkAddr, "guest MPEG handle should reference its work memory");
++            for (uint32_t offset : {0u, 4u, 8u})
++            {
++                uint32_t value = 0u;
++                std::memcpy(&value, rdram.data() + inner + offset, sizeof(value));
++                t.Equals(value, 0u, "new MPEG decode state should be clear before the first picture");
++            }
++        });
++
+         tc.Run("MPEG init and callback stubs return success instead of TODO errors", [](TestCase &t)
+         {
+             std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);

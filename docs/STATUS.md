@@ -3,7 +3,7 @@
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots to the language menu; scripted Cross is accepted and reads `DATA/FEMOVIES/EABIGEN.MPC`, then faults on a null indirect call at `0x2A5A0C`. Movie playback, main menu and gameplay not verified |
+| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots to the language menu; scripted Cross is accepted and reads `DATA/FEMOVIES/EABIGEN.MPC`, then remains on a black movie screen without a crash through `./rx run --seconds 60` with scripted input. Movie playback, main menu and gameplay not verified |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -20,7 +20,7 @@
 
 ## Next
 
-1. **Movie startup.** Language input requires the pressure-mode packet ID `0x79`. Cross reaches `DATA/FEMOVIES/EABIGEN.MPC`; startup faults on `JALR` at `0x2A5A0C` with target zero. Diagnose the callback owner and initialization before changing bindings.
+1. **Movie playback.** Cross reaches `DATA/FEMOVIES/EABIGEN.MPC`. MPEG work-buffer end state is initialized; the movie remains black without a crash in a 60-second scripted run. Inspect the runtime state and MPEG input callback. Remove foreign absolute-address writes in MPEG HLE; guest `sceMpegIsEnd` reads work+0 while the HLE keeps EOF separately.
 2. **Audio.** Host pulls silent samples (rms/peak zero); initial underrun burst remains. Trace SPU2 master volumes, MMIX, key-ons and sample DMA; the host ring is connected.
 3. **Menus and match.** Verify intro movies with sound, reach the main menu, start a match, then add `./rx run --route match` with scene checks.
 4. **Whole-game faithful pass** against PCSX2 behavior.
