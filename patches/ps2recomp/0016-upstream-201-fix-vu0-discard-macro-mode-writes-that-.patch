@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:13:17 +0200
-Subject: [PATCH 16/39] upstream #201: fix(vu0): discard macro-mode writes that
+Subject: [PATCH 16/40] upstream #201: fix(vu0): discard macro-mode writes that
  name vf0 as the destination
 
 Hand-resolved: our earlier VU0 macro rewrites (VMAX/VMINI ordering helpers, LQI/LQD/SQI/SQD raw-field decode) kept; vuVfDestMask applied to every VF-destination emitter incl. them.
