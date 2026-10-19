@@ -3,7 +3,7 @@
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots to the language menu; scripted Cross is accepted and reads `DATA/FEMOVIES/EABIGEN.MPC`, then remains on a black movie screen without a crash through `./rx run --seconds 60` with scripted input. Movie playback, main menu and gameplay not verified |
+| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots to the language menu; scripted Cross is accepted and reads `DATA/FEMOVIES/EABIGEN.MPC`, and plays about the first half of the EA SPORTS BIG intro movie (video, no sound; frames show horizontal field striping), then freezes on one frame without a crash. Main menu and gameplay not verified |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -20,12 +20,13 @@
 
 ## Next
 
-1. **Movie playback.** Cross reaches `DATA/FEMOVIES/EABIGEN.MPC`. MPEG work-buffer end state is initialized; the movie remains black without a crash in a 60-second scripted run. Inspect the runtime state and MPEG input callback. Remove foreign absolute-address writes in MPEG HLE; guest `sceMpegIsEnd` reads work+0 while the HLE keeps EOF separately.
-2. **Audio.** Host pulls silent samples (rms/peak zero); initial underrun burst remains. Trace SPU2 master volumes, MMIX, key-ons and sample DMA; the host ring is connected.
-3. **Menus and match.** Verify intro movies with sound, reach the main menu, start a match, then add `./rx run --route match` with scene checks.
-4. **Whole-game faithful pass** against PCSX2 behavior.
-5. **Performance.** Profile first. Native VU is a later step.
-6. **iOS/tvOS.** See the plan below.
+1. **Movie stalls after 9 CD chunks.** Cross reaches `EABIGEN.MPC`; the game pre-reads 9 chunks of 0x40 sectors, GetPicture feeds ~1.07 MB through the nodata callback (`0x369468`), then the callback spins in the packet loop `sub_00367678` (`404328` finds no packet, `404578` says not finished) and no 10th `sceCdRead` is issued. TIM1 (60 Hz tick at `0x495348`) and alarms run; the read-ahead refill after packet release (`sub_00404430` -> `sub_00403420`, request scheduler `sub_00400200`) is the suspect. A request for `DATA/DATAFILE.BIG` sits queued at `0x1FE5940`. Find which refill step is not reached; `PS2X_DUMP_MEM=<hex>:<words>` (max 256 words) reads guest state. Also: remove foreign absolute-address writes in MPEG HLE (GetPicture writes width/height/count at work+0/4/8; guest `sceMpegIsEnd` reads work+0).
+2. **Movie striping.** Frames show line striping (interlaced fields combed); compare PCSX2 default deinterlace and the bridge's field presentation.
+3. **Audio.** Host pulls silent samples (rms/peak zero); initial underrun burst remains. Trace SPU2 master volumes, MMIX, key-ons and sample DMA; the host ring is connected.
+4. **Menus and match.** Verify intro movies with sound, reach the main menu, start a match, then add `./rx run --route match` with scene checks.
+5. **Whole-game faithful pass** against PCSX2 behavior.
+6. **Performance.** Profile first. Native VU is a later step.
+7. **iOS/tvOS.** See the plan below.
 
 Diagnosis tools: `./rx run --seconds N` (N >= 8) puts a runtime state block (EE threads, semaphores, sampled pcs resolved to functions, DMA/VIF registers, IOP, recent RPC) in `summary.json` `state`; `PS2X_DUMP_MEM=<hexaddr>:<words>`, `PS2X_TRACE_SYSCALLS/RPC/CD_IO/FAULTS`, SIGUSR1 for a dump on demand. Code edits to headers the generated code includes (`ps2_runtime.h`, ...) cost a 5 minute rebuild; `.cpp` edits 3-10 s.
 
