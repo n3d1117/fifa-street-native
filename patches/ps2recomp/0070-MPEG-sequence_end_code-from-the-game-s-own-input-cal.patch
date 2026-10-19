@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 01:15:22 +0200
+Subject: [PATCH 70/70] MPEG: sequence_end_code from the game's own input
+ callback ends raw elementary-stream movies
+
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+index bcb9e693880d2b4c03a3ae70daae0f43b1d1386f..4faae3b1b819a2154e3478ac7ed5dc6bda6abf38 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp
+@@ -2689,8 +2689,10 @@ namespace ps2_stubs
+         const bool producerEnded =
+             g_mpeg_stub_state.currentCdStreamEofSeen &&
+             playback.cdStreamGeneration == g_mpeg_stub_state.cdStreamGeneration;
+-        const bool ended = producerEnded &&
+-                           (playback.streamEnded || (playback.decoderFailed && playback.sawInput));
++        // EA's MPC movies are raw MPEG-2 elementary streams fed by the game's own callbacks: the producer ends
++        // the stream by supplying sequence_end_code, there is no CD stream EOF to observe.
++        const bool ended = (producerEnded && (playback.streamEnded || (playback.decoderFailed && playback.sawInput))) ||
++                           playback.sawSequenceEnd;
+         const uint64_t presentationEnd = playback.presentationEndTickQ32;
+         const uint64_t currentTickQ32 = runtime != nullptr
+                                             ? (runtime->eeScheduler().currentVSyncTick() << 32u)

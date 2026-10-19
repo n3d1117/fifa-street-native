@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 18:24:44 +0200
-Subject: [PATCH 48/69] Runtime: PS2X_TRACE_SYSCALLS and PS2X_TRACE_RPC print
+Subject: [PATCH 48/70] Runtime: PS2X_TRACE_SYSCALLS and PS2X_TRACE_RPC print
  guest syscalls and SIF RPC events (first calls per number; first 2000 RPC
  events)
 
