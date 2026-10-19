@@ -54,7 +54,7 @@ uint64_t monotonic_ns();
 
 bool audio_trace_enabled() {
     static const bool enabled = [] {
-        const char* value = std::getenv("TARZAN_TRACE_SPU2");
+        const char* value = std::getenv("PS2X_TRACE_SPU2");
         return value && value[0] == '1' && value[1] == '\0';
     }();
     return enabled;
@@ -144,7 +144,7 @@ void report_audio_health(uint64_t iop_cycle) {
         ? std::sqrt(static_cast<double>(energy) / static_cast<double>(sampleCount)) / 10000.0
         : 0.0;
     std::fprintf(stderr,
-                 "[tarzan-spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
+                 "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
                  "pull=%llu/%llu rms=%.4f peak=%.4f clipped=%llu nonfinite=%llu queuedMaxB=%u errors=%llu\n",
                  static_cast<double>(elapsedCycles) / seconds / 1.0e6,
                  static_cast<double>(mixedFrames) / seconds / 1000.0,
@@ -225,7 +225,7 @@ void dma_start(int core, uint16_t* ram, uint32_t madr, uint32_t halfwords,
     if (g_auto_dma_enabled[core]) {
         if (!g_unsupported_dma_reported[core]) {
             std::fprintf(stderr,
-                         "[tarzan-spu2] unsupported AutoDMA requested on core %d; "
+                         "[spu2] unsupported AutoDMA requested on core %d; "
                          "leaving IOP DMA channel busy instead of faking completion\n",
                          core);
             g_unsupported_dma_reported[core] = true;
@@ -235,7 +235,7 @@ void dma_start(int core, uint16_t* ram, uint32_t madr, uint32_t halfwords,
 
     if (halfwords > kMaxDmaHalfwords) {
         std::fprintf(stderr,
-                     "[tarzan-spu2] DMA core %d length %u halfwords exceeds backend limit; truncating to %u\n",
+                     "[spu2] DMA core %d length %u halfwords exceeds backend limit; truncating to %u\n",
                      core, halfwords, kMaxDmaHalfwords);
         halfwords = kMaxDmaHalfwords;
     }
@@ -281,7 +281,7 @@ void advance(uint64_t iop_cycle) {
                 ps2x::iop::iopSpu2DmaComplete(1);
                 break;
             default:
-                std::fprintf(stderr, "[tarzan-spu2] unknown backend event kind %u\n", event.kind);
+                std::fprintf(stderr, "[spu2] unknown backend event kind %u\n", event.kind);
                 break;
             }
         }
@@ -300,7 +300,7 @@ uint64_t next_event() {
 
 bool open_audio_device() {
     if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        std::fprintf(stderr, "[tarzan-spu2] SDL audio initialization failed; emulation will continue silently: %s\n",
+        std::fprintf(stderr, "[spu2] SDL audio initialization failed; emulation will continue silently: %s\n",
                      SDL_GetError());
         return false;
     }
@@ -309,14 +309,14 @@ bool open_audio_device() {
     g_audio_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec,
                                                 audio_callback, nullptr);
     if (!g_audio_stream) {
-        std::fprintf(stderr, "[tarzan-spu2] no SDL playback device; emulation will continue silently: %s\n",
+        std::fprintf(stderr, "[spu2] no SDL playback device; emulation will continue silently: %s\n",
                      SDL_GetError());
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         g_audio_subsystem_initialized = false;
         return false;
     }
     if (!SDL_ResumeAudioStreamDevice(g_audio_stream)) {
-        std::fprintf(stderr, "[tarzan-spu2] SDL playback resume failed; emulation will continue silently: %s\n",
+        std::fprintf(stderr, "[spu2] SDL playback resume failed; emulation will continue silently: %s\n",
                      SDL_GetError());
         SDL_DestroyAudioStream(g_audio_stream);
         g_audio_stream = nullptr;
@@ -324,12 +324,12 @@ bool open_audio_device() {
         g_audio_subsystem_initialized = false;
         return false;
     }
-    std::fprintf(stderr, "[tarzan-spu2] SDL playback started (48 kHz stereo float)\n");
+    std::fprintf(stderr, "[spu2] SDL playback started (48 kHz stereo float)\n");
     return true;
 }
 } // namespace
 
-bool tarzan_spu2_host_start() {
+bool ps2x_spu2_host_start() {
     if (g_spu2)
         return true;
 
@@ -338,7 +338,7 @@ bool tarzan_spu2_host_start() {
     const rrv_spu2_config config{0, 8192};
     g_spu2 = rrv_spu2_create(&config);
     if (!g_spu2) {
-        std::fprintf(stderr, "[tarzan-spu2] PCSX2 SPU2 core creation failed\n");
+        std::fprintf(stderr, "[spu2] PCSX2 SPU2 core creation failed\n");
         return false;
     }
 
@@ -367,11 +367,11 @@ bool tarzan_spu2_host_start() {
     ps2x::iop::iopSetHostSpu2(hooks);
 
     (void)open_audio_device(); // Missing audio hardware must not stop IOP emulation.
-    std::fprintf(stderr, "[tarzan-spu2] PCSX2 2.8.2 SPU2 core installed; output ring is 48 kHz stereo float\n");
+    std::fprintf(stderr, "[spu2] PCSX2 2.8.2 SPU2 core installed; output ring is 48 kHz stereo float\n");
     return true;
 }
 
-void tarzan_spu2_host_stop() {
+void ps2x_spu2_host_stop() {
     if (!g_spu2)
         return;
     ps2x::iop::iopSetHostSpu2({});
@@ -387,7 +387,7 @@ void tarzan_spu2_host_stop() {
         g_audio_subsystem_initialized = false;
     }
     if (const uint64_t errors = g_audio_callback_errors.load(std::memory_order_relaxed); errors != 0) {
-        std::fprintf(stderr, "[tarzan-spu2] SDL audio stream callback write errors: %llu\n",
+        std::fprintf(stderr, "[spu2] SDL audio stream callback write errors: %llu\n",
                      static_cast<unsigned long long>(errors));
     }
     rrv_spu2_destroy(g_spu2);

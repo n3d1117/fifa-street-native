@@ -4,12 +4,9 @@ import bisect
 import csv
 import re
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SYMBOLS = ROOT / "config/SLES-50350.symbols-entry.csv"
-GEN = ROOT / "generated/SLES-50350-symbolmap-entry"
-CONFIG = ROOT / "config/SLES-50350.template.toml"
+from game import GENERATED as GEN, ROOT, SYMBOLS, TEMPLATE as CONFIG
+
 CALL_LIST = ROOT / "deps/ps2recomp/ps2xRuntime/include/ps2_call_list.h"
 HLE_SRC = ROOT / "deps/ps2recomp/ps2xRuntime/src"
 
@@ -94,7 +91,7 @@ def configured_stubs():
 def unimplemented():
     """Count configured direct TODO handlers, including the runtime's underscore aliases."""
     if not CONFIG.is_file() or not CALL_LIST.is_file():
-        return 2, ["config or runtime missing -> ./tz setup"]
+        return 2, ["config or runtime missing -> ./rx setup"]
     names = [selector.split("@", 1)[0] for selector in configured_stubs()]
     handlers = re.findall(r"\bX\((\w+)\)", CALL_LIST.read_text())
     todo = {}
@@ -111,7 +108,7 @@ def unimplemented():
 def where(query):
     rows = load_symbols()
     if not rows:
-        return None, ["config/SLES-50350.symbols-entry.csv missing -> ./tz disc <iso>"]
+        return None, [f"{SYMBOLS.relative_to(ROOT)} missing (no function map yet)"]
     found = find(query, rows)
     if not found:
         return 1, [f"no symbol or function contains {query}"]

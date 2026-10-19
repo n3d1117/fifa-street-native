@@ -41,7 +41,7 @@ uint32_t decodeLittleEndianMask() {
 }
 }
 
-extern "C" void tarzan_diagnostic_input_configure(const char* path) {
+extern "C" void ps2x_diagnostic_input_configure(const char* path) {
     closeFIFO();
     if (!path || path[0] == '\0') return;
 
@@ -55,7 +55,7 @@ extern "C" void tarzan_diagnostic_input_configure(const char* path) {
     s_fifo = fd;
 }
 
-extern "C" void tarzan_diagnostic_input_poll() {
+extern "C" void ps2x_diagnostic_input_poll() {
     if (s_fifo < 0) return;
 
     size_t completed = 0;
@@ -83,11 +83,11 @@ extern "C" void tarzan_diagnostic_input_poll() {
     }
 }
 
-extern "C" int tarzan_diagnostic_input_key_down(uint32_t key) {
+extern "C" int ps2x_diagnostic_input_key_down(uint32_t key) {
     if (key == 0 || key > 18) return 0;
     return (s_keyMask.load(std::memory_order_acquire) & (uint32_t{1} << key)) != 0;
 }
 
-extern "C" void tarzan_diagnostic_input_shutdown() {
+extern "C" void ps2x_diagnostic_input_shutdown() {
     closeFIFO();
 }

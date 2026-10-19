@@ -20,7 +20,6 @@ uint64_t g_field = 0;
 uint32_t g_parity = 0;
 bool g_fail_vsync = false;
 bool g_fail_local_read = false;
-bool g_language_hidden = false;
 uint64_t g_read_bitbltbuf = 0, g_read_trxpos = 0, g_read_trxreg = 0;
 uint32_t g_read_bytes = 0;
 uint64_t g_written_csr = 0;
@@ -32,7 +31,6 @@ void reset_fake() {
     g_path = g_submits = g_vsyncs = g_readbacks = g_destroys = g_owner_inits = 0;
     g_fail_vsync = false;
     g_fail_local_read = false;
-    g_language_hidden = false;
     g_read_bitbltbuf = g_read_trxpos = g_read_trxreg = 0;
     g_read_bytes = 0;
     g_written_csr = 0;
@@ -42,7 +40,6 @@ void reset_fake() {
 
 extern "C" {
 void rrv_pcsx2_gs_bridge_owner_thread_init(void) { ++g_owner_inits; }
-int tarzan_experiments_boot_language_hidden(void) { return g_language_hidden ? 1 : 0; }
 RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(const RrvPcsx2GsBridgeConfig* c,
     RrvPcsx2GsBridgeCapabilities* caps, char*, uint32_t) {
     g_config = *c;
@@ -89,9 +86,9 @@ int rrv_pcsx2_gs_bridge_capture(RrvPcsx2GsBridge*, const RrvPcsx2GsBridgeCapture
 int main() {
     reset_fake();
     int view = 0, layer = 0;
-    const tarzan::ps2::MetalGsSurface surface{&view, &layer, 1280, 720, 2.0F};
+    const host::MetalGsSurface surface{&view, &layer, 1280, 720, 2.0F};
     {
-        auto adapter = tarzan::ps2::MetalGsAdapter::create(surface);
+        auto adapter = host::MetalGsAdapter::create(surface);
         assert(g_owner_inits == 1);
         assert(g_config.renderer_kind == RRV_PCSX2_GS_RENDERER_METAL);
         assert(g_config.presentation_mode == RRV_PCSX2_GS_PRESENTATION_DIRECT_GPU);
@@ -106,25 +103,17 @@ int main() {
         regs[0] = 0xabc;
         adapter.vsync(regs, 123, 1);
         assert(g_vsyncs == 1 && g_field == 123 && g_parity == 1 && g_regs[0] == 0xabc);
-        // The boot-language scanout guard masks PMODE enable and BGCOLOR only
-        // in the renderer snapshot; guest registers and other GS registers stay intact.
+        // Every privileged register reaches the renderer unchanged.
         regs[0] = 0x123456789abcdef3ull;
         regs[14] = 0xfedcba9876543210ull;
         regs[5] = 0x1122334455667788ull;
         const auto guest_regs = regs;
-        g_language_hidden = true;
         adapter.vsync(regs, 124, 0);
         assert(g_vsyncs == 2 && g_field == 124 && g_parity == 0);
-        assert(g_regs[0] == (guest_regs[0] & ~uint64_t{3}));
-        assert(g_regs[14] == 0 && g_regs[5] == guest_regs[5]);
-        assert(regs == guest_regs);
-        assert(g_readbacks == 0);
-        g_language_hidden = false;
+        assert(g_regs[0] == guest_regs[0] && g_regs[14] == guest_regs[14] && g_regs[5] == guest_regs[5]);
         adapter.vsync(regs, 125, 1);
         assert(g_vsyncs == 3 && g_field == 125 && g_parity == 1);
-        assert(g_regs[0] == guest_regs[0] && g_regs[14] == guest_regs[14] &&
-               g_regs[5] == guest_regs[5] && regs == guest_regs);
-        assert(g_readbacks == 0);
+        assert(regs == guest_regs);
         assert(g_readbacks == 0); // presenting a field does not request CPU readback
         const auto stat = adapter.stats();
         assert(stat.direct_gpu_presents == 9 && stat.synchronous_cpu_readbacks == 0 && stat.unexpected_readbacks == 0);
@@ -145,7 +134,7 @@ int main() {
 
     reset_fake();
     {
-        auto adapter = tarzan::ps2::MetalGsAdapter::create(surface);
+        auto adapter = host::MetalGsAdapter::create(surface);
         std::array<uint8_t, 4> local{};
         g_fail_local_read = true;
         bool diagnostic_reported = false;
@@ -158,7 +147,7 @@ int main() {
 
     reset_fake();
     {
-        auto adapter = tarzan::ps2::MetalGsAdapter::create(surface);
+        auto adapter = host::MetalGsAdapter::create(surface);
         g_fail_vsync = true;
         bool diagnostic_reported = false;
         try { adapter.vsync({}, 1, 0); }
@@ -173,18 +162,18 @@ int main() {
                            RRV_PCSX2_GS_CAP_METAL_BACKEND | RRV_PCSX2_GS_CAP_DIRECT_PRESENT}) {
         reset_fake(); g_create_flags = bad;
         bool rejected = false;
-        try { auto adapter = tarzan::ps2::MetalGsAdapter::create(surface); }
+        try { auto adapter = host::MetalGsAdapter::create(surface); }
         catch (const std::runtime_error&) { rejected = true; }
         assert(rejected && g_destroys == 1);
     }
     reset_fake(); g_create_renderer = RRV_PCSX2_GS_RENDERER_SOFTWARE;
     bool software_rejected = false;
-    try { auto adapter = tarzan::ps2::MetalGsAdapter::create(surface); }
+    try { auto adapter = host::MetalGsAdapter::create(surface); }
     catch (const std::runtime_error&) { software_rejected = true; }
     assert(software_rejected && g_destroys == 1);
 
     reset_fake();
-    auto adapter = tarzan::ps2::MetalGsAdapter::create(surface);
+    auto adapter = host::MetalGsAdapter::create(surface);
     bool invalid_path = false;
     try { adapter.submit(0, {}); } catch (const std::invalid_argument&) { invalid_path = true; }
     assert(invalid_path && g_submits == 0);

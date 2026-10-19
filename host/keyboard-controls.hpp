@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-// Stable action ids align with TarzanMetalKey in metal-host.hpp.
+// Stable action ids align with Ps2xMetalKey in metal-host.hpp.
 enum KeyboardControlsAction : uint32_t {
     KEYBOARD_ACTION_UP = 1, KEYBOARD_ACTION_DOWN, KEYBOARD_ACTION_LEFT,
     KEYBOARD_ACTION_RIGHT, KEYBOARD_ACTION_CROSS_PRIMARY,

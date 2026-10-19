@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Install the pinned build toolchain under tools/build: CMake, Ninja, ccache and LLVM 19.
-# Idempotent. If TARZAN_LLVM points at an existing LLVM 19 install (with
+# Idempotent. If RX_LLVM points at an existing LLVM 19 install (with
 # bin/clang++), the LLVM build is skipped; the other tools are still fetched.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 B="$ROOT/tools/build"
 LOGS="$ROOT/logs"
-JOBS="${TZ_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
+JOBS="${RX_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
 CMAKE_VER=3.31.12
 CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v$CMAKE_VER/cmake-$CMAKE_VER-macos-universal.tar.gz"
 CMAKE_SHA=799af7fd545db9bf1b9cfe72f8095880e727a2d4e0df0e3dffc3bc7b95c2d3b0
@@ -58,8 +58,8 @@ if [[ ! -x "$B/ccache/ccache" ]] || ! "$B/ccache/ccache" --version | grep -qx "c
   rmdir "$tmp"
 fi
 
-if [[ -n "${TARZAN_LLVM:-}" && -x "$TARZAN_LLVM/bin/clang++" ]]; then
-  echo "== LLVM: using TARZAN_LLVM=$TARZAN_LLVM"
+if [[ -n "${RX_LLVM:-}" && -x "$RX_LLVM/bin/clang++" ]]; then
+  echo "== LLVM: using RX_LLVM=$RX_LLVM"
   exit 0
 fi
 

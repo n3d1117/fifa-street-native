@@ -1,15 +1,11 @@
-#include "tarzan-app.hpp"
+#include "app.hpp"
 #include "metal-host.hpp"
-#include "experimental-settings.hpp"
+#include "settings.hpp"
 #include "ps2_runtime.h"
-#include "runtime/ps2_host_arena.h"
 
-#include <array>
-#include <cstring>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -22,43 +18,6 @@
 
 namespace
 {
-void configureRuntimeArena(const std::filesystem::path& elfPath)
-{
-    // Runtime callbacks must not share the game's heap or its stack at RAM's top.
-    constexpr uint32_t arenaBegin = 0x180000u;
-    constexpr uint32_t arenaEnd = 0x200000u;
-    std::ifstream file(elfPath, std::ios::binary);
-    std::array<unsigned char, 52> header{};
-    if (!file.read(reinterpret_cast<char*>(header.data()), header.size()) ||
-        std::memcmp(header.data(), "\177ELF", 4) != 0 || header[4] != 1 || header[5] != 1)
-        throw std::runtime_error("Runtime arena requires a valid little-endian ELF32 file");
-    const auto u16 = [](const unsigned char* p) { return uint32_t(p[0]) | (uint32_t(p[1]) << 8); };
-    const auto u32 = [](const unsigned char* p) {
-        return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
-    };
-    const uint32_t offset = u32(header.data() + 28);
-    const uint32_t stride = u16(header.data() + 42);
-    const uint32_t count = u16(header.data() + 44);
-    if (stride < 32 || count == 0)
-        throw std::runtime_error("ELF has no valid program headers for runtime arena validation");
-    for (uint32_t index = 0; index < count; ++index)
-    {
-        std::array<unsigned char, 32> program{};
-        file.seekg(uint64_t(offset) + uint64_t(index) * stride);
-        if (!file.read(reinterpret_cast<char*>(program.data()), program.size()))
-            throw std::runtime_error("ELF program header is truncated");
-        if (u32(program.data()) != 1u || u32(program.data() + 20) == 0u)
-            continue;
-        const uint32_t start = u32(program.data() + 8) & 0x1fffffffu;
-        const uint64_t end = uint64_t(start) + u32(program.data() + 20);
-        if (start < arenaEnd && end > arenaBegin)
-            throw std::runtime_error("Game ELF overlaps the reserved runtime arena");
-    }
-    // Tarzan's libc malloc is HLE-bound to guestMalloc; retain that shared
-    // allocator and isolate only runtime callback stacks below the executable.
-    ps2SetRuntimeArena(0u, 0u, arenaBegin, arenaEnd);
-}
-
 // When this executable is Contents/MacOS/<name> of an app bundle, the game
 // data ships in Contents/Resources/game. Empty path when not in a bundle.
 std::filesystem::path bundledGameElf()
@@ -69,7 +28,8 @@ std::filesystem::path bundledGameElf()
     if (size == 0 || _NSGetExecutablePath(exe.data(), &size) != 0)
         return {};
     const std::filesystem::path macos = std::filesystem::path(exe.c_str()).lexically_normal().parent_path();
-    const std::filesystem::path elf = macos.parent_path() / "Resources" / "game" / "SLES_503.50";
+    const std::filesystem::path elf = macos.parent_path() / "Resources" / "game" /
+        std::filesystem::path(PS2X_DEFAULT_BOOT_ELF).filename();
     std::error_code ec;
     if (macos.filename() == "MacOS" && std::filesystem::exists(elf, ec))
         return elf;
@@ -109,7 +69,7 @@ std::filesystem::path defaultUserDirectory()
     {
         throw std::runtime_error("HOME is not set; pass --user-dir explicitly");
     }
-    return std::filesystem::path(home) / "Library" / "Application Support" / "TarzanFreeridePS2";
+    return std::filesystem::path(home) / "Library" / "Application Support" / PS2X_APP_EXECUTABLE;
 }
 
 // A relative default ELF is looked up from the executable's directory upward,
@@ -189,12 +149,10 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
 
     if (options.elfPath.empty())
         options.elfPath = bundledGameElf();
-#if defined(PS2X_DEFAULT_BOOT_ELF)
     if (options.elfPath.empty())
     {
         options.elfPath = resolveDefaultElf(PS2X_DEFAULT_BOOT_ELF);
     }
-#endif
     if (options.elfPath.empty())
     {
         printUsage(argv[0]);
@@ -233,12 +191,12 @@ void setupTerminateLogger()
 }
 
 
-int tarzan_run(const TarzanConfig *config)
+int ps2x_app_run(const Ps2xAppConfig *config)
 {
     try
     {
         if (!config || !config->elf_path || !config->user_dir)
-            throw std::runtime_error("tarzan_run needs an ELF path and a user directory");
+            throw std::runtime_error("ps2x_app_run needs an ELF path and a user directory");
         std::error_code error;
         const std::filesystem::path elfPath =
             std::filesystem::absolute(config->elf_path, error).lexically_normal();
@@ -251,24 +209,16 @@ int tarzan_run(const TarzanConfig *config)
 
         redirectLogsIfDetached(userDirectory);
         // Settings: the user's file plus the documented debug overrides, loaded once.
-        tarzan_experiments_configure(userDirectory.c_str());
+        host::configure_settings(userDirectory.c_str());
         PS2HostConfig hostConfig;
         // Pace hardware time from the host clock. Estimated block costs must
         // neither slow it down nor accelerate audio during movie playback.
-        hostConfig.wallClock = tarzan_experiments_wall_clock() != 0;
-        hostConfig.vsyncHz = tarzan_experiments_high_fps() ? uint32_t(tarzan_experiments_target_fps()) : 0u;
-        // Tarzan's relocated IOP modules end below 0x80000. Reserve that
-        // region and leave room for the native 320 KiB movie sound buffer.
-        // The IOP loader checks every relocated module against this boundary.
-        hostConfig.iopHeapFloor = 0x80000u;
+        hostConfig.wallClock = host::active_settings().wallClock;
         ps2SetHostConfig(hostConfig);
-        // The arena is only a range handed to the runtime allocator; it needs no
-        // fresh process image, just to be set before the runtime initializes.
-        configureRuntimeArena(elfPath);
         // Never destroyed: teardown order of the runtime's threads is not worth
         // risking after the window is gone; the process exits right after.
         PS2Runtime &runtime = *new PS2Runtime;
-        if (!runtime.initialize("TarzanFreeride PS2 Native macOS"))
+        if (!runtime.initialize(PS2X_APP_NAME))
         {
             std::cerr << "Failed to initialize PS2 runtime" << std::endl;
             return 1;
@@ -310,9 +260,9 @@ int tarzan_run(const TarzanConfig *config)
     return 1;
 }
 
-void tarzan_stop(void)
+void ps2x_app_stop(void)
 {
-    tarzan_metal_host_request_close();
+    ps2x_metal_host_request_close();
 }
 
 int main(int argc, char *argv[])
@@ -325,8 +275,8 @@ int main(int argc, char *argv[])
         if (!parseOptions(argc, argv, options))
             return 0;
         const std::string elf = options.elfPath.string(), user = options.userDirectory.string();
-        TarzanConfig config{elf.c_str(), user.c_str()};
-        status = tarzan_run(&config);
+        Ps2xAppConfig config{elf.c_str(), user.c_str()};
+        status = ps2x_app_run(&config);
     }
     catch (const std::exception &error)
     {

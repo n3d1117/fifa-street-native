@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Regenerate the game C++ from the canonical PS2Recomp config, safely.
 
-Compiles into a temporary directory (pure recompiler output: game hooks are
-`[[hooks]]` in the config, implemented in host/game-hooks.cpp), checks structural quality (0 skipped, 0 decode failures, 0 unhandled
+Compiles into a temporary directory (pure recompiler output), checks structural quality (0 skipped, 0 decode failures, 0 unhandled
 instructions, 0 errors, entry registered), compares the inventory with the
 previous run (build/generate-inventory.json) and only then atomically replaces
 the files that changed. Unchanged files keep their mtimes.
 
-  tools/generate.py                 regenerate generated/SLES-50350-symbolmap-entry
+  tools/generate.py                 regenerate generated/<id> (config/game.json)
   tools/generate.py --out DIR       same, into DIR (for comparing against generated/)
   tools/generate.py --dry-run       validate inputs only
 
@@ -31,8 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Tuple
 
-ROOT = Path(os.environ.get("TARZAN_ROOT") or Path(__file__).resolve().parents[1])
-DEFAULT_CONFIG = ROOT / "config/SLES-50350.symbolmap-entry.toml"
+from game import CONFIG as DEFAULT_CONFIG, ROOT
+
 DEFAULT_COMPILER = ROOT / "build/game-metal/ps2recomp/ps2xRecomp/ps2_recomp"
 INVENTORY = ROOT / "build/generate-inventory.json"
 
@@ -207,9 +206,9 @@ def main() -> int:
               "changed_count": 0, "changed_files": [], "status": "validation_failed"}
     try:
         if not config.is_file():
-            raise Missing(f"config not found: {config} -> ./tz disc")
+            raise Missing(f"config not found: {config} -> ./rx disc")
         if not compiler.is_file() or not os.access(compiler, os.X_OK):
-            raise Missing(f"recompiler missing: {compiler} -> ./tz build")
+            raise Missing(f"recompiler missing: {compiler} -> ./rx build")
         original_text = config.read_text(encoding="utf-8")
         input_value, _ = get_general_string(original_text, "input")
         output_value, _ = get_general_string(original_text, "output")
@@ -219,13 +218,13 @@ def main() -> int:
             elf = config.parent / elf
         elf = elf.resolve()
         if not elf.is_file():
-            raise Missing(f"ELF input not found: {elf} -> ./tz disc <iso>")
+            raise Missing(f"ELF input not found: {elf} -> ./rx disc <iso>")
         symbol_map = Path(map_value)
         if not symbol_map.is_absolute():
             symbol_map = config.parent / symbol_map
         symbol_map = symbol_map.resolve()
         if not symbol_map.is_file():
-            raise Missing(f"symbol map not found: {symbol_map} -> ./tz disc")
+            raise Missing(f"symbol map not found: {symbol_map} -> ./rx disc")
         map_rows, map_entry = symbol_map_info(symbol_map)
         elf_head = elf.open("rb").read(28)
         if len(elf_head) < 28 or elf_head[:6] != b"\x7fELF\x01\x01":
@@ -256,7 +255,7 @@ def main() -> int:
         os.close(lock_fd)
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="tarzan-game-regen-") as temp_name:
+            with tempfile.TemporaryDirectory(prefix="game-regen-") as temp_name:
                 temp_root = Path(temp_name)
                 stage = temp_root / "generated"
                 stage.mkdir()

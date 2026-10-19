@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "metal-gs-adapter.hpp"
-#include "experimental-settings.hpp"
 
 #include <cmath>
 #include <charconv>
@@ -16,7 +15,7 @@
 extern "C" int rrv_pcsx2_gs_bridge_write_csr(
     RrvPcsx2GsBridge*, uint64_t, uint32_t, int, char*, uint32_t);
 
-namespace tarzan::ps2 {
+namespace host {
 namespace {
 constexpr uint32_t kRequiredCapabilities = RRV_PCSX2_GS_CAP_HARDWARE_GS |
     RRV_PCSX2_GS_CAP_METAL_BACKEND | RRV_PCSX2_GS_CAP_DIRECT_PRESENT;
@@ -74,24 +73,24 @@ CaptureSession& capture_session() {
         return session;
     session.initialized = true;
 
-    const char* directory = std::getenv("TARZAN_CAPTURE_DIR");
+    const char* directory = std::getenv("PS2X_CAPTURE_DIR");
     if (!directory || directory[0] == '\0')
         return session;
 
     uint32_t max_frames = 10;
-    if (const char* limit = std::getenv("TARZAN_CAPTURE_FRAMES"); limit && limit[0] != '\0') {
+    if (const char* limit = std::getenv("PS2X_CAPTURE_FRAMES"); limit && limit[0] != '\0') {
         const std::string value(limit);
         const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), max_frames);
         if (error != std::errc{} || end != value.data() + value.size() ||
             max_frames == 0 || max_frames > 120)
-            throw std::invalid_argument("TARZAN_CAPTURE_FRAMES must be an integer from 1 through 120");
+            throw std::invalid_argument("PS2X_CAPTURE_FRAMES must be an integer from 1 through 120");
     }
-    const uint64_t start_field = capture_uint_env("TARZAN_CAPTURE_START_FIELD", 0, true);
-    const uint64_t interval = capture_uint_env("TARZAN_CAPTURE_INTERVAL", 1, false);
+    const uint64_t start_field = capture_uint_env("PS2X_CAPTURE_START_FIELD", 0, true);
+    const uint64_t interval = capture_uint_env("PS2X_CAPTURE_INTERVAL", 1, false);
 
     session.directory = std::filesystem::path(directory);
     if (!session.directory.is_absolute())
-        throw std::invalid_argument("TARZAN_CAPTURE_DIR must be an absolute directory path");
+        throw std::invalid_argument("PS2X_CAPTURE_DIR must be an absolute directory path");
     session.max_frames = max_frames;
     session.start_field = start_field;
     session.interval = interval;
@@ -179,16 +178,10 @@ void MetalGsAdapter::vsync(const std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_R
                            uint64_t field_index, uint32_t parity) {
     if (!handle_) throw std::logic_error("PCSX2 Metal GS vsync after close");
     if (parity > 1) throw std::invalid_argument("GS field parity must be 0 or 1");
-    auto scanout_regs = regs;
-    if (tarzan_experiments_boot_language_hidden()) {
-        // Keep GS work/VSync intact, but do not display the bypassed selector.
-        scanout_regs[0] &= ~UINT64_C(3);
-        scanout_regs[14] = 0;
-    }
     char error[1024]{};
-    check(rrv_pcsx2_gs_bridge_vsync(handle_, scanout_regs.data(), field_index, parity, error, sizeof(error)),
+    check(rrv_pcsx2_gs_bridge_vsync(handle_, regs.data(), field_index, parity, error, sizeof(error)),
           "vsync", error);
-    capture_vsync_regs = scanout_regs;
+    capture_vsync_regs = regs;
     capture_after_vsync(field_index);
 }
 
@@ -207,7 +200,7 @@ void MetalGsAdapter::capture_after_vsync(uint64_t field_index) {
     std::error_code fs_error;
     std::filesystem::create_directories(session.directory, fs_error);
     if (fs_error)
-        throw std::runtime_error("cannot create TARZAN_CAPTURE_DIR: " + fs_error.message());
+        throw std::runtime_error("cannot create PS2X_CAPTURE_DIR: " + fs_error.message());
 
     const RrvPcsx2GsBridgeStats before = stats();
     // Only snapshot a fresh, actually submitted GPU presentation. This avoids
@@ -346,4 +339,4 @@ RrvPcsx2GsBridgeStats MetalGsAdapter::stats() {
     return result;
 }
 
-} // namespace tarzan::ps2
+} // namespace host

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Build a self-contained, ad-hoc-signed macOS app bundle whose main executable is the Metal runner itself.
 
-Generates the icon, builds dist/Tarzan Freeride PS2.app, audits it (no disc image or game ELF outside
+Generates the icon, builds dist/<app_name>.app (names from config/game.json), audits it (no disc image or game ELF outside
 Resources/game, no Mach-O with /Users, Downloads or tools/build paths, arm64 only) and with --install
-replaces /Applications/Tarzan Freeride PS2.app (previous copy goes to the Trash).
+replaces /Applications/<app_name>.app (previous copy goes to the Trash).
 """
 import argparse
 from datetime import datetime
@@ -18,16 +18,21 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-NATIVE = Path(os.environ.get("TARZAN_NATIVE_TOOLS_ROOT") or ROOT)
+sys.path.insert(0, str(ROOT / "tools"))
+import game  # noqa: E402
+
+GAME = game.GAME
+APP_NAME = GAME["app_name"]
+NATIVE = Path(os.environ.get("RX_NATIVE_TOOLS_ROOT") or ROOT)
 RUNNER_DEFAULT = ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner"
 BRIDGE_DEFAULT = ROOT / "build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
 BRIDGE_RESOURCES_DEFAULT = BRIDGE_DEFAULT.parent / "resources"
-LLVM_LIB = Path(os.environ.get("TARZAN_LLVM") or NATIVE / "tools/build/llvm19") / "lib"
+LLVM_LIB = Path(os.environ.get("RX_LLVM") or NATIVE / "tools/build/llvm19") / "lib"
 ICON_DEFAULT = ROOT / "build/AppIcon.icns"
 GAME_DEFAULT = ROOT / "extracted/disc"
-OUTPUT_DEFAULT = ROOT / "dist/Tarzan Freeride PS2.app"
+OUTPUT_DEFAULT = ROOT / "dist" / (APP_NAME + ".app")
 BRIDGE_NAME = "librrv-pcsx2-gs-bridge.dylib"
-EXECUTABLE = "TarzanFreeridePS2"  # the game itself: one process, no launcher
+EXECUTABLE = GAME["executable"]  # the game itself: one process, no launcher
 
 
 def run(args, capture=False):
@@ -110,8 +115,8 @@ def ensure_app_dependency_closure(runner, bridge, runtime_dir, bundle_runner):
 def write_info_plist(contents):
     values = {
         "CFBundleDevelopmentRegion": "en", "CFBundleExecutable": EXECUTABLE,
-        "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": "org.rrv.tarzan-freeride-ps2",
-        "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": "Tarzan Freeride PS2",
+        "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": GAME["bundle_id"],
+        "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": APP_NAME,
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
         "CFBundleVersion": "19", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
@@ -165,7 +170,7 @@ def audit_bundle(app):
         rel = path.relative_to(app)
         if path.suffix.lower() == ".iso":
             problems.append(f"disc image in bundle: {rel}")
-        if path.name.startswith("SLES_") and game not in path.parents:
+        if path.name == GAME["elf"] and game not in path.parents:
             problems.append(f"game ELF outside Resources/game: {rel}")
         with open(path, "rb") as stream:
             magic = stream.read(4)
@@ -183,11 +188,11 @@ def audit_bundle(app):
 def install(source, applications):
     source = Path(source).resolve(strict=True)
     run(["codesign", "--verify", "--deep", "--strict", source])
-    destination = applications.resolve() / "Tarzan Freeride PS2.app"
+    destination = applications.resolve() / (APP_NAME + ".app")
     destination.parent.mkdir(parents=True, exist_ok=True)
     backup = None
     if destination.exists():
-        backup = Path.home() / ".Trash" / ("Tarzan-PS2-before-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".app")
+        backup = Path.home() / ".Trash" / (EXECUTABLE + "-before-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".app")
         backup.parent.mkdir(parents=True, exist_ok=True)
         destination.rename(backup)
     try:
@@ -267,9 +272,9 @@ def main():
         bridge = args.bridge.resolve()
         bridge_resources = args.bridge_resources.resolve()
         game_dir = args.game_dir.resolve()
-        game_elf = game_dir / "SLES_503.50"
+        game_elf = game_dir / GAME["elf"]
         if not bridge.is_file() or not game_elf.is_file() or not bridge_resources.is_dir():
-            raise RuntimeError("runner, verified Metal bridge/resources, and extracted SLES_503.50 are required")
+            raise RuntimeError("runner, verified Metal bridge/resources, and extracted " + GAME["elf"] + " are required")
         if "arm64" not in architectures(runner) or "arm64" not in architectures(bridge):
             raise RuntimeError("runner and bridge must contain arm64 Mach-O slices")
         runner_deps = dependencies(runner)
@@ -322,7 +327,7 @@ def main():
             "runner_bundled": True, "runner_sha256": sha256(bundled_runner),
             "runner_metal_bridge_link_verified": True, "bridge_sha256": sha256(bundled_bridge),
             "bridge_resources_directory": "Contents/Frameworks/PCSX2GSBridge/resources",
-            "game_elf_sha256": sha256(resources / "game/SLES_503.50"),
+            "game_elf_sha256": sha256(resources / "game" / GAME["elf"]),
             "game_asset_files": sum(1 for path in (resources / "game").rglob("*") if path.is_file()),
             "runtime_capabilities_verified": False, "gameplay_verified": False,
         })

@@ -36,7 +36,7 @@
       "configurePreset": "release",
       "targets": [
         "ps2EntryRunner",
-        "tarzanMetalHostSmoke"
+        "metalHostSmoke"
       ]
     },
     {

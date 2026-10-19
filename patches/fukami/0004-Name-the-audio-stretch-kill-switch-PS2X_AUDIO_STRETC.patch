@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 17:07:35 +0200
+Subject: [PATCH 4/4] Name the audio-stretch kill-switch PS2X_AUDIO_STRETCH
+
+
+diff --git a/tools/pcsx2-spu2/CMakeLists.txt b/tools/pcsx2-spu2/CMakeLists.txt
+index 690b367f85eae44c772fb8f56b054e8d0f225573..852dbe66bb2802d57cd7c8cf5f9d44868efb8b02 100644
+--- a/tools/pcsx2-spu2/CMakeLists.txt
++++ b/tools/pcsx2-spu2/CMakeLists.txt
+@@ -91,10 +91,10 @@ if(RRV_SPU2_BUILD_TESTS)
+     # These backend regression tests validate the native SPU2 output path.
+     # The separate SoundTouch synthetic test covers the optional host stretcher.
+     set_tests_properties(spu2_tone spu2_determinism spu2_threading PROPERTIES
+-        ENVIRONMENT "TARZAN_AUDIO_STRETCH=0")
++        ENVIRONMENT "PS2X_AUDIO_STRETCH=0")
+     if(_rspu2_tests)
+         set_tests_properties(rspu2_unit rspu2_stream rspu2_determinism PROPERTIES
+-            ENVIRONMENT "TARZAN_AUDIO_STRETCH=0")
++            ENVIRONMENT "PS2X_AUDIO_STRETCH=0")
+     endif()
+ 
+     if(RRV_SPU2_TSAN_TESTS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+diff --git a/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp b/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
+index 805b48a89a501cd2394a300cb3711223030a4946..39b3e5e48a9df2a68ca74fee85de3f01a1948b3d 100644
+--- a/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
++++ b/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
+@@ -771,7 +771,7 @@ rrv_spu2* rrv_spu2_create(const rrv_spu2_config* cfg)
+ 	rrv_spu2* s = new rrv_spu2();
+ 	if (cfg)
+ 		s->cfg = *cfg;
+-		const char* stretch = std::getenv("TARZAN_AUDIO_STRETCH");
++		const char* stretch = std::getenv("PS2X_AUDIO_STRETCH");
+ 		s->stretch_enabled = !(stretch && stretch[0] == '0' && stretch[1] == '\0');
+ 	const u32 frames = next_pow2(s->cfg.output_ring_frames ? s->cfg.output_ring_frames : 8192);
+ 	s->ring.assign(size_t(frames) * 2, 0.0f);

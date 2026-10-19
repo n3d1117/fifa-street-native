@@ -1,0 +1,11 @@
+{
+  "id": "SLES-53064",
+  "title": "FIFA Street",
+  "region": "PAL",
+  "iso_sha1": "23f98299466edc206bdf11407f4cb653bfc0e79c",
+  "elf": "SLES_530.64",
+  "elf_sha1": "fd167777fb6b28a118192b772436c8560461843e",
+  "app_name": "FIFA Street PS2",
+  "executable": "FIFAStreetPS2",
+  "bundle_id": "fyi.edoardo.fifa-street-ps2"
+}

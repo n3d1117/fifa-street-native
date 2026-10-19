@@ -8,7 +8,7 @@
 #include <span>
 #include <string>
 
-namespace tarzan::ps2 {
+namespace host {
 
 // Thin owner of a PCSX2 GS bridge handle. The NSView and CAMetalLayer are
 // opaque, borrowed handles: the caller must keep both alive through close().
@@ -55,4 +55,4 @@ private:
     RrvPcsx2GsBridgeCapabilities capabilities_{};
 };
 
-} // namespace tarzan::ps2
+} // namespace host

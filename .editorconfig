@@ -13,7 +13,7 @@ indent_size = 4
 [CMakeLists.txt]
 indent_size = 4
 
-[tz]
+[rx]
 indent_size = 4
 
 [*.{md,patch}]

@@ -7,7 +7,7 @@
 
 namespace {
 std::mutex s_snapshot_mutex;
-TarzanGamepadSnapshot s_snapshot{};
+Ps2xGamepadSnapshot s_snapshot{};
 SDL_Gamepad* s_gamepad = nullptr;
 bool s_initialized = false;
 bool s_active = true;
@@ -67,7 +67,7 @@ int16_t axis(SDL_GamepadAxis a)
 }
 } // namespace
 
-extern "C" int tarzan_gamepad_init(void)
+extern "C" int ps2x_gamepad_init(void)
 {
     if (s_initialized)
         return 1;
@@ -83,7 +83,7 @@ extern "C" int tarzan_gamepad_init(void)
     return 1;
 }
 
-extern "C" void tarzan_gamepad_poll(void)
+extern "C" void ps2x_gamepad_poll(void)
 {
     if (!s_initialized)
         return;
@@ -103,26 +103,26 @@ extern "C" void tarzan_gamepad_poll(void)
     }
     open_first_gamepad();
 
-    TarzanGamepadSnapshot next{};
+    Ps2xGamepadSnapshot next{};
     next.connected = s_gamepad ? 1 : 0;
     if (s_gamepad) {
-        next.buttons[TARZAN_PAD_CROSS] = button(SDL_GAMEPAD_BUTTON_SOUTH);
-        next.buttons[TARZAN_PAD_CIRCLE] = button(SDL_GAMEPAD_BUTTON_EAST);
-        next.buttons[TARZAN_PAD_SQUARE] = button(SDL_GAMEPAD_BUTTON_WEST);
-        next.buttons[TARZAN_PAD_TRIANGLE] = button(SDL_GAMEPAD_BUTTON_NORTH);
-        next.buttons[TARZAN_PAD_UP] = button(SDL_GAMEPAD_BUTTON_DPAD_UP);
-        next.buttons[TARZAN_PAD_DOWN] = button(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
-        next.buttons[TARZAN_PAD_LEFT] = button(SDL_GAMEPAD_BUTTON_DPAD_LEFT);
-        next.buttons[TARZAN_PAD_RIGHT] = button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
-        next.buttons[TARZAN_PAD_L1] = button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-        next.buttons[TARZAN_PAD_R1] = button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+        next.buttons[PS2X_PAD_CROSS] = button(SDL_GAMEPAD_BUTTON_SOUTH);
+        next.buttons[PS2X_PAD_CIRCLE] = button(SDL_GAMEPAD_BUTTON_EAST);
+        next.buttons[PS2X_PAD_SQUARE] = button(SDL_GAMEPAD_BUTTON_WEST);
+        next.buttons[PS2X_PAD_TRIANGLE] = button(SDL_GAMEPAD_BUTTON_NORTH);
+        next.buttons[PS2X_PAD_UP] = button(SDL_GAMEPAD_BUTTON_DPAD_UP);
+        next.buttons[PS2X_PAD_DOWN] = button(SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+        next.buttons[PS2X_PAD_LEFT] = button(SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+        next.buttons[PS2X_PAD_RIGHT] = button(SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+        next.buttons[PS2X_PAD_L1] = button(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+        next.buttons[PS2X_PAD_R1] = button(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
         constexpr int kTriggerThreshold = 16000;
-        next.buttons[TARZAN_PAD_L2] = axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > kTriggerThreshold;
-        next.buttons[TARZAN_PAD_R2] = axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > kTriggerThreshold;
-        next.buttons[TARZAN_PAD_START] = button(SDL_GAMEPAD_BUTTON_START);
-        next.buttons[TARZAN_PAD_SELECT] = button(SDL_GAMEPAD_BUTTON_BACK);
-        next.buttons[TARZAN_PAD_L3] = button(SDL_GAMEPAD_BUTTON_LEFT_STICK);
-        next.buttons[TARZAN_PAD_R3] = button(SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+        next.buttons[PS2X_PAD_L2] = axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > kTriggerThreshold;
+        next.buttons[PS2X_PAD_R2] = axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > kTriggerThreshold;
+        next.buttons[PS2X_PAD_START] = button(SDL_GAMEPAD_BUTTON_START);
+        next.buttons[PS2X_PAD_SELECT] = button(SDL_GAMEPAD_BUTTON_BACK);
+        next.buttons[PS2X_PAD_L3] = button(SDL_GAMEPAD_BUTTON_LEFT_STICK);
+        next.buttons[PS2X_PAD_R3] = button(SDL_GAMEPAD_BUTTON_RIGHT_STICK);
         next.axes[0] = axis(SDL_GAMEPAD_AXIS_LEFTX);
         next.axes[1] = axis(SDL_GAMEPAD_AXIS_LEFTY);
         next.axes[2] = axis(SDL_GAMEPAD_AXIS_RIGHTX);
@@ -132,7 +132,7 @@ extern "C" void tarzan_gamepad_poll(void)
     s_snapshot = next;
 }
 
-extern "C" void tarzan_gamepad_set_active(int active)
+extern "C" void ps2x_gamepad_set_active(int active)
 {
     s_active = active != 0;
     if (!s_active)
@@ -141,7 +141,7 @@ extern "C" void tarzan_gamepad_set_active(int active)
         open_first_gamepad();
 }
 
-extern "C" void tarzan_gamepad_shutdown(void)
+extern "C" void ps2x_gamepad_shutdown(void)
 {
     if (!s_initialized)
         return;
@@ -151,7 +151,7 @@ extern "C" void tarzan_gamepad_shutdown(void)
     publish_empty();
 }
 
-extern "C" void tarzan_gamepad_read(TarzanGamepadSnapshot* out_snapshot)
+extern "C" void ps2x_gamepad_read(Ps2xGamepadSnapshot* out_snapshot)
 {
     if (!out_snapshot)
         return;

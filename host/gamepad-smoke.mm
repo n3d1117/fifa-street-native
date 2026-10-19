@@ -9,20 +9,20 @@ int main()
     @autoreleasepool {
         NSApplication* app = [NSApplication sharedApplication];
         [app finishLaunching];
-        if (!tarzan_gamepad_init()) {
+        if (!ps2x_gamepad_init()) {
             std::fprintf(stderr, "SDL gamepad initialization failed\n");
             return 1;
         }
-        tarzan_gamepad_poll();
-        TarzanGamepadSnapshot snapshot{};
-        tarzan_gamepad_read(&snapshot);
+        ps2x_gamepad_poll();
+        Ps2xGamepadSnapshot snapshot{};
+        ps2x_gamepad_read(&snapshot);
         std::printf("SDL gamepad subsystem initialized; controller %s\n",
                     snapshot.connected ? "connected" : "not connected");
-        tarzan_gamepad_set_active(0);
-        tarzan_gamepad_read(&snapshot);
+        ps2x_gamepad_set_active(0);
+        ps2x_gamepad_read(&snapshot);
         const bool cleared = snapshot.connected == 0;
-        tarzan_gamepad_set_active(1);
-        tarzan_gamepad_shutdown();
+        ps2x_gamepad_set_active(1);
+        ps2x_gamepad_shutdown();
         if (!cleared) {
             std::fprintf(stderr, "focus-loss state clear failed\n");
             return 2;

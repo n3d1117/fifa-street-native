@@ -41,7 +41,7 @@ def main() -> int:
     archive_dir.mkdir(parents=True, exist_ok=True)
 
     # Establish asset identity from GitHub's immutable-release API before using bytes.
-    req = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "tarzan-metal-bridge-preparer"})
+    req = urllib.request.Request(API, headers={"Accept": "application/vnd.github+json", "User-Agent": "rx-metal-bridge-preparer"})
     with urllib.request.urlopen(req, timeout=30) as response:
         release = json.load(response)
     if release.get("tag_name") != TAG or release.get("immutable") is not True:
@@ -57,7 +57,7 @@ def main() -> int:
     if not archive.exists() or archive.stat().st_size != ASSET_SIZE or digest(archive) != ASSET_SHA256:
         partial = archive.with_suffix(archive.suffix + ".part")
         partial.unlink(missing_ok=True)
-        req = urllib.request.Request(URL, headers={"User-Agent": "tarzan-metal-bridge-preparer"})
+        req = urllib.request.Request(URL, headers={"User-Agent": "rx-metal-bridge-preparer"})
         with urllib.request.urlopen(req, timeout=60) as response, partial.open("wb") as out:
             shutil.copyfileobj(response, out)
         if partial.stat().st_size != ASSET_SIZE or digest(partial) != ASSET_SHA256:

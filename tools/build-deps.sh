@@ -2,23 +2,23 @@
 # Build every local dependency under tools/ and build/ from pinned, hash-verified
 # sources. Idempotent: each section is skipped when its output already exists.
 #   tools/build-deps.sh                      # build what is missing
-#   TARZAN_FORCE="bridge spu2" tools/build-deps.sh   # rebuild named sections
+#   RX_FORCE="bridge spu2" tools/build-deps.sh   # rebuild named sections
 # Sections: ffmpeg metal-deps metal-resources bridge spu2
-# Needs: toolchain/bootstrap.sh done (or TARZAN_LLVM set), `python3 tools/deps.py sync` done.
+# Needs: toolchain/bootstrap.sh done (or RX_LLVM set), `python3 tools/deps.py sync` done.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LLVM="${TARZAN_LLVM:-$ROOT/tools/build/llvm19}"
+LLVM="${RX_LLVM:-$ROOT/tools/build/llvm19}"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 CTEST="$(dirname "$CMAKE")/ctest"
 NINJA="$ROOT/tools/build/ninja-1.13.1/ninja"
 TOOLCHAIN="$ROOT/cmake/toolchain-llvm19.cmake"
 SDK="$(xcrun --show-sdk-path)"
-# Parallelism comes from the one shared host-derived formula (tools/jobs.py; TZ_JOBS overrides).
-NCPU="${TZ_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
+# Parallelism comes from the one shared host-derived formula (tools/jobs.py; RX_JOBS overrides).
+NCPU="${RX_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
 LOGS="$ROOT/logs"
-FORCE=" ${TARZAN_FORCE:-} "
+FORCE=" ${RX_FORCE:-} "
 mkdir -p "$LOGS"
-export TARZAN_LLVM="$LLVM"
+export RX_LLVM="$LLVM"
 
 for tool in "$CMAKE" "$NINJA" "$LLVM/bin/clang++"; do
   [[ -x "$tool" ]] || { echo "Missing $tool; run toolchain/bootstrap.sh" >&2; exit 2; }

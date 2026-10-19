@@ -5,7 +5,7 @@
 #include "metal-host.hpp"
 #include "metal-gs-adapter.hpp"
 #include "keyboard-controls.hpp"
-#include "experimental-settings.hpp"
+#include "settings.hpp"
 #include "gamepad-input.hpp"
 #include "diagnostic-input.hpp"
 #include "spu2-host.hpp"
@@ -27,8 +27,8 @@ CAMetalLayer* s_layer;
 RrvPcsx2GsBridgeSurface s_surface{};
 std::atomic_bool s_should_close{false};
 bool s_fullscreen{};
-CGFloat gameAspect() { return tarzan_experiments_hd_widescreen() ? 16.0 / 9.0 : 4.0 / 3.0; }
-thread_local std::unique_ptr<tarzan::ps2::MetalGsAdapter> s_gs;
+constexpr CGFloat kGameAspect = 4.0 / 3.0;
+thread_local std::unique_ptr<host::MetalGsAdapter> s_gs;
 std::array<std::atomic_bool, 19> s_keys{};
 std::atomic_bool s_lifecycle_pending{false};
 std::atomic<uint32_t> s_resize_width{};
@@ -60,10 +60,10 @@ void layout_game_view() {
         [s_view setFrame:bounds];
     } else {
         CGFloat width = bounds.size.width;
-        CGFloat height = width / gameAspect();
+        CGFloat height = width / kGameAspect;
         if (height > bounds.size.height) {
             height = bounds.size.height;
-            width = height * gameAspect();
+            width = height * kGameAspect;
         }
         [s_view setFrame:NSMakeRect(NSMidX(bounds) - width / 2.0,
                                     NSMidY(bounds) - height / 2.0, width, height)];
@@ -89,7 +89,7 @@ void apply_pending_surface_resize() {
 
 }
 
-@interface TarzanMetalWindowDelegate : NSObject <NSWindowDelegate, NSApplicationDelegate>
+@interface HostWindowDelegate : NSObject <NSWindowDelegate, NSApplicationDelegate>
 - (void)showKeyboardControls:(id)sender;
 - (void)showSettings:(id)sender;
 - (void)windowDidResignKey:(NSNotification*)notification;
@@ -100,7 +100,7 @@ void apply_pending_surface_resize() {
 - (void)windowDidEnterFullScreen:(NSNotification*)notification;
 - (void)windowDidExitFullScreen:(NSNotification*)notification;
 @end
-@implementation TarzanMetalWindowDelegate
+@implementation HostWindowDelegate
 // Dock/AppleScript/logout quit must take the same orderly path as the Quit menu:
 // exit() under a running guest thread would destroy live mutexes.
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication*)sender {
@@ -115,16 +115,16 @@ void apply_pending_surface_resize() {
 - (void)showSettings:(id)sender {
     (void)sender;
     for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
-    tarzan_experiments_show();
+    host::show_settings_window();
 }
 - (void)windowDidResignKey:(NSNotification*)notification {
     (void)notification;
     for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
-    tarzan_gamepad_set_active(0);
+    ps2x_gamepad_set_active(0);
 }
 - (void)windowDidBecomeKey:(NSNotification*)notification {
     (void)notification;
-    tarzan_gamepad_set_active(1);
+    ps2x_gamepad_set_active(1);
 }
 - (void)requestClose:(id)sender { (void)sender; s_should_close.store(true); }
 - (void)windowDidResize:(NSNotification*)notification {
@@ -146,49 +146,26 @@ void apply_pending_surface_resize() {
     layout_game_view();
 }
 @end
-static TarzanMetalWindowDelegate* s_delegate;
+static HostWindowDelegate* s_delegate;
 static id<NSObject> s_playbackActivity;
 static id s_resignObserver;
 static id s_becomeObserver;
 
-extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32_t height) {
+extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t height) {
     @autoreleasepool {
         // The launcher normally configured settings already; this is a no-op then.
-        tarzan_experiments_configure(nullptr);
-        keyboard_controls_configure(tarzan_experiments_user_directory());
-        tarzan_diagnostic_input_configure(std::getenv("TARZAN_DIAGNOSTIC_INPUT_FIFO"));
+        host::configure_settings(nullptr);
+        const host::Settings& settings = host::active_settings();
+        keyboard_controls_configure(host::user_directory().empty() ? nullptr : host::user_directory().c_str());
+        ps2x_diagnostic_input_configure(std::getenv("PS2X_DIAGNOSTIC_INPUT_FIFO"));
         // The GS bridge (a separate library) takes its options from RRV_* variables;
         // they are derived here from the Settings struct, never set by users.
-        if (tarzan_experiments_high_fps()) {
-            setenv("RRV_PCSX2_GS_VSYNC", "1", 1);
-            setenv("RRV_PCSX2_GS_PRESENT_THROTTLE", "1", 1);
-            // The guest may run faster than the display. Keep drawable pacing
-            // on the display's cadence, not on the guest update cadence.
-            NSScreen* screen = [NSScreen mainScreen];
-            const CGDirectDisplayID display = [[[screen deviceDescription] objectForKey:@"NSScreenNumber"] unsignedIntValue];
-            CGDisplayModeRef mode = CGDisplayCopyDisplayMode(display);
-            double refresh = mode ? CGDisplayModeGetRefreshRate(mode) : 0.0;
-            if (mode) CGDisplayModeRelease(mode);
-            if (!(refresh > 0.0)) refresh = 60.0;
-            const char* presentRate = refresh >= 100.0 && tarzan_experiments_target_fps() == 120 ? "120" : "60";
-            setenv("RRV_PCSX2_GS_PRESENT_HZ", presentRate, 1);
-            setenv("RRV_PCSX2_GS_DISPLAY_HZ", presentRate, 1);
-        }
-        if (tarzan_experiments_hd_widescreen()) {
-            setenv("RRV_PCSX2_GS_ASPECT", "16:9", 1);
-        }
-
-        if (tarzan_experiments_sharper_image()) {
+        if (settings.sharperImage) {
             setenv("RRV_PCSX2_GS_CAS", "50", 1);
             setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
         }
-        // Match the upstream SLES-50350 game-database blur/shadow fix.
-        if (!std::getenv("RRV_PCSX2_GS_FIELD_HPO"))
-            setenv("RRV_PCSX2_GS_FIELD_HPO", "1", 1);
-        const int scale = tarzan_experiments_render_scale();
-        if (scale > 1) {
-            setenv("TARZAN_UPSCALE_UI_COVERAGE", "1", 1);
-            const char scaleValue[] = {static_cast<char>('0' + scale), 0};
+        if (settings.renderScale > 1) {
+            const char scaleValue[] = {static_cast<char>('0' + settings.renderScale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
         }
 
@@ -199,43 +176,43 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
             addObserverForName:NSApplicationDidResignActiveNotification object:app queue:[NSOperationQueue mainQueue]
             usingBlock:^(NSNotification*) {
                 for (auto& key : s_keys) key.store(false, std::memory_order_relaxed);
-                tarzan_gamepad_set_active(0);
+                ps2x_gamepad_set_active(0);
             }];
         s_becomeObserver = [[NSNotificationCenter defaultCenter]
             addObserverForName:NSApplicationDidBecomeActiveNotification object:app queue:[NSOperationQueue mainQueue]
-            usingBlock:^(NSNotification*) { tarzan_gamepad_set_active(1); }];
+            usingBlock:^(NSNotification*) { ps2x_gamepad_set_active(1); }];
         s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(100, 100, width, height)
             styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable)
             backing:NSBackingStoreBuffered defer:NO];
         if (!s_window) return 0;
-        if (!tarzan_gamepad_init())
+        if (!ps2x_gamepad_init())
             NSLog(@"SDL3 gamepad initialization failed; keyboard input remains available");
-        if (!tarzan_spu2_host_start()) {
+        if (!ps2x_spu2_host_start()) {
             NSLog(@"Native SPU2 core initialization failed");
             return 0;
         }
         // ARC owns the global reference. Keep close from releasing the window
         // behind that reference; stop() closes first, then clears it explicitly.
         [s_window setReleasedWhenClosed:NO];
-        [s_window setTitle:[NSString stringWithUTF8String:title ? title : "Tarzan PS2"]];
-        [s_window setContentAspectRatio:NSMakeSize(gameAspect(), 1.0)];
-        [s_window setContentSize:NSMakeSize(std::max<CGFloat>(480.0, height * gameAspect()),
+        [s_window setTitle:[NSString stringWithUTF8String:title ? title : PS2X_APP_NAME]];
+        [s_window setContentAspectRatio:NSMakeSize(kGameAspect, 1.0)];
+        [s_window setContentSize:NSMakeSize(std::max<CGFloat>(480.0, height * kGameAspect),
                                              std::max<CGFloat>(360.0, height))];
-        [s_window setContentMinSize:NSMakeSize(360.0 * gameAspect(), 360.0)];
+        [s_window setContentMinSize:NSMakeSize(360.0 * kGameAspect, 360.0)];
         [s_window setCollectionBehavior:[s_window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
-        s_delegate = [TarzanMetalWindowDelegate new];
+        s_delegate = [HostWindowDelegate new];
         [s_window setDelegate:s_delegate];
         [app setDelegate:s_delegate];
         NSMenu* mainMenu = [NSMenu new];
         NSMenuItem* appItem = [NSMenuItem new];
         [mainMenu addItem:appItem];
-        NSMenu* appMenu = [[NSMenu alloc] initWithTitle:@"Tarzan Freeride PS2"];
+        NSMenu* appMenu = [[NSMenu alloc] initWithTitle:@PS2X_APP_NAME];
         [appMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Settings…"
             action:@selector(showSettings:) keyEquivalent:@","]];
         [appMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Keyboard Controls…"
             action:@selector(showKeyboardControls:) keyEquivalent:@""]];
         [appMenu addItem:[NSMenuItem separatorItem]];
-        [appMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Quit Tarzan PS2"
+        [appMenu addItem:[[NSMenuItem alloc] initWithTitle:@"Quit " PS2X_APP_NAME
             action:@selector(requestClose:) keyEquivalent:@"q"]];
         [appItem setSubmenu:appMenu];
         NSMenuItem* viewItem = [[NSMenuItem alloc] initWithTitle:@"View" action:nil keyEquivalent:@""];
@@ -283,11 +260,11 @@ extern "C" int tarzan_metal_host_start(const char* title, uint32_t width, uint32
         }
         s_playbackActivity = [[NSProcessInfo processInfo]
                 beginActivityWithOptions:NSActivityUserInitiated
-                reason:@"Tarzan real-time gameplay"];
+                reason:@"real-time gameplay"];
         return 1;
     }
 }
-extern "C" void tarzan_metal_host_poll(void) {
+extern "C" void ps2x_metal_host_poll(void) {
     @autoreleasepool {
         NSEvent* event;
         while ((event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:1.0/240.0]
@@ -312,16 +289,16 @@ extern "C" void tarzan_metal_host_poll(void) {
             }
             [NSApp sendEvent:event];
         }
-        tarzan_diagnostic_input_poll();
-        tarzan_gamepad_poll();
+        ps2x_diagnostic_input_poll();
+        ps2x_gamepad_poll();
         [NSApp updateWindows];
         if (s_lifecycle_pending.load(std::memory_order_acquire))
             (void)rrv_pcsx2_gs_bridge_pump_main_thread();
     }
 }
-extern "C" int tarzan_metal_host_should_close(void) { return s_should_close.load() ? 1 : 0; }
-extern "C" void tarzan_metal_host_request_close(void) { s_should_close.store(true); }
-extern "C" void tarzan_metal_host_stop(void) {
+extern "C" int ps2x_metal_host_should_close(void) { return s_should_close.load() ? 1 : 0; }
+extern "C" void ps2x_metal_host_request_close(void) { s_should_close.store(true); }
+extern "C" void ps2x_metal_host_stop(void) {
     @autoreleasepool {
         if (s_playbackActivity) {
             [[NSProcessInfo processInfo] endActivity:s_playbackActivity];
@@ -331,24 +308,24 @@ extern "C" void tarzan_metal_host_stop(void) {
         if (s_becomeObserver) [[NSNotificationCenter defaultCenter] removeObserver:s_becomeObserver];
         s_resignObserver=nil;
         s_becomeObserver=nil;
-        tarzan_spu2_host_stop();
-        tarzan_diagnostic_input_shutdown();
-        tarzan_gamepad_shutdown();
+        ps2x_spu2_host_stop();
+        ps2x_diagnostic_input_shutdown();
+        ps2x_gamepad_shutdown();
         [s_window setDelegate:nil];
         [NSApp setDelegate:nil];
         [NSApp setMainMenu:nil];
         [s_window close]; s_window=nil; s_view=nil; s_layer=nil; s_delegate=nil;
     }
 }
-extern "C" int tarzan_metal_gs_create(void) {
+extern "C" int ps2x_metal_gs_create(void) {
     @autoreleasepool {
         if (!s_view || !s_layer || s_gs) return 0;
-        tarzan::ps2::MetalGsSurface surface{};
+        host::MetalGsSurface surface{};
         surface.ns_view = (__bridge void*)s_view; surface.metal_layer = (__bridge void*)s_layer;
         surface.width_pixels = s_surface.width_pixels; surface.height_pixels = s_surface.height_pixels;
         surface.backing_scale = s_surface.backing_scale;
         s_lifecycle_pending.store(true, std::memory_order_release);
-        try { s_gs = std::make_unique<tarzan::ps2::MetalGsAdapter>(tarzan::ps2::MetalGsAdapter::create(surface)); }
+        try { s_gs = std::make_unique<host::MetalGsAdapter>(host::MetalGsAdapter::create(surface)); }
         catch (const std::exception& e) {
             s_lifecycle_pending.store(false, std::memory_order_release);
             NSLog(@"Metal GS create failed: %s", e.what()); return 0;
@@ -357,25 +334,25 @@ extern "C" int tarzan_metal_gs_create(void) {
         return 1;
     }
 }
-extern "C" void tarzan_metal_gs_destroy(void) {
+extern "C" void ps2x_metal_gs_destroy(void) {
     if (!s_gs) return;
     s_lifecycle_pending.store(true, std::memory_order_release);
     s_gs.reset();
     s_lifecycle_pending.store(false, std::memory_order_release);
 }
-extern "C" int tarzan_metal_gs_submit(uint32_t path, const uint8_t* bytes, uint32_t size) {
+extern "C" int ps2x_metal_gs_submit(uint32_t path, const uint8_t* bytes, uint32_t size) {
     if (!s_gs || (!bytes && size)) return 0;
     apply_pending_surface_resize();
     try { s_gs->submit(path, std::span<const uint8_t>(bytes, size)); return 1; }
     catch (const std::exception& e) { NSLog(@"Metal GIF submit failed: %s", e.what()); return 0; }
 }
-extern "C" int tarzan_metal_gs_reset(void) {
+extern "C" int ps2x_metal_gs_reset(void) {
     if (!s_gs) return 0;
     apply_pending_surface_resize();
     try { s_gs->reset(); return 1; }
     catch (const std::exception& e) { NSLog(@"Metal GS reset failed: %s", e.what()); return 0; }
 }
-extern "C" int tarzan_metal_gs_write_csr(uint64_t authoritative_csr,
+extern "C" int ps2x_metal_gs_write_csr(uint64_t authoritative_csr,
                                           uint32_t high_word_write_mask,
                                           int write_high_word) {
     if (!s_gs) return 0;
@@ -388,7 +365,7 @@ extern "C" int tarzan_metal_gs_write_csr(uint64_t authoritative_csr,
         return 0;
     }
 }
-extern "C" int tarzan_metal_gs_vsync(const uint64_t* regs, uint64_t tick, uint32_t parity) {
+extern "C" int ps2x_metal_gs_vsync(const uint64_t* regs, uint64_t tick, uint32_t parity) {
     if (!s_gs || !regs) return 0;
     apply_pending_surface_resize();
     std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_REG_COUNT> copy{};
@@ -396,13 +373,13 @@ extern "C" int tarzan_metal_gs_vsync(const uint64_t* regs, uint64_t tick, uint32
     try { s_gs->vsync(copy, tick, parity); return 1; }
     catch (const std::exception& e) { NSLog(@"Metal GS vsync failed: %s", e.what()); return 0; }
 }
-extern "C" int tarzan_metal_gs_readback(uint64_t* csr, uint64_t* siglblid) {
+extern "C" int ps2x_metal_gs_readback(uint64_t* csr, uint64_t* siglblid) {
     if (!s_gs || !csr || !siglblid) return 0;
     apply_pending_surface_resize();
     try { const auto r=s_gs->readback(); *csr=r.csr; *siglblid=r.siglblid; return 1; }
     catch (const std::exception& e) { NSLog(@"Metal GS readback failed: %s", e.what()); return 0; }
 }
-extern "C" int tarzan_metal_gs_read_local_memory(uint8_t* dst, uint32_t byte_count,
+extern "C" int ps2x_metal_gs_read_local_memory(uint8_t* dst, uint32_t byte_count,
                                                   uint64_t bitbltbuf, uint64_t trxpos,
                                                   uint64_t trxreg) {
     if (!s_gs || !dst || byte_count == 0) return 0;
@@ -414,10 +391,10 @@ extern "C" int tarzan_metal_gs_read_local_memory(uint8_t* dst, uint32_t byte_cou
         return 0;
     }
 }
-extern "C" int tarzan_metal_gs_capabilities(uint32_t* renderer, uint32_t* flags) {
+extern "C" int ps2x_metal_gs_capabilities(uint32_t* renderer, uint32_t* flags) {
     if (!s_gs || !renderer || !flags) return 0;
     *renderer = s_gs->capabilities().renderer_kind;
     *flags = s_gs->capabilities().capability_flags;
     return 1;
 }
-extern "C" int tarzan_metal_key_down(uint32_t key) { return key<19 && (s_keys[key].load(std::memory_order_relaxed) || tarzan_diagnostic_input_key_down(key) || (key == TARZAN_KEY_X && tarzan_experiments_boot_language_confirm())); }
+extern "C" int ps2x_metal_key_down(uint32_t key) { return key<19 && (s_keys[key].load(std::memory_order_relaxed) || ps2x_diagnostic_input_key_down(key)); }

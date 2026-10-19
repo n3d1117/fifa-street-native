@@ -17,17 +17,17 @@ constexpr uint32_t kDirectPresent = 1u << 2;
 }
 
 int main() {
-    if (!tarzan_metal_host_start("Tarzan PCSX2 Metal GS smoke", 960, 720)) {
+    if (!ps2x_metal_host_start("PCSX2 Metal GS smoke", 960, 720)) {
         std::cerr << "Cocoa/Metal host surface initialization failed\n";
         return 1;
     }
     std::atomic_bool complete{false};
     std::atomic_int result{1};
     std::thread owner([&] {
-        if (!tarzan_metal_gs_create()) result.store(2, std::memory_order_relaxed);
+        if (!ps2x_metal_gs_create()) result.store(2, std::memory_order_relaxed);
         else {
             uint32_t renderer = 0, flags = 0;
-            if (!tarzan_metal_gs_capabilities(&renderer, &flags) || renderer != kMetal ||
+            if (!ps2x_metal_gs_capabilities(&renderer, &flags) || renderer != kMetal ||
                 (flags & (kHardwareGs | kMetalBackend | kDirectPresent)) !=
                     (kHardwareGs | kMetalBackend | kDirectPresent)) {
                 std::cerr << "PCSX2 GS renderer/capability check failed: kind=" << renderer
@@ -37,26 +37,26 @@ int main() {
             // Exercise guest-computed W1C mirroring: ack SIGNAL while FINISH
             // remains set, then ensure a real VSync doesn't restore SIGNAL.
             constexpr uint64_t csr_fixture = 0x00000000551b0003ull;
-            if (!tarzan_metal_gs_write_csr(csr_fixture, 0, 0)) {
+            if (!ps2x_metal_gs_write_csr(csr_fixture, 0, 0)) {
                 std::cerr << "PCSX2 Metal GS rejected CSR fixture publication\n";
                 result.store(4, std::memory_order_relaxed);
             }
             uint64_t observed_csr = 0, observed_siglblid = 0;
-            if (!tarzan_metal_gs_readback(&observed_csr, &observed_siglblid) ||
+            if (!ps2x_metal_gs_readback(&observed_csr, &observed_siglblid) ||
                 observed_csr != csr_fixture) {
                 std::cerr << "PCSX2 Metal GS CSR fixture readback mismatch\n";
                 result.store(4, std::memory_order_relaxed);
             }
             constexpr uint64_t csr_after_signal_ack = csr_fixture & ~uint64_t{1};
-            if (!tarzan_metal_gs_write_csr(csr_after_signal_ack, 0, 0) ||
-                !tarzan_metal_gs_readback(&observed_csr, &observed_siglblid) ||
+            if (!ps2x_metal_gs_write_csr(csr_after_signal_ack, 0, 0) ||
+                !ps2x_metal_gs_readback(&observed_csr, &observed_siglblid) ||
                 observed_csr != csr_after_signal_ack || (observed_csr & 2u) == 0u) {
                 std::cerr << "PCSX2 Metal GS CSR W1C mirror did not preserve FINISH\n";
                 result.store(4, std::memory_order_relaxed);
             }
             constexpr uint64_t csr_with_write_mask = (uint64_t{3} << 32) | csr_after_signal_ack;
-            if (!tarzan_metal_gs_write_csr(csr_with_write_mask, 3, 1) ||
-                !tarzan_metal_gs_readback(&observed_csr, &observed_siglblid) ||
+            if (!ps2x_metal_gs_write_csr(csr_with_write_mask, 3, 1) ||
+                !ps2x_metal_gs_readback(&observed_csr, &observed_siglblid) ||
                 observed_csr != csr_with_write_mask) {
                 std::cerr << "PCSX2 Metal GS CSR write-mask half did not reach GSwriteCSR\n";
                 result.store(4, std::memory_order_relaxed);
@@ -65,10 +65,10 @@ int main() {
             // teardown; zeroed privileged registers are valid idle state.
             std::array<uint64_t, 19> idle_regs{};
             idle_regs[15] = csr_with_write_mask;
-            if (!tarzan_metal_gs_vsync(idle_regs.data(), 1, 0)) {
+            if (!ps2x_metal_gs_vsync(idle_regs.data(), 1, 0)) {
                 std::cerr << "PCSX2 Metal GS rejected the first idle VSync\n";
                 result.store(4, std::memory_order_relaxed);
-            } else if (!tarzan_metal_gs_readback(&observed_csr, &observed_siglblid) ||
+            } else if (!ps2x_metal_gs_readback(&observed_csr, &observed_siglblid) ||
                        observed_csr != csr_with_write_mask) {
                 std::cerr << "PCSX2 Metal GS VSync resurrected acknowledged CSR status\n";
                 result.store(4, std::memory_order_relaxed);
@@ -91,18 +91,18 @@ int main() {
             const std::array<uint64_t, 2> image_continuation{
                 0x04030201u | (uint64_t{0x08070605u} << 32),
                 0x0C0B0A09u | (uint64_t{0x100F0E0Du} << 32)};
-            if (!tarzan_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(upload_setup.data()),
+            if (!ps2x_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(upload_setup.data()),
                                         sizeof(upload_setup)) ||
-                !tarzan_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(image_first.data()),
+                !ps2x_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(image_first.data()),
                                         sizeof(image_first)) ||
-                !tarzan_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(image_continuation.data()),
+                !ps2x_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(image_continuation.data()),
                                         sizeof(image_continuation))) {
                 std::cerr << "PCSX2 Metal GS rejected the split-IMAGE continuation fixture\n";
                 result.store(7, std::memory_order_relaxed);
             } else {
                 // Reset parser/cursor state without discarding GS local memory,
                 // then read back the completed upload through the real FIFO.
-                if (!tarzan_metal_gs_reset()) {
+                if (!ps2x_metal_gs_reset()) {
                     std::cerr << "PCSX2 Metal GS reset after split-IMAGE upload failed\n";
                     result.store(7, std::memory_order_relaxed);
                 }
@@ -113,13 +113,13 @@ int main() {
                 const std::array<uint32_t, 8> expected_pixels{
                     0x44332211u, 0x88776655u, 0xCCBBAA99u, 0x00FFEEDDu,
                     0x04030201u, 0x08070605u, 0x0C0B0A09u, 0x100F0E0Du};
-                if (!tarzan_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(download_setup.data()),
+                if (!ps2x_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(download_setup.data()),
                                             sizeof(download_setup))) {
                     std::cerr << "PCSX2 Metal GS rejected split-IMAGE readback setup\n";
                     result.store(7, std::memory_order_relaxed);
                 } else {
                     std::array<uint8_t, 32> pixels{};
-                    if (!tarzan_metal_gs_read_local_memory(pixels.data(), pixels.size(),
+                    if (!ps2x_metal_gs_read_local_memory(pixels.data(), pixels.size(),
                             uint64_t{1} << 16, upload_trxpos, upload_trxreg) ||
                         std::memcmp(pixels.data(), expected_pixels.data(), pixels.size()) != 0) {
                         std::cerr << "PCSX2 Metal GS split-IMAGE continuation pixels differ from fixture\n";
@@ -139,28 +139,28 @@ int main() {
             const std::array<uint64_t, 10> read_setup{
                 uint64_t{4} | (uint64_t{1} << 15) | (uint64_t{1} << 60), 0xE,
                 bitbltbuf, 0x50, trxpos, 0x51, trxreg, 0x52, 1, 0x53};
-            if (!tarzan_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(read_setup.data()),
+            if (!ps2x_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(read_setup.data()),
                                         sizeof(read_setup))) {
                 std::cerr << "PCSX2 Metal GS rejected local-to-host setup GIF\n";
                 result.store(5, std::memory_order_relaxed);
             } else {
                 std::array<uint8_t, 4> pixel{};
-                if (!tarzan_metal_gs_read_local_memory(pixel.data(), pixel.size(),
+                if (!ps2x_metal_gs_read_local_memory(pixel.data(), pixel.size(),
                                                        bitbltbuf, trxpos, trxreg)) {
                     std::cerr << "PCSX2 Metal GS local-to-host FIFO read failed\n";
                     result.store(6, std::memory_order_relaxed);
                 }
             }
-            tarzan_metal_gs_destroy();
+            ps2x_metal_gs_destroy();
         }
         std::fprintf(stderr, "smoke: GS owner-thread destroy complete\n");
         complete.store(true, std::memory_order_release);
     });
     while (!complete.load(std::memory_order_acquire))
-        tarzan_metal_host_poll();
+        ps2x_metal_host_poll();
     if (owner.joinable()) owner.join();
     std::fprintf(stderr, "smoke: owner thread joined\n");
-    tarzan_metal_host_stop();
+    ps2x_metal_host_stop();
     std::fprintf(stderr, "smoke: Cocoa host stop complete\n");
     if (result.load(std::memory_order_relaxed) != 1) return result.load(std::memory_order_relaxed);
     std::cout << "Created the PCSX2 hardware Metal GS, accepted an owner-thread VSync and local-to-host transfer, and destroyed it cleanly.\n";

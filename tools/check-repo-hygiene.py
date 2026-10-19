@@ -18,7 +18,7 @@ def main():
     command = ('diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR') if args.staged else ('ls-files', '-z')
     names = [n.decode() for n in git(*command).split(b'\0') if n]
     allowed_roots = {'host', 'cmake', 'tests', 'patches', 'tools', 'toolchain', 'config', 'docs', '.githooks'}
-    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', '.editorconfig', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json', 'requirements.txt', 'tz'}
+    allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', '.editorconfig', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json', 'requirements.txt', 'rx'}
     allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml'}
     problems = []
     total = 0
@@ -31,11 +31,11 @@ def main():
             reason = 'unexpected root file'
         elif len(path.parts) > 1 and path.parts[0] not in allowed_roots:
             reason = 'data/build/vendor directory'
-        elif path.suffix not in allowed_extensions and path.name not in {'deps.lock', 'LICENSE', 'CMakeLists.txt', 'pre-commit', '.gitignore', '.gitattributes', '.editorconfig', 'tz'}:
+        elif path.suffix not in allowed_extensions and path.name not in {'deps.lock', 'LICENSE', 'CMakeLists.txt', 'pre-commit', '.gitignore', '.gitattributes', '.editorconfig', 'rx'}:
             reason = 'unexpected extension or binary/media artifact'
-        elif path.parts[0] == 'config' and name != 'config/SLES-50350.template.toml':
+        elif path.parts[0] == 'config' and name != 'config/game.json' and not name.endswith('.template.toml'):
             reason = 'local/game-derived configuration'
-        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu/', 'tools/metal-deps/compat/', 'tools/probe/', 'tools/package/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/prepare-metal-bridge.py', 'tools/disc.py', 'tools/generate.py', 'tools/where.py', 'tools/jobs.py', 'tools/check-repo-hygiene.py'}:
+        elif path.parts[0] == 'tools' and not name.startswith(('tools/metal-deps/compat/', 'tools/probe/', 'tools/package/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/prepare-metal-bridge.py', 'tools/disc.py', 'tools/game.py', 'tools/generate.py', 'tools/where.py', 'tools/jobs.py', 'tools/check-repo-hygiene.py'}:
             reason = 'dependency/toolchain output'
         elif size > 1024 * 1024:
             reason = 'file exceeds 1 MiB'
