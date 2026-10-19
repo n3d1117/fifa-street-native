@@ -1,0 +1,805 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 13:30:49 +0200
+Subject: [PATCH 41/41] GS bridge calls go through one DataStream interface
+ with lazy CSR readback; MSCAL control state is read and published on the EE
+ side
+
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index a764f60c9a82fc780ea01fc38b73d3aef02923cc..f52aa687d92ef5055e4d487d6d8f2ff94b54a8dd 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -412,6 +412,7 @@ add_library(ps2_runtime STATIC
+     src/lib/gs/ps2_gif_arbiter.cpp
+     src/lib/ps2_audio.cpp
+     src/lib/ps2_audio_vag.cpp
++    src/lib/ps2_data_stream.cpp
+     src/lib/gs/ps2_gs_memory.cpp
+     src/lib/gs/gs_frontend.cpp
+     src/lib/gs/gs_cpu_backend.cpp
+diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
+index 422f73b5a8f4c0d02e2cdedcf5aa59ad41c7fe93..6cbc5ff885b98196b6557d7147805d2082cebd85 100644
+--- a/ps2xRuntime/include/runtime/ps2_memory.h
++++ b/ps2xRuntime/include/runtime/ps2_memory.h
+@@ -9,6 +9,7 @@
+ #include <unordered_map>
+ #include <atomic>
+ #include <iostream>
++#include <memory>
+ #include <mutex>
+ 
+ #include "gs/ps2_gif_arbiter.h"
+@@ -22,6 +23,8 @@
+ #endif
+ 
+ class GS;
++class DataStream;
++struct Vif1Op;
+ 
+ constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
+ constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
+@@ -337,6 +340,24 @@ public:
+     using Vu1MscntCallback = std::function<void(uint32_t top, uint32_t itop)>;
+     void setVu1MscntCallback(Vu1MscntCallback cb) { m_vu1MscntCallback = std::move(cb); }
+ 
++    // The EE-visible VU control state an MSCAL/MSCNT depends on. readDtEnable
++    // returns FBRST bit 10 (D halt enable) in bit 0 and bit 11 (T) in bit 1;
++    // publishStopBits receives the VPU_STAT stop bits (0x0200 D, 0x0400 T) of the
++    // finished job. Both run on the EE side of the stream; the callbacks above
++    // run wherever the job executes and see the job's enables in vu1Exec().
++    struct Vu1ExecState
++    {
++        uint32_t dtEnable = 0;
++        uint32_t stopBits = 0;
++    };
++    Vu1ExecState &vu1Exec() { return m_vu1Exec; }
++    void setVu1ControlHooks(std::function<uint32_t()> readDtEnable, std::function<void(uint32_t)> publishStopBits)
++    {
++        m_vu1ReadDtEnable = std::move(readDtEnable);
++        m_vu1PublishStopBits = std::move(publishStopBits);
++    }
++    DataStream &dataStream() { return *m_dataStream; }
++
+     uint8_t *getVU1Code() { return m_vu1Code; }
+     const uint8_t *getVU1Code() const { return m_vu1Code; }
+     uint8_t *getVU1Data() { return m_vu1Data; }
+@@ -420,6 +441,11 @@ public:
+     GifArbiter *m_gifArbiter = nullptr;
+     Vu1MscalCallback m_vu1MscalCallback;
+     Vu1MscntCallback m_vu1MscntCallback;
++    Vu1ExecState m_vu1Exec;
++    std::function<uint32_t()> m_vu1ReadDtEnable;
++    std::function<void(uint32_t)> m_vu1PublishStopBits;
++    uint32_t m_vu1LastDtEnable = 0u;
++    std::unique_ptr<DataStream> m_dataStream;
+ 
+     uint8_t *m_vu0Code = nullptr;
+     uint8_t *m_vu0Data = nullptr;
+@@ -463,6 +489,7 @@ public:
+     bool isAddressInRegion(uint32_t address, const CodeRegion &region);
+     void markModified(uint32_t address, uint32_t size);
+     void markVU0CodeModified() { m_vu0CodeGeneration.fetch_add(1, std::memory_order_relaxed); }
++    void applyVif1Op(const Vif1Op &op);
+     void markVU1CodeModified() { m_vu1CodeGeneration.fetch_add(1, std::memory_order_relaxed); }
+     bool isScratchpad(uint32_t address) const;
+     uint8_t *mapVuMemory(uint32_t physAddr, uint32_t size, uint32_t &offset, uint32_t &limit);
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 131a916ec7ac4a568e9a8005d3055f36e6ba9f6b..c9085b6404f68360e8cb82b57515cfd38d217e2f 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -3,6 +3,7 @@
+ #include "runtime/ps2_host_arena.h"
+ 
+ #include "ps2_log.h"
++#include "../ps2_data_stream.h"
+ #include "ps2_runtime_macros.h"
+ 
+ #include <algorithm>
+@@ -14,8 +15,6 @@
+ #include <limits>
+ #include <stdexcept>
+ #if defined(TARZAN_USE_METAL)
+-extern "C" int tarzan_metal_gs_vsync(const uint64_t *, uint64_t, uint32_t);
+-extern "C" int tarzan_metal_gs_readback(uint64_t *, uint64_t *);
+ #endif
+ 
+ extern thread_local bool g_ps2GuestUnwinding;
+@@ -1963,21 +1962,7 @@ void EeScheduler::processEvent(const EeEvent &event)
+     case EeEventType::VBlankStart:
+         ++m_vsyncTick;
+ #if defined(TARZAN_USE_METAL)
+-        {
+-            GSRegisters& gs = m_runtime.memory().gs();
+-            const uint64_t regs[19] = {
+-                gs.pmode, gs.smode1, gs.smode2, gs.srfsh, gs.synch1, gs.synch2,
+-                gs.syncv, gs.dispfb1, gs.display1, gs.dispfb2, gs.display2,
+-                gs.extbuf, gs.extdata, gs.extwrite, gs.bgcolor, gs.csr.load(),
+-                gs.imr, gs.busdir, gs.siglblid};
+-            if (!tarzan_metal_gs_vsync(regs, m_vsyncTick, static_cast<uint32_t>(m_vsyncTick & 1u)))
+-                throw std::runtime_error("native Metal GS VSync failed");
+-            uint64_t csr = 0, siglblid = 0;
+-            if (!tarzan_metal_gs_readback(&csr, &siglblid))
+-                throw std::runtime_error("native Metal GS VSync readback failed");
+-            gs.csr.store(csr, std::memory_order_release);
+-            gs.siglblid = siglblid;
+-        }
++        m_runtime.memory().dataStream().gsVsync(m_vsyncTick);
+ #endif
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index d73bdf67bed28cd2e0d304f84c7c0cf608f0f8b6..dccef426ebec927b113c03eb0a3e94c04805c01c 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -5,11 +5,7 @@
+ #include "runtime/gs/ps2_gs_psmct16.h"
+ #include "runtime/ee_scheduler.h"
+ 
+-#if defined(TARZAN_USE_METAL)
+-extern "C" int tarzan_metal_gs_read_local_memory(uint8_t *dst, uint32_t byte_count,
+-                                                 uint64_t bitbltbuf, uint64_t trxpos,
+-                                                 uint64_t trxreg);
+-#endif
++#include "../../ps2_data_stream.h"
+ 
+ namespace ps2_stubs
+ {
+@@ -828,7 +824,7 @@ namespace ps2_stubs
+ 
+         ps2TraceGuestRangeWrite(rdram, dstAddr, totalImageBytes, "sceGsExecStoreImage", ctx);
+ #if defined(TARZAN_USE_METAL)
+-        if (!tarzan_metal_gs_read_local_memory(dst, totalImageBytes, bitbltbuf, trxpos, trxreg))
++        if (!mem.dataStream().gsReadLocal(dst, totalImageBytes, bitbltbuf, trxpos, trxreg))
+         {
+             runtime->guestFree(pktAddr);
+             setReturnS32(ctx, -1);
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.cpp b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..2a4156c9255f613aee81edd3595c6054582dc65d
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+@@ -0,0 +1,101 @@
++#include "ps2_data_stream.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <stdexcept>
++
++#if defined(TARZAN_USE_METAL)
++extern "C" int tarzan_metal_gs_submit(uint32_t, const uint8_t *, uint32_t);
++extern "C" int tarzan_metal_gs_reset();
++extern "C" int tarzan_metal_gs_write_csr(uint64_t, uint32_t, int);
++extern "C" int tarzan_metal_gs_vsync(const uint64_t *, uint64_t, uint32_t);
++extern "C" int tarzan_metal_gs_readback(uint64_t *, uint64_t *);
++extern "C" int tarzan_metal_gs_read_local_memory(uint8_t *, uint32_t, uint64_t, uint64_t, uint64_t);
++#endif
++
++DataStream::DataStream(GSRegisters &gs) : m_gs(gs)
++{
++    const char *verify = std::getenv("PS2X_GS_VERIFY");
++    m_verify = verify && verify[0] == '1';
++}
++
++#if defined(TARZAN_USE_METAL)
++
++void DataStream::readbackInto(uint64_t &csr, uint64_t &siglblid, const char *what)
++{
++    if (!tarzan_metal_gs_readback(&csr, &siglblid))
++        throw std::runtime_error(what);
++}
++
++void DataStream::gifSubmit(GifPathId path, const uint8_t *data, uint32_t sizeBytes)
++{
++    if (!tarzan_metal_gs_submit(static_cast<uint32_t>(path), data, sizeBytes))
++        throw std::runtime_error("native Metal GS rejected GIF packet");
++    m_gsStale = true;
++    if (m_verify)
++        readbackInto(m_shadowCsr, m_shadowSiglblid, "native Metal GS CSR/SIGLBLID readback failed");
++}
++
++void DataStream::refreshGs()
++{
++    uint64_t csr = 0, siglblid = 0;
++    readbackInto(csr, siglblid, "native Metal GS CSR/SIGLBLID readback failed");
++    if (m_verify && (csr != m_shadowCsr || siglblid != m_shadowSiglblid))
++    {
++        std::fprintf(stderr,
++                     "[gs-verify] lazy readback differs from eager: csr 0x%llx vs 0x%llx, siglblid 0x%llx vs 0x%llx\n",
++                     static_cast<unsigned long long>(csr), static_cast<unsigned long long>(m_shadowCsr),
++                     static_cast<unsigned long long>(siglblid), static_cast<unsigned long long>(m_shadowSiglblid));
++        std::abort();
++    }
++    m_gs.csr.store(csr, std::memory_order_release);
++    m_gs.siglblid = siglblid;
++    m_gsStale = false;
++}
++
++void DataStream::gsReset()
++{
++    if (!tarzan_metal_gs_reset())
++        throw std::runtime_error("native Metal GS CSR reset failed");
++}
++
++void DataStream::gsWriteCsr(uint64_t authoritativeCsr, uint32_t highWordMask, bool writeHighWord)
++{
++    if (!tarzan_metal_gs_write_csr(authoritativeCsr, highWordMask, writeHighWord ? 1 : 0))
++        throw std::runtime_error("native Metal GS CSR synchronization failed");
++}
++
++void DataStream::gsVsync(uint64_t tick)
++{
++    observeGs();
++    const uint64_t regs[19] = {
++        m_gs.pmode, m_gs.smode1, m_gs.smode2, m_gs.srfsh, m_gs.synch1, m_gs.synch2,
++        m_gs.syncv, m_gs.dispfb1, m_gs.display1, m_gs.dispfb2, m_gs.display2,
++        m_gs.extbuf, m_gs.extdata, m_gs.extwrite, m_gs.bgcolor, m_gs.csr.load(),
++        m_gs.imr, m_gs.busdir, m_gs.siglblid};
++    if (!tarzan_metal_gs_vsync(regs, tick, static_cast<uint32_t>(tick & 1u)))
++        throw std::runtime_error("native Metal GS VSync failed");
++    uint64_t csr = 0, siglblid = 0;
++    readbackInto(csr, siglblid, "native Metal GS VSync readback failed");
++    m_gs.csr.store(csr, std::memory_order_release);
++    m_gs.siglblid = siglblid;
++    m_gsStale = false;
++}
++
++bool DataStream::gsReadLocal(uint8_t *dst, uint32_t byteCount, uint64_t bitbltbuf, uint64_t trxpos,
++                             uint64_t trxreg)
++{
++    return tarzan_metal_gs_read_local_memory(dst, byteCount, bitbltbuf, trxpos, trxreg) != 0;
++}
++
++#else
++
++void DataStream::readbackInto(uint64_t &, uint64_t &, const char *) {}
++void DataStream::gifSubmit(GifPathId, const uint8_t *, uint32_t) {}
++void DataStream::refreshGs() {}
++void DataStream::gsReset() {}
++void DataStream::gsWriteCsr(uint64_t, uint32_t, bool) {}
++void DataStream::gsVsync(uint64_t) {}
++bool DataStream::gsReadLocal(uint8_t *, uint32_t, uint64_t, uint64_t, uint64_t) { return false; }
++
++#endif
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.h b/ps2xRuntime/src/lib/ps2_data_stream.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e895e18c8c97104348c782920376ca16a69981a3
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_data_stream.h
+@@ -0,0 +1,44 @@
++#ifndef PS2_DATA_STREAM_H
++#define PS2_DATA_STREAM_H
++
++#include <cstdint>
++
++#include "runtime/ps2_memory.h"
++
++// The one ordered interface to the data side (GIF packets and the native GS
++// bridge). Every bridge call from the GIF/XGKICK/CSR/VBlank paths goes through
++// here, so a consumer thread can later own the bridge without changing callers.
++//
++// GS CSR and SIGLBLID are a pure function of the packets the bridge has
++// processed. They are read back lazily: gifSubmit only marks them stale, and
++// observeGs() is the explicit drain point that must run before the EE reads or
++// writes any GS privileged register.
++class DataStream
++{
++public:
++    explicit DataStream(GSRegisters &gs);
++
++    void gifSubmit(GifPathId path, const uint8_t *data, uint32_t sizeBytes);
++    void gsReset();
++    void gsWriteCsr(uint64_t authoritativeCsr, uint32_t highWordMask, bool writeHighWord);
++    void gsVsync(uint64_t tick);
++    bool gsReadLocal(uint8_t *dst, uint32_t byteCount, uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
++
++    void observeGs()
++    {
++        if (m_gsStale)
++            refreshGs();
++    }
++
++private:
++    void refreshGs();
++    void readbackInto(uint64_t &csr, uint64_t &siglblid, const char *what);
++
++    GSRegisters &m_gs;
++    bool m_gsStale = false;
++    bool m_verify = false;
++    uint64_t m_shadowCsr = 0;
++    uint64_t m_shadowSiglblid = 0;
++};
++
++#endif
+diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
+index 70034eb08ecb76a95e97c6b5e5dd5f2bcecae673..6f9f2a5d2f5c9a35041b858be38494feb0f50275 100644
+--- a/ps2xRuntime/src/lib/ps2_memory.cpp
++++ b/ps2xRuntime/src/lib/ps2_memory.cpp
+@@ -1,6 +1,7 @@
+ #include "runtime/ps2_memory.h"
+ #include "runtime/ps2_address.h"
+ #include "runtime/gs/gs_frontend.h"
++#include "ps2_data_stream.h"
+ #include "ps2_log.h"
+ #include <atomic>
+ #include <cstring>
+@@ -10,12 +11,6 @@
+ #include <string>
+ #include <vector>
+ #include <cstdlib>
+-#if defined(TARZAN_USE_METAL)
+-extern "C" int tarzan_metal_gs_reset();
+-extern "C" int tarzan_metal_gs_write_csr(uint64_t authoritative_csr,
+-                                           uint32_t high_word_write_mask,
+-                                           int write_high_word);
+-#endif
+ 
+ static bool tryProcessVif1Mfifo(PS2Memory &memory);
+ static bool tryProcessIpuToHleDma(PS2Memory &memory, uint32_t chcr);
+@@ -115,8 +110,9 @@ namespace
+     // so the whole read-modify-write is a single atomic step -- this register is
+     // also touched by the vsync worker (FIELD bit) and the GIF (SIGNAL/FINISH) on
+     // other threads, so a load-then-store here would race with them.
+-    inline void writeCsrHalf(std::atomic<uint64_t> &csr, uint32_t off, uint32_t value)
++    inline void writeCsrHalf(DataStream &stream, std::atomic<uint64_t> &csr, uint32_t off, uint32_t value)
+     {
++        stream.observeGs();
+         constexpr uint32_t kW1cMask = 0x3u;
+         uint64_t expected = csr.load();
+         uint64_t desired;
+@@ -137,18 +133,18 @@ namespace
+         } while (!csr.compare_exchange_weak(expected, desired));
+ #if defined(TARZAN_USE_METAL)
+         const bool reset = off == 0u && (value & 0x200u) != 0u;
+-        if (reset && !tarzan_metal_gs_reset())
+-            throw std::runtime_error("native Metal GS CSR reset failed");
++        if (reset)
++            stream.gsReset();
+         const bool write_high = off == 4u;
+-        if (!tarzan_metal_gs_write_csr(desired, write_high ? value : 0u, write_high ? 1 : 0))
+-            throw std::runtime_error("native Metal GS CSR synchronization failed");
++        stream.gsWriteCsr(desired, write_high ? value : 0u, write_high);
+ #endif
+     }
+ 
+     // Same as writeCsrHalf but for a full 64-bit CSR write (bits 0..1 are still
+     // write-one-to-clear against the current value).
+-    inline void writeCsrFull(std::atomic<uint64_t> &csr, uint64_t value)
++    inline void writeCsrFull(DataStream &stream, std::atomic<uint64_t> &csr, uint64_t value)
+     {
++        stream.observeGs();
+         constexpr uint64_t kW1cMask = 0x3ull;
+         uint64_t expected = csr.load();
+         uint64_t desired;
+@@ -159,10 +155,9 @@ namespace
+         } while (!csr.compare_exchange_weak(expected, desired));
+ #if defined(TARZAN_USE_METAL)
+         const bool reset = (value & 0x200ull) != 0ull;
+-        if (reset && !tarzan_metal_gs_reset())
+-            throw std::runtime_error("native Metal GS CSR reset failed");
+-        if (!tarzan_metal_gs_write_csr(desired, static_cast<uint32_t>(value >> 32), 1))
+-            throw std::runtime_error("native Metal GS CSR synchronization failed");
++        if (reset)
++            stream.gsReset();
++        stream.gsWriteCsr(desired, static_cast<uint32_t>(value >> 32), true);
+ #endif
+     }
+ 
+@@ -266,6 +261,7 @@ static inline uint32_t gs_vram_offset(uint32_t basePage, uint32_t x, uint32_t y,
+ PS2Memory::PS2Memory()
+     : m_rdram(nullptr), m_scratchpad(nullptr), iop_ram(nullptr), m_seenGifCopy(false), m_gsVRAM(nullptr)
+ {
++    m_dataStream = std::make_unique<DataStream>(gs_regs);
+     ps2SetScratchpadHostPtr(nullptr);
+ }
+ 
+@@ -780,6 +776,7 @@ uint32_t PS2Memory::read32(uint32_t address)
+ 
+     if (isGsPrivReg(address))
+     {
++        m_dataStream->observeGs();
+         uint32_t off = address & 7;
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+@@ -828,6 +825,7 @@ uint64_t PS2Memory::read64(uint32_t address)
+ 
+     if (isGsPrivReg(address))
+     {
++        m_dataStream->observeGs();
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
+@@ -989,13 +987,14 @@ void PS2Memory::write32(uint32_t address, uint32_t value)
+ 
+     if (isGsPrivReg(address))
+     {
++        m_dataStream->observeGs();
+         uint32_t off = address & 7;
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
+             // CSR: bits 0..1 of the low dword are write-one-to-clear status bits.
+             // Done as a single atomic RMW -- see writeCsrHalf's comment.
+-            writeCsrHalf(gs_regs.csr, off, value);
++            writeCsrHalf(*m_dataStream, gs_regs.csr, off, value);
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
+@@ -1050,12 +1049,13 @@ void PS2Memory::write64(uint32_t address, uint64_t value)
+ 
+     if (isGsPrivReg(address))
+     {
++        m_dataStream->observeGs();
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
+             // CSR: bits 0..1 are write-one-to-clear status bits. Done as a single
+             // atomic RMW -- see writeCsrFull's comment.
+-            writeCsrFull(gs_regs.csr, value);
++            writeCsrFull(*m_dataStream, gs_regs.csr, value);
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
+@@ -1198,6 +1198,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+ 
+     if (isGsPrivReg(address))
+     {
++        m_dataStream->observeGs();
+         // NB: unreachable from write8/16/32/64 today since those all funnel IO
+         // register writes through addresses in PS2_IO_BASE's range, which is
+         // disjoint from PS2_GS_PRIV_REG_BASE; kept correct for direct callers.
+@@ -1206,7 +1207,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+         const uint32_t regOff = (address - PS2_GS_PRIV_REG_BASE) & ~0x7u;
+         if (regOff == kGsCsrRegOffset)
+         {
+-            writeCsrHalf(gs_regs.csr, off, value);
++            writeCsrHalf(*m_dataStream, gs_regs.csr, off, value);
+         }
+         else if (uint64_t *reg = gsRegPtr(gs_regs, address))
+         {
+@@ -2890,6 +2891,7 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
+ 
+     if (isGsPrivReg(address))
+     {
++        m_dataStream->observeGs();
+         // NB: unreachable from read8/16/32/64 today, same reasoning as the write
+         // path above; kept correct for direct callers.
+         const uint32_t off = address & 7u;
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index ffbd9c68c9776afcd00c873ef8c938df92d52560..ddd35db7e70cd8e94adc63eba604b330ad11fc3d 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -28,10 +28,9 @@ extern "C" int tarzan_metal_host_should_close();
+ extern "C" void tarzan_metal_host_stop();
+ extern "C" int tarzan_metal_gs_create();
+ extern "C" void tarzan_metal_gs_destroy();
+-extern "C" int tarzan_metal_gs_submit(uint32_t, const uint8_t *, uint32_t);
+-extern "C" int tarzan_metal_gs_readback(uint64_t *, uint64_t *);
+ #endif
+ 
++#include "ps2_data_stream.h"
+ #include <iostream>
+ #include <stdexcept>
+ #include <fstream>
+@@ -815,31 +814,35 @@ bool PS2Runtime::syncCoreSubsystems()
+ 
+     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
+ #if defined(TARZAN_USE_METAL)
+-    m_gifArbiter.setProcessPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size) {
+-        if (!tarzan_metal_gs_submit(static_cast<uint32_t>(path), data, size))
+-            throw std::runtime_error("native Metal GS rejected GIF packet");
+-        uint64_t csr = 0, siglblid = 0;
+-        if (!tarzan_metal_gs_readback(&csr, &siglblid))
+-            throw std::runtime_error("native Metal GS CSR/SIGLBLID readback failed");
+-        m_memory.gs().csr.store(csr, std::memory_order_release);
+-        m_memory.gs().siglblid = siglblid;
+-    });
++    m_gifArbiter.setProcessPacketFn([this](GifPathId path, const uint8_t *data, uint32_t size)
++                                    { m_memory.dataStream().gifSubmit(path, data, size); });
+ #else
+     m_gifArbiter.setProcessPacketFn([this](GifPathId, const uint8_t *data, uint32_t size)
+                                     { m_gs.processGIFPacket(data, size); });
+ #endif
+     m_memory.setGifArbiter(&m_gifArbiter);
+-    m_memory.setVu1MscalCallback([this](uint32_t startPC, uint32_t top, uint32_t itop)
++    auto controlContext = [this]() -> R5900Context *
++    {
++        R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
++        return cpuContext ? cpuContext : &m_cpuContext;
++    };
++    m_memory.setVu1ControlHooks(
++        [controlContext]() -> uint32_t
++        { return (controlContext()->vu0_fbrst >> 10) & 3u; },
++        [controlContext](uint32_t stopBits)
++        {
++            R5900Context *cpuContext = controlContext();
++            cpuContext->vu0_vpu_stat = (cpuContext->vu0_vpu_stat & ~0x0600u) | stopBits;
++        });
++    auto publishStop = [this]()
++    {
++        m_memory.vu1Exec().stopBits = (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
++                                      (m_vu1.state().stoppedByT ? 0x0400u : 0u);
++    };
++    m_memory.setVu1MscalCallback([this, publishStop](uint32_t startPC, uint32_t top, uint32_t itop)
+                                  {
+-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+-                                     if (!cpuContext)
+-                                     {
+-                                         cpuContext = &m_cpuContext;
+-                                     }
+-                                     m_vu1.state().dBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+-                                     m_vu1.state().tBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
++                                     m_vu1.state().dBitEnabled = (m_memory.vu1Exec().dtEnable & 1u) != 0u;
++                                     m_vu1.state().tBitEnabled = (m_memory.vu1Exec().dtEnable & 2u) != 0u;
+                                      catalogVu1Program(m_memory.getVU1Code(), startPC);
+                                      Vu1NativeDispatcher &native = vu1NativeDispatcher();
+                                      if (!native.mscal(m_vu1, m_memory, m_gs, startPC, top, itop, 65536))
+@@ -852,21 +855,11 @@ bool PS2Runtime::syncCoreSubsystems()
+                                          native.noteInterpreterRun(m_vu1.cycleCount() - before,
+                                                                    Vu1NativeDispatcher::now() - started);
+                                      }
+-                                     cpuContext->vu0_vpu_stat =
+-                                         (cpuContext->vu0_vpu_stat & ~0x0600u) |
+-                                         (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
+-                                         (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
+-    m_memory.setVu1MscntCallback([this](uint32_t top, uint32_t itop)
++                                     publishStop(); });
++    m_memory.setVu1MscntCallback([this, publishStop](uint32_t top, uint32_t itop)
+                                  {
+-                                     R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
+-                                     if (!cpuContext)
+-                                     {
+-                                         cpuContext = &m_cpuContext;
+-                                     }
+-                                     m_vu1.state().dBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
+-                                     m_vu1.state().tBitEnabled =
+-                                         (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
++                                     m_vu1.state().dBitEnabled = (m_memory.vu1Exec().dtEnable & 1u) != 0u;
++                                     m_vu1.state().tBitEnabled = (m_memory.vu1Exec().dtEnable & 2u) != 0u;
+                                      catalogVu1Program(m_memory.getVU1Code(), m_vu1.state().pc);
+                                      Vu1NativeDispatcher &native = vu1NativeDispatcher();
+                                      if (!native.mscnt(m_vu1, m_memory, m_gs, top, itop, 65536))
+@@ -879,10 +872,7 @@ bool PS2Runtime::syncCoreSubsystems()
+                                          native.noteInterpreterRun(m_vu1.cycleCount() - before,
+                                                                    Vu1NativeDispatcher::now() - started);
+                                      }
+-                                     cpuContext->vu0_vpu_stat =
+-                                         (cpuContext->vu0_vpu_stat & ~0x0600u) |
+-                                         (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
+-                                         (m_vu1.state().stoppedByT ? 0x0400u : 0u); });
++                                     publishStop(); });
+     resetIop();
+     m_vu0.reset();
+     m_vu1.reset();
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index 7d552ecb11de0fb1df14c1b7189a547907a0b10c..f598a17a835f2e92fb0b1bb0c52bd08a5f0a3850 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -1,5 +1,7 @@
+ // Based on Blackline Interactive implementation
+ #include "runtime/ps2_memory.h"
++#include "ps2_data_stream.h"
++#include "ps2_vif1_ops.h"
+ #include <cstdlib>
+ #include <cstring>
+ #include <iostream>
+@@ -113,47 +115,6 @@ namespace
+         return true;
+     }
+ 
+-enum class Vif1OpKind : uint8_t
+-{
+-    Mpg,
+-    Unpack,
+-    Mscal,
+-    Mscnt,
+-    Direct,
+-    Path3Unmask,
+-};
+-
+-struct Vif1UnpackParams
+-{
+-    uint8_t opcode = 0;
+-    uint32_t writeVectorCount = 0;
+-    uint32_t sourceVectorCount = 0;
+-    uint32_t bytesPerVector = 0;
+-    uint32_t cl = 0;
+-    uint32_t wl = 0;
+-    uint32_t vuAddr = 0;
+-    uint32_t mode = 0;
+-    uint32_t mask = 0;
+-    uint32_t row[4] = {};
+-    uint32_t col[4] = {};
+-    bool zeroExtend = false;
+-};
+-
+-// One data-side operation produced by the VIF1 front end, in command order.
+-// payload points into the caller's input and is only valid during emit; a
+-// deferred consumer must copy it.
+-struct Vif1Op
+-{
+-    Vif1OpKind kind = Vif1OpKind::Mpg;
+-    const uint8_t *payload = nullptr;
+-    uint32_t payloadBytes = 0;
+-    uint32_t addr = 0; // MPG destination byte address, MSCAL start PC
+-    uint32_t top = 0;
+-    uint32_t itop = 0;
+-    bool directHl = false;
+-    Vif1UnpackParams unpack;
+-};
+-
+ // Decodes one UNPACK into VU1 data memory. row is the ROW register, updated by
+ // STMOD modes 2 and 3. With vu1Data null only the ROW update is computed, which
+ // is how the front end keeps the guest-visible register without touching VU1
+@@ -674,6 +635,56 @@ void PS2Memory::resumeVif1AfterStall()
+         processVIF1Data(pending.data(), static_cast<uint32_t>(pending.size()));
+ }
+ 
++// Executes one VU1-side op against VU1 memory and the VU1 callbacks. MSCAL and
++// MSCNT leave the VPU_STAT stop bits of the job in vu1Exec().stopBits.
++void PS2Memory::applyVif1Op(const Vif1Op &op)
++{
++    switch (op.kind)
++    {
++    case Vif1OpKind::Mpg:
++    {
++        const uint32_t destAddr = op.addr;
++        const uint32_t mpgBytes = op.payloadBytes;
++        if (m_vu1Code && destAddr < PS2_VU1_CODE_SIZE && mpgBytes > 0)
++        {
++            uint32_t copyBytes = mpgBytes;
++            if (destAddr + copyBytes > PS2_VU1_CODE_SIZE)
++                copyBytes = PS2_VU1_CODE_SIZE - destAddr;
++            // VIF1 commonly replays an unchanged microprogram. Keep
++            // the native-image generation stable for byte-identical
++            // uploads so MSCAL/MSCNT can reuse the cached hash/image.
++            if (std::memcmp(m_vu1Code + destAddr, op.payload, copyBytes) != 0)
++            {
++                std::memcpy(m_vu1Code + destAddr, op.payload, copyBytes);
++                markVU1CodeModified();
++            }
++        }
++        break;
++    }
++    case Vif1OpKind::Unpack:
++    {
++        uint32_t row[4] = {op.unpack.row[0], op.unpack.row[1], op.unpack.row[2], op.unpack.row[3]};
++        unpackVectors(op, m_vu1Data, row);
++        break;
++    }
++    case Vif1OpKind::Mscal:
++        m_vu1Exec.dtEnable = op.dtEnable;
++        m_vu1Exec.stopBits = 0u;
++        if (m_vu1MscalCallback)
++            m_vu1MscalCallback(op.addr, op.top, op.itop);
++        break;
++    case Vif1OpKind::Mscnt:
++        m_vu1Exec.dtEnable = op.dtEnable;
++        m_vu1Exec.stopBits = 0u;
++        if (m_vu1MscntCallback)
++            m_vu1MscntCallback(op.top, op.itop);
++        break;
++    case Vif1OpKind::Direct:
++    case Vif1OpKind::Path3Unmask:
++        break;
++    }
++}
++
+ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+ {
+     if (!data || sizeBytes == 0u)
+@@ -704,46 +715,27 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+         appendPendingVif1Input(*this, data + commandStart, availableBytes);
+     };
+ 
+-    // The inline consumer of the op stream: every data-side effect of a VIF1
+-    // command is applied here, in command order, as soon as it is emitted.
++    // Front-end side of the op stream: ops that only touch VU1 are executed by
++    // applyVif1Op; DIRECT and PATH3 unmask stay here because they decide GIF
++    // packet order and PATH3 masking, which the EE observes.
+     auto emit = [this](const Vif1Op &op)
+     {
+         switch (op.kind)
+         {
+         case Vif1OpKind::Mpg:
+-        {
+-            const uint32_t destAddr = op.addr;
+-            const uint32_t mpgBytes = op.payloadBytes;
+-            if (m_vu1Code && destAddr < PS2_VU1_CODE_SIZE && mpgBytes > 0)
+-            {
+-                uint32_t copyBytes = mpgBytes;
+-                if (destAddr + copyBytes > PS2_VU1_CODE_SIZE)
+-                    copyBytes = PS2_VU1_CODE_SIZE - destAddr;
+-                // VIF1 commonly replays an unchanged microprogram. Keep
+-                // the native-image generation stable for byte-identical
+-                // uploads so MSCAL/MSCNT can reuse the cached hash/image.
+-                if (std::memcmp(m_vu1Code + destAddr, op.payload, copyBytes) != 0)
+-                {
+-                    std::memcpy(m_vu1Code + destAddr, op.payload, copyBytes);
+-                    markVU1CodeModified();
+-                }
+-            }
+-            break;
+-        }
+         case Vif1OpKind::Unpack:
+-        {
+-            uint32_t row[4] = {op.unpack.row[0], op.unpack.row[1], op.unpack.row[2], op.unpack.row[3]};
+-            unpackVectors(op, m_vu1Data, row);
++            applyVif1Op(op);
+             break;
+-        }
+         case Vif1OpKind::Mscal:
+-            if (m_vu1MscalCallback)
+-                m_vu1MscalCallback(op.addr, op.top, op.itop);
+-            break;
+         case Vif1OpKind::Mscnt:
+-            if (m_vu1MscntCallback)
+-                m_vu1MscntCallback(op.top, op.itop);
++        {
++            Vif1Op job = op;
++            job.dtEnable = m_vu1ReadDtEnable ? m_vu1ReadDtEnable() : 0u;
++            applyVif1Op(job);
++            if (m_vu1PublishStopBits)
++                m_vu1PublishStopBits(m_vu1Exec.stopBits);
+             break;
++        }
+         case Vif1OpKind::Direct:
+             forwardVif1DirectData(op.payload, op.payloadBytes, op.directHl);
+             break;
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_ops.h b/ps2xRuntime/src/lib/ps2_vif1_ops.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e9c9a73e2d5a07fefb249dc4ace95720d74c2802
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_vif1_ops.h
+@@ -0,0 +1,48 @@
++#ifndef PS2_VIF1_OPS_H
++#define PS2_VIF1_OPS_H
++
++#include <cstdint>
++
++enum class Vif1OpKind : uint8_t
++{
++    Mpg,
++    Unpack,
++    Mscal,
++    Mscnt,
++    Direct,
++    Path3Unmask,
++};
++
++struct Vif1UnpackParams
++{
++    uint8_t opcode = 0;
++    uint32_t writeVectorCount = 0;
++    uint32_t sourceVectorCount = 0;
++    uint32_t bytesPerVector = 0;
++    uint32_t cl = 0;
++    uint32_t wl = 0;
++    uint32_t vuAddr = 0;
++    uint32_t mode = 0;
++    uint32_t mask = 0;
++    uint32_t row[4] = {};
++    uint32_t col[4] = {};
++    bool zeroExtend = false;
++};
++
++// One data-side operation produced by the VIF1 front end, in command order.
++// payload points into the caller's input and is only valid during emit; a
++// deferred consumer must copy it.
++struct Vif1Op
++{
++    Vif1OpKind kind = Vif1OpKind::Mpg;
++    const uint8_t *payload = nullptr;
++    uint32_t payloadBytes = 0;
++    uint32_t addr = 0; // MPG destination byte address, MSCAL start PC
++    uint32_t top = 0;
++    uint32_t itop = 0;
++    bool directHl = false;
++    uint32_t dtEnable = 0; // MSCAL/MSCNT: FBRST D (bit 0) and T (bit 1) halt enables at issue
++    Vif1UnpackParams unpack;
++};
++
++#endif
