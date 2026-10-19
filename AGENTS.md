@@ -25,6 +25,7 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 |---|---|
 | `./tz build` | generate if inputs changed, build `build/game-metal` (0.2 s no-op; long after a recompiler/config change). `--reconfigure` after exit 2 about path/case |
 | `./tz test` / `--full` | quick tier (no disc, seconds) / adds slow tests and the local VU1 replay corpus |
+| `./tz bench vu1 [--iterations N]` | offline, exactness-checked VU1 native timing over local snapshots |
 | `./tz run --seconds 60` | bounded boot check with a summary |
 | `./tz run --mission 1` | the default gate: boots straight into a map mission (1-12 or a name) through the game's own level start, plays 10 s (move, jump, attack, spear, side steps), isolated saves (about 35 s). Diagnostic hook, never active in normal play |
 | `./tz run --route first-mission` | scripted new game through the story movie to a 20 s steady gameplay gate, isolated saves (about 3 min) |

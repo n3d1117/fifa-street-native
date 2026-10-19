@@ -36,9 +36,16 @@ namespace
     struct Capture
     {
         std::vector<std::vector<uint8_t>> packets;
+        size_t used = 0;
+        void reset() { used = 0; }
+        void finish() { packets.resize(used); }
         static void sink(void *u, const uint8_t *d, uint32_t n)
         {
-            static_cast<Capture *>(u)->packets.emplace_back(d, d + n);
+            auto &self = *static_cast<Capture *>(u);
+            if (self.used == self.packets.size())
+                self.packets.emplace_back();
+            auto &packet = self.packets[self.used++];
+            packet.assign(d, d + n);
         }
     };
 
@@ -280,6 +287,53 @@ namespace
         return r;
     }
 
+    void prepareNative(const Snapshot &s, const uint8_t *code, Result &r, Vu1RecContext &ctx)
+    {
+        r.st = s.state;
+        std::memcpy(r.data.data(), s.data.data(), s.data.size());
+        r.pk.reset();
+        r.cycle = 0;
+        r.failPc = 0;
+        r.kickErrors = 0;
+        r.failed = false;
+        ctx = Vu1RecContext{};
+        ctx.state = &r.st;
+        ctx.data = r.data.data();
+        ctx.cycle = s.cycle;
+        ctx.maxCycles = s.maxCycles;
+        ctx.top = s.top;
+        ctx.itop = s.itop;
+        ctx.code = code;
+        ctx.sink = &Capture::sink;
+        ctx.sinkUser = &r.pk;
+    }
+
+    void finishNative(Vu1RecContext &ctx, Result &r)
+    {
+        r.pk.finish();
+        r.cycle = ctx.cycle;
+        r.failPc = ctx.failPc;
+        r.kickErrors = ctx.kickErrors;
+        r.failed = ctx.failed;
+    }
+
+    struct BenchRow
+    {
+        uint64_t hash;
+        uint32_t pc;
+        const char *variant;
+        uint64_t calls = 0;
+        double totalNs = 0;
+        std::vector<double> batchNs;
+    };
+
+    double median(std::vector<double> values)
+    {
+        std::sort(values.begin(), values.end());
+        const size_t n = values.size();
+        return n % 2 ? values[n / 2] : (values[n / 2 - 1] + values[n / 2]) * 0.5;
+    }
+
     unsigned parseFlagMask(const char *v)
     {
         unsigned m = 0;
@@ -399,7 +453,7 @@ int main(int argc, char **argv)
     {
         std::fprintf(stderr,
                      "usage: %s <catalog-dir> <snapshot-dir>[,<dir>...] [--fuzz N] [--no-ftz] [--live-exit mcs] "
-                     "[--poison N] [--guarded]\n"
+                     "[--poison N] [--guarded] [--bench N]\n"
                      "  --guarded: use the disc-derived guarded image and compare all flags.\n"
                      "  --live-exit: flags the FAST variant stores at exit (generator's live-at-exit line; "
                      "m=mac s=status c=clip; default c). Those are compared bit-exactly.\n"
@@ -410,7 +464,7 @@ int main(int argc, char **argv)
         return 2;
     }
     const std::string catalog = argv[1];
-    int fuzz = 0, poison = 0;
+    int fuzz = 0, poison = 0, benchIterations = 0;
     bool ftz = true, guarded = false;
     std::string dumpJrTargets;
     unsigned liveExit = kClip;
@@ -420,6 +474,8 @@ int main(int argc, char **argv)
             fuzz = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--poison") && i + 1 < argc)
             poison = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--bench") && i + 1 < argc)
+            benchIterations = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--live-exit") && i + 1 < argc)
             liveExit = parseFlagMask(argv[++i]);
         else if (!std::strcmp(argv[i], "--no-ftz"))
@@ -486,6 +542,15 @@ int main(int argc, char **argv)
     std::mt19937 rng(12345);
     int verboseBudget = 10;
     std::set<std::tuple<uint64_t, uint32_t, uint32_t>> jrTargets;
+    std::vector<BenchRow> benchRows;
+    auto benchRow = [&](uint64_t hash, uint32_t pc, const char *variant) -> BenchRow &
+    {
+        for (auto &row : benchRows)
+            if (row.hash == hash && row.pc == pc && !std::strcmp(row.variant, variant))
+                return row;
+        benchRows.push_back({hash, pc, variant});
+        return benchRows.back();
+    };
 
     for (const std::string &path : files)
     {
@@ -523,6 +588,63 @@ int main(int argc, char **argv)
         }
         if (base.pc < 0x80u)
             ++entryHist[base.pc >> 4];
+        if (benchIterations > 0)
+        {
+            const Result ref = runInterp(code, base, gs);
+            if (!ref.ended)
+            {
+                ++interpBudget;
+                continue;
+            }
+            ++runs;
+            for (const auto &[fn, variant] : {std::pair<Vu1RecFn, const char *>{image->full, "full"},
+                                              {image->fast, "fast"}})
+            {
+                Result output;
+                output.data.resize(PS2_VU1_DATA_SIZE);
+                Vu1RecContext ctx{};
+                prepareNative(base, code.data(), output, ctx);
+                fn(ctx, base.pc); // one untimed warm-up; also allocates packet storage
+                finishNative(ctx, output);
+                if (output.failed || compare("bench-warmup", output, ref, kAllFlags, false))
+                {
+                    std::fprintf(stderr, "vu1_bench: warm-up rejected or mismatched hash=%016llx entry=0x%04x variant=%s\n",
+                                 (unsigned long long)base.hash, base.pc, variant);
+                    return 1;
+                }
+                BenchRow &row = benchRow(base.hash, base.pc, variant);
+                constexpr int batches = 5;
+                const int baseBatch = benchIterations / batches;
+                const int extraBatches = benchIterations % batches;
+                for (int batch = 0; batch < batches; ++batch)
+                {
+                    double batchNs = 0;
+                    const int batchIterations = baseBatch + (batch < extraBatches ? 1 : 0);
+                    for (int i = 0; i < batchIterations; ++i)
+                    {
+                        // Resetting guest state and buffers is deliberately outside the timed interval.
+                        prepareNative(base, code.data(), output, ctx);
+                        const auto begin = std::chrono::steady_clock::now();
+                        fn(ctx, base.pc);
+                        const auto end = std::chrono::steady_clock::now();
+                        finishNative(ctx, output);
+                        const double elapsed = std::chrono::duration<double, std::nano>(end - begin).count();
+                        batchNs += elapsed;
+                        row.totalNs += elapsed;
+                        ++row.calls;
+                        if (output.failed || compare("bench", output, ref, kAllFlags, false))
+                        {
+                            std::fprintf(stderr, "vu1_bench: measured replay rejected or mismatched hash=%016llx entry=0x%04x variant=%s batch=%d iteration=%d\n",
+                                         (unsigned long long)base.hash, base.pc, variant, batch, i);
+                            return 1;
+                        }
+                    }
+                    if (batchIterations)
+                        row.batchNs.push_back(batchNs / batchIterations);
+                }
+            }
+            continue;
+        }
         for (int variantIdx = 0; variantIdx <= fuzz; ++variantIdx)
         {
             Snapshot s = base;
@@ -603,6 +725,23 @@ int main(int argc, char **argv)
         std::printf("vu1_replay: wrote %zu observed JR/JALR destinations to %s\n", jrTargets.size(),
                     dumpJrTargets.c_str());
         return 0;
+    }
+    if (benchIterations > 0)
+    {
+        double totalNs = 0;
+        for (auto &row : benchRows)
+        {
+            const double med = median(row.batchNs);
+            const auto bounds = std::minmax_element(row.batchNs.begin(), row.batchNs.end());
+            totalNs += row.totalNs;
+            const double spread = med == 0 ? 0 : (*bounds.second - *bounds.first) * 100.0 / med;
+            std::printf("vu1_bench: hash=%016llx entry=0x%04x variant=%s calls=%llu ns_per_mscal=%.1f total_ms=%.3f batch_spread_pct=%.2f\n",
+                        (unsigned long long)row.hash, row.pc, row.variant, (unsigned long long)row.calls,
+                        med, row.totalNs / 1e6, spread);
+        }
+        std::printf("vu1_bench: snapshots=%llu programs=%zu iterations=%d batches=5 exact=bit-exact rejected=0 total_ms=%.3f\n",
+                    (unsigned long long)runs, benchRows.size() / 2, benchIterations, totalNs / 1e6);
+        return (skipped || interpBudget) ? 1 : 0;
     }
     std::printf("vu1_replay: entries 0x00..0x70:");
     for (int e = 0; e < 8; ++e)

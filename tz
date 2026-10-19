@@ -7,6 +7,7 @@
   tz build [--reconfigure] recompiler if stale, generate if inputs changed, release build
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
+  tz bench vu1 [--iterations N] offline exactness-checked VU1 timing over local snapshots
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
   tz run [--seconds N] [--mission N|NAME] [--route first-mission|missions] [--fps-target 60|120] [--measure] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
@@ -414,6 +415,44 @@ def cmd_test(args):
     return run_command("test", args, body)
 
 
+def cmd_bench(args):
+    def body(run):
+        if args.iterations < 5:
+            raise Failed("--iterations must be at least 5 so every timing batch has samples")
+        require(ROOT / "runtime/regression/vu1/catalog", "provide the local VU1 replay corpus")
+        snapshots = ROOT / "runtime/regression/vu1/snapshots"
+        if not snapshots.is_dir() or not any(snapshots.glob("snap_*")):
+            raise Missing("runtime/regression/vu1/snapshots missing or empty -> provide the local VU1 replay corpus")
+        vu = ROOT / "generated/vu1-disc-native/vu1rec_guarded.cpp"
+        require(vu, "./tz build")
+        env = dict(os.environ, PS2X_VU1GEN_DIR=str(vu.parent), PS2X_VU1TEST_OUT=str(ROOT / "build/vu1-replay"))
+        run.must(["bash", "tools/vu/test/build.sh"], "build vu1_replay", env=env)
+        exe = ROOT / "build/vu1-replay/vu1_replay"
+        require(exe, "./tz bench vu1")
+        dirs = [snapshots] + sorted((ROOT / "runtime/regression/vu1").glob("live-*/snapshots"))
+        snapshot_arg = ",".join(str(path) for path in dirs)
+        cmd = [str(exe), str(ROOT / "runtime/regression/vu1/catalog"), snapshot_arg, "--guarded",
+               "--bench", str(args.iterations)]
+        rc = run.sh(cmd)
+        if rc != 0:
+            run.failed.append("vu1 benchmark")
+            raise Failed(f"VU1 benchmark exited {rc}")
+        output = run.log_path.read_text(errors="replace")
+        summary = re.search(r"vu1_bench: snapshots=(\d+) programs=(\d+) iterations=(\d+) batches=(\d+) exact=bit-exact rejected=0 total_ms=([0-9.]+)", output)
+        if not summary:
+            raise Failed("VU1 benchmark produced no summary")
+        rows = re.findall(r"vu1_bench: hash=([0-9a-f]+) entry=(0x[0-9a-f]+) variant=(\w+) calls=(\d+) ns_per_mscal=([0-9.]+) total_ms=([0-9.]+)", output)
+        totals = {}
+        for h, pc, variant, calls, ns, ms in rows:
+            key = (h, pc)
+            totals[key] = totals.get(key, 0.0) + float(ms)
+        top = sorted(totals.items(), key=lambda item: item[1], reverse=True)[:5]
+        top_text = ", ".join(f"{h[:8]}:{pc}={ms:.2f}ms" for (h, pc), ms in top)
+        return (f"exact; snapshots={summary[1]} programs={summary[2]} iterations={summary[3]} batches={summary[4]} "
+                f"total={summary[5]}ms; top5 {top_text}")
+    return run_command("bench-vu1", args, body)
+
+
 FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_runtime\w*\.h|ps2_syscalls\.h|ps2_stubs\.h|ps2_recompiled_\w*\.h)")
 
 
@@ -602,6 +641,10 @@ def main():
     t = sp.add_parser("test")
     t.add_argument("--full", action="store_true", help="also run slow-labelled tests and the 1,106-run VU1 replay")
     t.set_defaults(fn=cmd_test)
+    b = sp.add_parser("bench")
+    b.add_argument("sub", choices=["vu1"])
+    b.add_argument("--iterations", type=int, default=100, help="measured replays per snapshot and variant (default: 100)")
+    b.set_defaults(fn=cmd_bench)
     c = sp.add_parser("check")
     c.add_argument("--tracked", action="store_true")
     c.set_defaults(fn=cmd_check)

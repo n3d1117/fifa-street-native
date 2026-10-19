@@ -23,7 +23,7 @@ Measuring: `./tz run --route first-mission --fps-target 60 --measure` (60 s stea
 
 macOS first, in this order.
 
-1. **Offline speed tests for VU1 and GS** from captures, with no game launch.
+1. **Offline GS replay benchmark** from local captures, with no game launch; first prove the bridge's headless lifecycle on macOS 11.
 2. **Profile-first CPU work.** VU1 FMAC flag cost, guest code speed (memory fast path, register stores, direct calls), native IOP. Only what the profile prices above about 3% of the game thread. Every change gets a kill-switch and, where results must match, a verify mode.
 3. **Smaller app and faster builds, by build profile.** Minimal FFmpeg (MPEG-2 decoder and parser only; PSS frames must stay bit-identical), split the largest translation units and the PCH, trim the GS bridge.
 4. **Later, nice-to-haves.** Apple GameController backend in place of SDL. Cheat-section features: FPS overlay, invincibility, character and trick unlocks, button-swap remap. Visual toggles: frame pacing, sharper tutorial text. 120 FPS: test on a 120 Hz display (60 Hz display measured 55.7, presentation-paced).
