@@ -1,0 +1,187 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 01:13:49 +0200
+Subject: [PATCH 68/69] IOP: advance SPU2 while guest code runs (snddrv init
+ busy-waits on DMA completion); diagnostics for IOP threads, imports, SIF
+ commands, RDRAM dump
+
+
+diff --git a/ps2xIOP/include/ps2x/iop/iop_types.h b/ps2xIOP/include/ps2x/iop/iop_types.h
+index 3491440910af1a6b71c367e170f62e364ee82ecb..0be5fb4dc088c999a6f13ef367a17c4f0702a8ba 100644
+--- a/ps2xIOP/include/ps2x/iop/iop_types.h
++++ b/ps2xIOP/include/ps2x/iop/iop_types.h
+@@ -149,6 +149,7 @@ namespace ps2x::iop
+         uint32_t emulatorLoadedModules = 0;
+         uint32_t emulatorThreads = 0;
+         uint32_t emulatorRpcServers = 0;
++        std::string emulatorThreadStates;
+         std::vector<DebugService> services;
+         std::vector<std::string> diagnostics;
+     };
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index ccfba7973ed4be0dea9e7677c81d7657190755fb..bed9bc476c6c456c734a3574b5def2bee08d881c 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -294,6 +294,12 @@ namespace ps2x::iop::detail
+             {
+                 cpu.gpr[2] = value;
+             };
++            static const bool traceImports = std::getenv("PS2X_TRACE_IOP_IMPORTS") != nullptr;
++            static uint32_t tracedImports = 0;
++            if (traceImports && !(call.library == "intrman" && (call.ordinal == 17u || call.ordinal == 18u)) &&
++                tracedImports++ < 20000u)
++                std::fprintf(stderr, "[iop-import] %s:%u ra=%08x a0=%x a1=%x a2=%x a3=%x\n", call.library.c_str(),
++                             static_cast<unsigned>(call.ordinal), cpu.gpr[31], a0, cpu.gpr[5], cpu.gpr[6], cpu.gpr[7]);
+ 
+             if (iequals(call.library, "sysmem") && sysmem.dispatchImport(call.ordinal, cpu))
+                 return ImportDisposition::Handled;
+@@ -488,10 +494,14 @@ namespace ps2x::iop::detail
+             CpuState *previous = activeCpu;
+             activeCpu = &cpu;
+             const uint64_t start = totalInstructions;
++            const bool hostSpu2 = iopHostSpu2().advance != nullptr;
+             while (!cpu.stopped && !cpu.yielded && totalInstructions - start < instructionBudget)
+             {
+                 if (!step(cpu))
+                     break;
++                // Guest code busy-waits on SPU2 DMA completion (EA snddrv init); SPU2 events must surface while it runs.
++                if (hostSpu2 && (totalInstructions & (kSpu2PollInstructions - 1u)) == 0u)
++                    advanceSpu2();
+                 if (!servicingDmaInterrupts && !pendingDmaInterrupts.empty())
+                     servicePendingDmaInterrupts();
+                 if (!servicingGuestCallbacks && !pendingGuestCallbacks.empty())
+@@ -1141,6 +1151,11 @@ namespace ps2x::iop::detail
+         return static_cast<uint32_t>(m_impl->modules.size());
+     }
+ 
++    std::string IopEmulator::describeThreads() const
++    {
++        return m_impl->kernel.describeThreads();
++    }
++
+     uint32_t IopEmulator::threadCount() const noexcept
+     {
+         return static_cast<uint32_t>(m_impl->kernel.threadCount());
+diff --git a/ps2xIOP/src/emulator/iop_emulator.h b/ps2xIOP/src/emulator/iop_emulator.h
+index 482e298d9eddb7d2163324169448bfa7218ab138..08ac74bcbe5f4f04f12885510be1314adda3834b 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -44,6 +44,7 @@ namespace ps2x::iop::detail
+         [[nodiscard]] uint64_t instructions() const noexcept;
+         [[nodiscard]] uint32_t loadedModuleCount() const noexcept;
+         [[nodiscard]] uint32_t threadCount() const noexcept;
++        [[nodiscard]] std::string describeThreads() const;
+         [[nodiscard]] uint32_t rpcServerCount() const noexcept;
+         [[nodiscard]] std::vector<uint32_t> rpcServerSids() const;
+ 
+diff --git a/ps2xIOP/src/emulator/iop_emulator_const.h b/ps2xIOP/src/emulator/iop_emulator_const.h
+index 700459740dd51ae1d979d9845ee6016840388b02..8a045114c8a009760a147bd5b8c6377aa44c70f2 100644
+--- a/ps2xIOP/src/emulator/iop_emulator_const.h
++++ b/ps2xIOP/src/emulator/iop_emulator_const.h
+@@ -11,5 +11,6 @@ constexpr uint64_t kVblankPeriodCycles = (kIopClockHz * 1001ull + 30'000ull) / 6
+ constexpr uint64_t kVblankEndPhaseCycles = kVblankPeriodCycles / 16ull;
+ constexpr uint32_t kDefaultSlice = 256u;
+ constexpr uint32_t kMaxCallInstructions = 2'000'000u;
++constexpr uint64_t kSpu2PollInstructions = 256u; // power of two
+ constexpr uint32_t kModuleLoadBase = 0x00010000u;
+ constexpr uint32_t kStackGuardBytes = 64u;
+\ No newline at end of file
+diff --git a/ps2xIOP/src/emulator/services/iop_rpc.cpp b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+index 26f627b521fd2cc99511be6ea47c2202f7b631e2..8b5a87c2ed7d305b1f1b64476436e6d2bd2110be 100644
+--- a/ps2xIOP/src/emulator/services/iop_rpc.cpp
++++ b/ps2xIOP/src/emulator/services/iop_rpc.cpp
+@@ -359,6 +359,10 @@ namespace ps2x::iop::detail
+         if (const auto queueThread = m_queueThreadIds.find(server.queue);
+             server.queue != 0u && queueThread != m_queueThreadIds.end() && queueThread->second > 0)
+             rpcThreadId = queueThread->second;
++        static const bool traceRpc = std::getenv("PS2X_TRACE_RPC") != nullptr;
++        if (traceRpc)
++            std::fprintf(stderr, "[iop-rpc] begin sid=0x%x fn=0x%x send=%u thread=%d\n", request.sid, request.function,
++                         request.send.size, rpcThreadId);
+         uint32_t returnPointer = executor.executeGuestRpcFunction(rpcThreadId,
+                                                                   server.function,
+                                                                   request.function,
+@@ -378,6 +382,8 @@ namespace ps2x::iop::detail
+                     m_memory.read32(returnPointer + 8), m_memory.read32(returnPointer + 12),
+                     m_memory.read32(0x72bc4u), m_memory.read32(0x72bf4u), m_memory.read32(0x72becu));
+         }
++        if (traceRpc)
++            std::fprintf(stderr, "[iop-rpc] end sid=0x%x fn=0x%x return=0x%x\n", request.sid, request.function, returnPointer);
+         if (returnPointer == 0u)
+             returnPointer = server.buffer;
+         if (request.receive.address != 0u && request.receive.size != 0u && returnPointer != 0u)
+@@ -423,6 +429,14 @@ namespace ps2x::iop::detail
+         std::memcpy(header, packet, sizeof(header));
+         if ((header[0] & 0xFFu) != packetSize || header[2] != commandId)
+             return false;
++        static const bool traceCmd = std::getenv("PS2X_TRACE_RPC") != nullptr;
++        if (traceCmd)
++        {
++            uint32_t words[8]{};
++            std::memcpy(words, packet, std::min<size_t>(packetSize, sizeof(words)));
++            std::fprintf(stderr, "[sif-cmd ee->iop] cid=0x%x size=%zu w3..7=%08x %08x %08x %08x %08x\n", commandId,
++                         packetSize, words[3], words[4], words[5], words[6], words[7]);
++        }
+         const uint32_t entry = commandEntry(commandId);
+         if (entry == 0u)
+             return false;
+diff --git a/ps2xIOP/src/iop_subsystem.cpp b/ps2xIOP/src/iop_subsystem.cpp
+index bc13d9a05c83e2360020a7b18c3cee40e2a1f492..12c820faea580dd1b1beb63753371516078b3bc3 100644
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -278,6 +278,7 @@ namespace ps2x::iop
+         snapshot.emulatorLoadedModules = m_impl->emulator.loadedModuleCount();
+         snapshot.emulatorThreads = m_impl->emulator.threadCount();
+         snapshot.emulatorRpcServers = m_impl->emulator.rpcServerCount();
++        snapshot.emulatorThreadStates = m_impl->emulator.describeThreads();
+         {
+             DebugService physical;
+             physical.name = "physical RPC servers (registered by loaded IRX)";
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+index 4ce9cb00b0b50774e9884319905ad8bf56899419..0b5692d04c92adf1e390782c121d62f6ab49ba0f 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/SIF.cpp
+@@ -247,6 +247,14 @@ namespace ps2_stubs
+         if (!rdram || !runtime || !packet || packetSize < 16u || packetSize > 112u)
+             return false;
+ 
++        static const bool traceCmd = std::getenv("PS2X_TRACE_RPC") != nullptr;
++        if (traceCmd)
++        {
++            uint32_t words[8]{};
++            std::memcpy(words, packet, std::min<size_t>(packetSize, sizeof(words)));
++            std::fprintf(stderr, "[sif-cmd iop->ee] cid=0x%x size=%zu w3..7=%08x %08x %08x %08x %08x\n", commandId,
++                         packetSize, words[3], words[4], words[5], words[6], words[7]);
++        }
+         SifCmdHandler registered{};
+         {
+             std::lock_guard<std::mutex> lock(g_sifCmdStateMutex);
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index 3451237a5603711a51aa3e21ca0f5d7c4aa76113..d88da053e2a4d4cc433913892a0797ca0126350c 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -119,6 +119,16 @@ void dumpState(PS2Runtime &runtime)
+             << runtime.memory().readIORegister(0x1000E010u) << std::dec << "\n";
+     }
+ 
++    // PS2X_DUMP_RDRAM=<path> writes the whole EE RDRAM image to a file.
++    if (const char *path = std::getenv("PS2X_DUMP_RDRAM"))
++    {
++        if (FILE *file = std::fopen(path, "wb"))
++        {
++            std::fwrite(runtime.memory().getRDRAM(), 1, PS2_RAM_SIZE, file);
++            std::fclose(file);
++        }
++    }
++
+     // PS2X_DUMP_MEM=<hexaddr>:<words>[,<hexaddr>:<words>...] adds raw EE words (aligned, rdram only).
+     if (const char *spec = std::getenv("PS2X_DUMP_MEM"))
+     {
+@@ -149,6 +159,7 @@ void dumpState(PS2Runtime &runtime)
+     out << "iop cycles=" << iop.emulatorCycles << " instructions=" << iop.emulatorInstructions
+         << " modules=" << iop.emulatorLoadedModules << " threads=" << iop.emulatorThreads
+         << " rpc_servers=" << iop.emulatorRpcServers << "\n";
++    out << "iop threads:" << iop.emulatorThreadStates << "\n";
+     for (const auto &service : iop.services)
+     {
+         out << "iop service " << service.name << (service.active ? "" : " (inactive)") << " sids:" << std::hex;

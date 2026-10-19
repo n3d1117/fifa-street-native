@@ -21,8 +21,6 @@
 namespace {
 constexpr uint32_t kSpu2Base = 0x1F900000u;
 constexpr uint32_t kSpu2End = 0x1F900800u;
-constexpr uint32_t kAutoDmaCore0 = 0x01B0u;
-constexpr uint32_t kAutoDmaCore1 = 0x05B0u;
 constexpr uint64_t kMaxIdleCycles = 768u * 32u;
 constexpr uint32_t kMaxDmaHalfwords = 0x80000u;
 constexpr size_t kAudioChunkFrames = 1024;
@@ -36,8 +34,6 @@ struct DmaState {
 rrv_spu2* g_spu2{};
 SDL_AudioStream* g_audio_stream{};
 bool g_audio_subsystem_initialized{};
-bool g_auto_dma_enabled[2]{};
-bool g_unsupported_dma_reported[2]{};
 DmaState g_dma[2]{};
 std::atomic<uint64_t> g_last_cycle{0};
 std::atomic<uint64_t> g_audio_callback_errors{0};
@@ -207,12 +203,6 @@ void write16(uint32_t phys_addr, uint16_t value, uint64_t iop_cycle) {
         return;
     g_last_cycle.store(iop_cycle, std::memory_order_relaxed);
 
-    const uint32_t offset = phys_addr - kSpu2Base;
-    if (offset == kAutoDmaCore0)
-        g_auto_dma_enabled[0] = (value & 1u) != 0;
-    else if (offset == kAutoDmaCore1)
-        g_auto_dma_enabled[1] = (value & 2u) != 0;
-
     rrv_spu2_write16(g_spu2, iop_cycle, phys_addr, value);
 }
 
@@ -221,17 +211,9 @@ void dma_start(int core, uint16_t* ram, uint32_t madr, uint32_t halfwords,
     if (!g_spu2 || core < 0 || core > 1 || !ram || halfwords == 0)
         return;
     g_last_cycle.store(iop_cycle, std::memory_order_relaxed);
-
-    if (g_auto_dma_enabled[core]) {
-        if (!g_unsupported_dma_reported[core]) {
-            std::fprintf(stderr,
-                         "[spu2] unsupported AutoDMA requested on core %d; "
-                         "leaving IOP DMA channel busy instead of faking completion\n",
-                         core);
-            g_unsupported_dma_reported[core] = true;
-        }
-        return;
-    }
+    if (audio_trace_enabled())
+        std::fprintf(stderr, "[spu2-dma] start core=%d madr=%08x halfwords=%u %s cycle=%llu\n", core, madr, halfwords,
+                     to_spu2 ? "write" : "read", static_cast<unsigned long long>(iop_cycle));
 
     if (halfwords > kMaxDmaHalfwords) {
         std::fprintf(stderr,
@@ -268,6 +250,9 @@ void advance(uint64_t iop_cycle) {
         count = rrv_spu2_sync(g_spu2, iop_cycle, events.data(), events.size());
         for (size_t index = 0; index < count; ++index) {
             const rrv_spu2_event& event = events[index];
+            if (audio_trace_enabled())
+                std::fprintf(stderr, "[spu2-event] kind=%u cycle=%llu\n", static_cast<unsigned>(event.kind),
+                             static_cast<unsigned long long>(iop_cycle));
             switch (event.kind) {
             case RRV_SPU2_EVENT_SPU_IRQ:
                 ps2x::iop::iopSpu2RaiseIrq();
@@ -352,8 +337,6 @@ bool ps2x_spu2_host_start() {
     g_audio_nonfinite_samples.store(0, std::memory_order_relaxed);
     g_audio_peak_scaled.store(0, std::memory_order_relaxed);
     g_audio_queued_high_water.store(0, std::memory_order_relaxed);
-    std::fill(std::begin(g_auto_dma_enabled), std::end(g_auto_dma_enabled), false);
-    std::fill(std::begin(g_unsupported_dma_reported), std::end(g_unsupported_dma_reported), false);
     std::fill(std::begin(g_dma), std::end(g_dma), DmaState{});
 
     ps2x::iop::IopHostSpu2 hooks{};

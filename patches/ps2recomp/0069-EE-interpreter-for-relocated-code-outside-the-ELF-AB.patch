@@ -1,0 +1,322 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 01:13:49 +0200
+Subject: [PATCH 69/69] EE interpreter for relocated code outside the ELF (ABKC
+ sound-bank routines)
+
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index fb8767e87f0e5317425da167518991ac911aed2a..e379f60d25ef0c03c03d1a590850a53ec7aaf108 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -423,6 +423,7 @@ add_library(ps2_runtime STATIC
+     src/lib/ps2_vfs.cpp
+     src/lib/ps2_runtime.cpp
+     src/lib/ps2_state_dump.cpp
++    src/lib/ps2_ee_interpreter.cpp
+     src/lib/ps2_vif1_interpreter.cpp
+     src/lib/vu/ps2_vu1_core.cpp
+     src/lib/vu/ps2_vu1_upper.cpp
+diff --git a/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp b/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..2b81dfbd82eb193f0a7b98951471e7092e0d1a78
+--- /dev/null
++++ b/ps2xRuntime/src/lib/ps2_ee_interpreter.cpp
+@@ -0,0 +1,265 @@
++// EE interpreter for guest code that is not part of the recompiled ELF.
++//
++// Retail EA sound banks (ABKC) carry small relocated MIPS routines that the game links against ELF symbols
++// at load time and calls through function pointers; they exist only in RAM, so they cannot be recompiled
++// ahead of time. This interpreter runs them with the generated-code calling convention: it is a
++// RecompiledFunction that starts at ctx->pc and returns (ctx->pc = target) on `jr`, so the scheduler
++// trampoline and dispatchGuestBranch treat it like any other function. Calls into the ELF go through
++// dispatchGuestBranch. It implements the integer subset the retail routines use and reports anything else.
++#include "ps2_runtime.h"
++#include "ps2_runtime_macros.h"
++
++#include <cstdio>
++
++namespace
++{
++constexpr uint32_t kDynamicCodeFloor = 0x100000u;
++
++inline int64_t sext32(uint32_t value) { return static_cast<int64_t>(static_cast<int32_t>(value)); }
++
++struct Decoded
++{
++    uint32_t op, rs, rt, rd, sa, fn;
++    int32_t simm;
++    uint32_t uimm, target;
++};
++
++Decoded decode(uint32_t word)
++{
++    Decoded d;
++    d.op = word >> 26;
++    d.rs = (word >> 21) & 31u;
++    d.rt = (word >> 16) & 31u;
++    d.rd = (word >> 11) & 31u;
++    d.sa = (word >> 6) & 31u;
++    d.fn = word & 63u;
++    d.simm = static_cast<int16_t>(word & 0xFFFFu);
++    d.uimm = word & 0xFFFFu;
++    d.target = word & 0x3FFFFFFu;
++    return d;
++}
++} // namespace
++
++bool ps2IsInterpretedCodeAddress(const PS2Runtime &runtime, uint32_t address)
++{
++    return (address & 3u) == 0u && address >= kDynamicCodeFloor && address < PS2_RAM_SIZE &&
++           !runtime.memory().isCodeAddress(address);
++}
++
++void ps2EeInterpret(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++{
++    const auto fail = [&](uint32_t pc, uint32_t word, const char *why)
++    {
++        std::fprintf(stderr, "[ee-interp] %s at pc=0x%08x word=0x%08x ra=0x%08x\n", why, pc, word, GPR_U32(ctx, 31));
++        runtime->reportMissingFunction(rdram, ctx, pc, pc, PS2Runtime::GuestBranchKind::IndirectJump, "ee-interp");
++        ctx->pc = 0u;
++    };
++
++    // Executes the instruction in a branch delay slot. Only straight-line instructions are supported there.
++    const auto execute = [&](uint32_t word) -> bool
++    {
++        const Decoded d = decode(word);
++        const uint32_t base = GPR_U32(ctx, d.rs);
++        switch (d.op)
++        {
++        case 0x00: // SPECIAL
++            switch (d.fn)
++            {
++            case 0x00: SET_GPR_S32(ctx, d.rd, GPR_U32(ctx, d.rt) << d.sa); return true;
++            case 0x02: SET_GPR_S32(ctx, d.rd, GPR_U32(ctx, d.rt) >> d.sa); return true;
++            case 0x03: SET_GPR_S32(ctx, d.rd, static_cast<int32_t>(GPR_U32(ctx, d.rt)) >> d.sa); return true;
++            case 0x04: SET_GPR_S32(ctx, d.rd, GPR_U32(ctx, d.rt) << (GPR_U32(ctx, d.rs) & 31u)); return true;
++            case 0x06: SET_GPR_S32(ctx, d.rd, GPR_U32(ctx, d.rt) >> (GPR_U32(ctx, d.rs) & 31u)); return true;
++            case 0x07: SET_GPR_S32(ctx, d.rd, static_cast<int32_t>(GPR_U32(ctx, d.rt)) >> (GPR_U32(ctx, d.rs) & 31u)); return true;
++            case 0x0A: if (GPR_U64(ctx, d.rt) == 0u) SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs)); return true;
++            case 0x0B: if (GPR_U64(ctx, d.rt) != 0u) SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs)); return true;
++            case 0x0F: return true; // SYNC
++            case 0x10: SET_GPR_U64(ctx, d.rd, ctx->hi); return true;
++            case 0x11: ctx->hi = GPR_U64(ctx, d.rs); return true;
++            case 0x12: SET_GPR_U64(ctx, d.rd, ctx->lo); return true;
++            case 0x13: ctx->lo = GPR_U64(ctx, d.rs); return true;
++            case 0x14: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rt) << (GPR_U32(ctx, d.rs) & 63u)); return true;
++            case 0x16: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rt) >> (GPR_U32(ctx, d.rs) & 63u)); return true;
++            case 0x17: SET_GPR_S64(ctx, d.rd, GPR_S64(ctx, d.rt) >> (GPR_U32(ctx, d.rs) & 63u)); return true;
++            case 0x18: // MULT (EE: the low word is also written to rd)
++            {
++                const int64_t product = sext32(GPR_U32(ctx, d.rs)) * sext32(GPR_U32(ctx, d.rt));
++                ctx->lo = static_cast<uint64_t>(sext32(static_cast<uint32_t>(product)));
++                ctx->hi = static_cast<uint64_t>(sext32(static_cast<uint32_t>(static_cast<uint64_t>(product) >> 32)));
++                SET_GPR_U64(ctx, d.rd, ctx->lo);
++                return true;
++            }
++            case 0x19: // MULTU
++            {
++                const uint64_t product = static_cast<uint64_t>(GPR_U32(ctx, d.rs)) * GPR_U32(ctx, d.rt);
++                ctx->lo = static_cast<uint64_t>(sext32(static_cast<uint32_t>(product)));
++                ctx->hi = static_cast<uint64_t>(sext32(static_cast<uint32_t>(product >> 32)));
++                SET_GPR_U64(ctx, d.rd, ctx->lo);
++                return true;
++            }
++            case 0x1A: // DIV
++            {
++                const int32_t n = static_cast<int32_t>(GPR_U32(ctx, d.rs));
++                const int32_t m = static_cast<int32_t>(GPR_U32(ctx, d.rt));
++                if (m == 0) { ctx->lo = n < 0 ? 1u : static_cast<uint64_t>(-1); ctx->hi = static_cast<uint64_t>(sext32(n)); }
++                else if (n == INT32_MIN && m == -1) { ctx->lo = static_cast<uint64_t>(sext32(static_cast<uint32_t>(INT32_MIN))); ctx->hi = 0u; }
++                else { ctx->lo = static_cast<uint64_t>(sext32(static_cast<uint32_t>(n / m))); ctx->hi = static_cast<uint64_t>(sext32(static_cast<uint32_t>(n % m))); }
++                return true;
++            }
++            case 0x1B: // DIVU
++            {
++                const uint32_t n = GPR_U32(ctx, d.rs);
++                const uint32_t m = GPR_U32(ctx, d.rt);
++                if (m == 0) { ctx->lo = static_cast<uint64_t>(-1); ctx->hi = static_cast<uint64_t>(sext32(n)); }
++                else { ctx->lo = static_cast<uint64_t>(sext32(n / m)); ctx->hi = static_cast<uint64_t>(sext32(n % m)); }
++                return true;
++            }
++            case 0x20: case 0x21: SET_GPR_S32(ctx, d.rd, GPR_U32(ctx, d.rs) + GPR_U32(ctx, d.rt)); return true;
++            case 0x22: case 0x23: SET_GPR_S32(ctx, d.rd, GPR_U32(ctx, d.rs) - GPR_U32(ctx, d.rt)); return true;
++            case 0x24: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs) & GPR_U64(ctx, d.rt)); return true;
++            case 0x25: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs) | GPR_U64(ctx, d.rt)); return true;
++            case 0x26: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs) ^ GPR_U64(ctx, d.rt)); return true;
++            case 0x27: SET_GPR_U64(ctx, d.rd, ~(GPR_U64(ctx, d.rs) | GPR_U64(ctx, d.rt))); return true;
++            case 0x2A: SET_GPR_U64(ctx, d.rd, GPR_S64(ctx, d.rs) < GPR_S64(ctx, d.rt) ? 1u : 0u); return true;
++            case 0x2B: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs) < GPR_U64(ctx, d.rt) ? 1u : 0u); return true;
++            case 0x2C: case 0x2D: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs) + GPR_U64(ctx, d.rt)); return true;
++            case 0x2E: case 0x2F: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rs) - GPR_U64(ctx, d.rt)); return true;
++            case 0x38: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rt) << d.sa); return true;
++            case 0x3A: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rt) >> d.sa); return true;
++            case 0x3B: SET_GPR_S64(ctx, d.rd, GPR_S64(ctx, d.rt) >> d.sa); return true;
++            case 0x3C: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rt) << (d.sa + 32u)); return true;
++            case 0x3E: SET_GPR_U64(ctx, d.rd, GPR_U64(ctx, d.rt) >> (d.sa + 32u)); return true;
++            case 0x3F: SET_GPR_S64(ctx, d.rd, GPR_S64(ctx, d.rt) >> (d.sa + 32u)); return true;
++            default: return false;
++            }
++        case 0x08: case 0x09: SET_GPR_S32(ctx, d.rt, base + static_cast<uint32_t>(d.simm)); return true;
++        case 0x0A: SET_GPR_U64(ctx, d.rt, GPR_S64(ctx, d.rs) < static_cast<int64_t>(d.simm) ? 1u : 0u); return true;
++        case 0x0B: SET_GPR_U64(ctx, d.rt, GPR_U64(ctx, d.rs) < static_cast<uint64_t>(static_cast<int64_t>(d.simm)) ? 1u : 0u); return true;
++        case 0x0C: SET_GPR_U64(ctx, d.rt, GPR_U64(ctx, d.rs) & d.uimm); return true;
++        case 0x0D: SET_GPR_U64(ctx, d.rt, GPR_U64(ctx, d.rs) | d.uimm); return true;
++        case 0x0E: SET_GPR_U64(ctx, d.rt, GPR_U64(ctx, d.rs) ^ d.uimm); return true;
++        case 0x0F: SET_GPR_S32(ctx, d.rt, d.uimm << 16); return true;
++        case 0x18: case 0x19: SET_GPR_U64(ctx, d.rt, GPR_U64(ctx, d.rs) + static_cast<uint64_t>(static_cast<int64_t>(d.simm))); return true;
++        case 0x20: SET_GPR_S64(ctx, d.rt, static_cast<int8_t>(READ8(base + d.simm))); return true;
++        case 0x21: SET_GPR_S64(ctx, d.rt, static_cast<int16_t>(READ16(base + d.simm))); return true;
++        case 0x23: SET_GPR_S32(ctx, d.rt, READ32(base + d.simm)); return true;
++        case 0x24: SET_GPR_U64(ctx, d.rt, READ8(base + d.simm)); return true;
++        case 0x25: SET_GPR_U64(ctx, d.rt, READ16(base + d.simm)); return true;
++        case 0x27: SET_GPR_U64(ctx, d.rt, READ32(base + d.simm)); return true;
++        case 0x28: WRITE8(base + d.simm, GPR_U32(ctx, d.rt)); return true;
++        case 0x29: WRITE16(base + d.simm, GPR_U32(ctx, d.rt)); return true;
++        case 0x2B: WRITE32(base + d.simm, GPR_U32(ctx, d.rt)); return true;
++        case 0x1E: SET_GPR_VEC(ctx, d.rt, READ128(base + d.simm)); return true;
++        case 0x1F: WRITE128(base + d.simm, GPR_VEC(ctx, d.rt)); return true;
++        case 0x37: SET_GPR_U64(ctx, d.rt, READ64(base + d.simm)); return true;
++        case 0x3F: WRITE64(base + d.simm, GPR_U64(ctx, d.rt)); return true;
++        default: return false;
++        }
++    };
++
++    for (;;)
++    {
++        const uint32_t pc = ctx->pc;
++        if (!ps2IsInterpretedCodeAddress(*runtime, pc))
++        {
++            // Left the interpreted region by falling through or being entered at a bad address.
++            runtime->reportMissingFunction(rdram, ctx, pc, pc, PS2Runtime::GuestBranchKind::IndirectJump, "ee-interp");
++            ctx->pc = 0u;
++            return;
++        }
++        const uint32_t word = READ32(pc);
++        const Decoded d = decode(word);
++        const uint32_t next = pc + 4u;
++        const uint32_t slotPc = next;
++
++        enum class Flow { Straight, Branch, BranchLikely, Jump, Call, Return } flow = Flow::Straight;
++        uint32_t target = 0u;
++        bool taken = false;
++        PS2Runtime::GuestBranchKind kind = PS2Runtime::GuestBranchKind::DirectJump;
++        uint32_t linkReg = 0u;
++        const int64_t rs = GPR_S64(ctx, d.rs);
++        const int64_t rt = GPR_S64(ctx, d.rt);
++        const uint32_t branchTarget = next + (static_cast<uint32_t>(d.simm) << 2);
++
++        switch (d.op)
++        {
++        case 0x00:
++            if (d.fn == 0x08) { flow = Flow::Jump; target = GPR_U32(ctx, d.rs); kind = PS2Runtime::GuestBranchKind::IndirectJump; if (d.rs == 31u) flow = Flow::Return; }
++            else if (d.fn == 0x09) { flow = Flow::Call; target = GPR_U32(ctx, d.rs); kind = PS2Runtime::GuestBranchKind::IndirectCall; linkReg = d.rd; }
++            break;
++        case 0x01:
++            switch (d.rt)
++            {
++            case 0x00: flow = Flow::Branch; taken = rs < 0; target = branchTarget; break;
++            case 0x01: flow = Flow::Branch; taken = rs >= 0; target = branchTarget; break;
++            case 0x02: flow = Flow::BranchLikely; taken = rs < 0; target = branchTarget; break;
++            case 0x03: flow = Flow::BranchLikely; taken = rs >= 0; target = branchTarget; break;
++            default: break;
++            }
++            break;
++        case 0x02: flow = Flow::Jump; target = (next & 0xF0000000u) | (d.target << 2); break;
++        case 0x03: flow = Flow::Call; target = (next & 0xF0000000u) | (d.target << 2); kind = PS2Runtime::GuestBranchKind::DirectCall; linkReg = 31u; break;
++        case 0x04: flow = Flow::Branch; taken = rs == rt; target = branchTarget; break;
++        case 0x05: flow = Flow::Branch; taken = rs != rt; target = branchTarget; break;
++        case 0x06: flow = Flow::Branch; taken = rs <= 0; target = branchTarget; break;
++        case 0x07: flow = Flow::Branch; taken = rs > 0; target = branchTarget; break;
++        case 0x14: flow = Flow::BranchLikely; taken = rs == rt; target = branchTarget; break;
++        case 0x15: flow = Flow::BranchLikely; taken = rs != rt; target = branchTarget; break;
++        case 0x16: flow = Flow::BranchLikely; taken = rs <= 0; target = branchTarget; break;
++        case 0x17: flow = Flow::BranchLikely; taken = rs > 0; target = branchTarget; break;
++        default: break;
++        }
++
++        if (flow == Flow::Straight)
++        {
++            if (word != 0u && !execute(word))
++            {
++                fail(pc, word, "unsupported instruction");
++                return;
++            }
++            ctx->pc = next;
++            continue;
++        }
++
++        const uint32_t slotWord = READ32(slotPc);
++        const bool skipSlot = flow == Flow::BranchLikely && !taken;
++        // JALR/JAL read their target before the delay slot and write the link register first.
++        if (flow == Flow::Call)
++            SET_GPR_U32(ctx, linkReg, pc + 8u);
++        if (!skipSlot && slotWord != 0u && !execute(slotWord))
++        {
++            fail(slotPc, slotWord, "unsupported delay-slot instruction");
++            return;
++        }
++
++        if (flow == Flow::Branch || flow == Flow::BranchLikely)
++        {
++            ctx->pc = taken ? target : pc + 8u;
++            continue;
++        }
++
++        if (flow == Flow::Return)
++        {
++            ctx->pc = target;
++            return;
++        }
++
++        if (flow == Flow::Jump)
++        {
++            if (ps2IsInterpretedCodeAddress(*runtime, target))
++            {
++                ctx->pc = target;
++                continue;
++            }
++            ctx->pc = target;
++            (void)runtime->dispatchGuestBranch(rdram, ctx, target, pc, pc + 8u, kind, "INTERP");
++            return;
++        }
++
++        // Call: run the callee through the common dispatcher, then continue after the delay slot.
++        ctx->pc = target;
++        if (!runtime->dispatchGuestBranch(rdram, ctx, target, pc, pc + 8u, kind, "INTERP"))
++            return;
++        ctx->pc = pc + 8u;
++    }
++}
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index ba05d67137d17a4ec5a8ae055d8fba6b724001d1..41a5ba4fb0fad36add14c04a97342452473cc0a5 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1332,10 +1332,16 @@ bool PS2Runtime::registerFunction(uint32_t address, RecompiledFunction func)
+     return replaceFunction(address, func);
+ }
+ 
++bool ps2IsInterpretedCodeAddress(const PS2Runtime &runtime, uint32_t address);
++void ps2EeInterpret(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
++
+ bool PS2Runtime::hasFunction(uint32_t address) const
+ {
+     uint32_t slot = 0u;
+-    return generatedFunctionTableSlot(address, slot) && g_ps2RecompiledFunctionTable[slot] != nullptr;
++    if (generatedFunctionTableSlot(address, slot) && g_ps2RecompiledFunctionTable[slot] != nullptr)
++        return true;
++    // Code the ELF does not contain (relocated routines loaded with sound banks) runs in the EE interpreter.
++    return ps2IsInterpretedCodeAddress(*this, address);
+ }
+ 
+ const char *describeGuestBranchKind(PS2Runtime::GuestBranchKind kind)
+@@ -1371,6 +1377,9 @@ PS2Runtime::RecompiledFunction PS2Runtime::lookupFunction(uint32_t address)
+         }
+     }
+ 
++    if (ps2IsInterpretedCodeAddress(*this, address))
++        return ps2EeInterpret;
++
+     std::cerr << "Error: No exact recompiled function for guest PC 0x" << std::hex << address
+               << " tableBase=0x" << g_ps2RecompiledFunctionTableBase
+               << " tableEnd=0x" << g_ps2RecompiledFunctionTableEnd
