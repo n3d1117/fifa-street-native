@@ -8,10 +8,12 @@
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run [--seconds N] [--route first-mission|missions] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
+  tz run [--seconds N] [--route first-mission|missions] [--fps-target 60|120] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
                            --route missions: new game with unlockAllMissions (this run only), then every Story Mode map
                            mission (~45 s scripted play each, quit via pause menu); per-mission table (default 3600 s)
+                           --fps-target: opt into high FPS in isolated settings for this run; title and missions runs skip logos
+                           --no-skip-logos: control run for measuring the title boot saving
   tz package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   tz where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
   tz where --unimplemented  audit configured direct TODO handlers
@@ -497,12 +499,14 @@ def cmd_run(args):
                 raise Failed(f"{bad} bad cycles, {len(new)} new crash reports")
             return f"{args.quit_cycles} clean quit cycles"
         cmd = [sys.executable, "tools/probe/probe.py", "--out", out, "--route", args.route or "none"]
-        for flag, value in (("--seconds", args.seconds), ("--route", args.route), ("--save", args.save),
+        for flag, value in (("--seconds", args.seconds), ("--route", args.route), ("--fps-target", args.fps_target), ("--save", args.save),
                             ("--user-dir", args.user_dir), ("--app", args.app)):
             if value:
                 cmd += [flag, value]
         if args.profile:
             cmd.append("--profile")
+        if args.no_skip_logos:
+            cmd.append("--no-skip-logos")
         rc = run.sh(cmd)
         if rc == 2:
             raise Missing(run.last_message())
@@ -514,7 +518,7 @@ def cmd_run(args):
         crash = s["crash"]
         stubs = ", ".join(f"{n} x{c}" for n, c in s["stubs"]) or "none"
         run.notes += [f"reached: {s['reached']}", f"seconds: {s['seconds']:g}",
-                      f"fps_dispfb2: {fmt(s['fps_dispfb2'])}",
+                      f"fps_gameplay: {fmt(s.get('fps_gameplay'))}", f"fps_dispfb2: {fmt(s['fps_dispfb2'])}",
                       f"cpu_user_s: {fmt(s['cpu_user_s'])}", f"cpu_sys_s: {fmt(s['cpu_sys_s'])}",
                       f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
                       f"audio_boundary_underruns: {fmt(s.get('audio_boundary_underruns'))}",
@@ -589,6 +593,8 @@ def main():
     r = sp.add_parser("run")
     r.add_argument("--seconds", type=int)
     r.add_argument("--route", choices=["none", "first-mission", "missions"])
+    r.add_argument("--fps-target", type=int, choices=[60, 120], help="opt into a high-FPS target in isolated settings for this run")
+    r.add_argument("--no-skip-logos", action="store_true", help="control run for measuring the title boot saving")
     r.add_argument("--user-dir")
     r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")
     r.add_argument("--profile", action="store_true")

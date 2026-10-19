@@ -56,7 +56,7 @@ TOOL_FRAMEWORKS = {
 LOGICAL_KEY = {7: 5, 36: 17, 125: 2, 126: 1, 8: 7}
 PAD = {"up": 1, "down": 2, "left": 3, "right": 4, "cross": 5, "circle": 7, "square": 9, "triangle": 11, "start": 17}
 PLAY_SECONDS = 45
-PERIODIC_RE = re.compile(r"\[vu1rec\] periodic: mscal=\d+ native=\d+ fallback=(\d+) .*?nativeFail=(\d+) .*?\(DISPFB2 ([0-9.]+)\)")
+PERIODIC_RE = re.compile(r"\[vu1rec\] periodic: mscal=\d+ native=\d+ fallback=(\d+) .*?nativeFail=(\d+) .*?\(DISPFB2 ([0-9.]+)\).*? over ([0-9.]+)s")
 MOVIE_RE = re.compile(r'\[sceCdSearchFile:ok\] path="[^"]*?([^\\"]+\.PSS)|sceCdSearchFile failed: [^\n]*?([^\\\n]+\.PSS)|'
                       r"\[iop-audio-rpc\] fn=11 [^\n]*?\binit=0\b")
 VU_FALLBACK_RE = re.compile(r"\[vu1rec\] VU1 image ([0-9a-f]{16})(?: entry (0x[0-9a-f]+))? has no native code|"
@@ -157,6 +157,36 @@ def parse_log(text):
     out["stubs"] = [[n, c] for n, c in stubs.most_common(5)]
     out["faults"] = [l[:300] for l in text.splitlines() if any(m in l for m in FAULT_MARKERS)][:10]
     return out
+
+
+def write_run_settings(user_dir, *, skip_logos=False, fps_target=None, unlock_missions=False):
+    path = Path(user_dir) / "experimental-settings.plist"
+    try:
+        settings = plistlib.loads(path.read_bytes()) if path.exists() else {}
+    except (plistlib.InvalidFileException, OSError):
+        settings = {}
+    if skip_logos is not None:
+        settings["skipLogos"] = bool(skip_logos)
+    if fps_target:
+        settings.update(highFPS=True, targetFPS=fps_target)
+    if unlock_missions:
+        settings["unlockAllMissions"] = True
+    path.write_bytes(plistlib.dumps(settings))
+
+
+def gameplay_fps(samples, target=25):
+    """Average periodic DISPFB2 samples from a stable, movie-free gameplay window."""
+    if not samples:
+        return None
+    low, high = max(15, target * 0.6), target * 1.1
+    valid = [(t, fps) for t, fps in samples if low <= fps <= high]
+    start = next((valid[i][0] for i in range(len(valid) - 1)
+                  if valid[i + 1][0] - valid[i][0] <= 10
+                  and abs(valid[i + 1][1] - valid[i][1]) <= target * 0.25), None)
+    if start is None:
+        return None
+    window = [fps for t, fps in valid if start <= t <= start + 60]
+    return round(sum(window) / len(window), 1) if window else None
 
 
 def crash_from(text, returncode, killed_by_us):
@@ -510,6 +540,7 @@ def play_mission(game, rec, deadline):
         t_end = time.monotonic()
         rec["play_seconds"] = round(t_end - t_play, 1)
         fps = [p[4] for p in game.periodic if t_play + 5.5 <= p[0] <= t_end]
+        rec["fps_gameplay"] = round(sum(fps) / len(fps), 1) if fps else None
         rec["fps_dispfb2"] = round(sum(fps) / len(fps), 1) if fps else None
         rec["fps_min"] = round(min(fps), 1) if fps else None
         cpu_end = game.cpu_user()
@@ -591,7 +622,7 @@ def run_missions(args):
         launches += 1
         user_dir = out / f"user-dir-{launches}"
         user_dir.mkdir()
-        (user_dir / "experimental-settings.plist").write_bytes(plistlib.dumps({"unlockAllMissions": True}))
+        write_run_settings(user_dir, skip_logos=True, fps_target=args.fps_target, unlock_missions=True)
         game = Game(out, f"{launches}", user_dir, capture)
         games.append(game)
         try:
@@ -646,6 +677,7 @@ def run_missions(args):
     summary = {
         "reached": "missions" if all_ok else ("crash" if crash else "missions-incomplete"), "target": "missions",
         "seconds": round(time.monotonic() - started, 1),
+        "fps_gameplay": min((m["fps_gameplay"] for m in missions if m.get("fps_gameplay")), default=None),
         "fps_dispfb2": min((m["fps_dispfb2"] for m in missions if m.get("fps_dispfb2")), default=None),
         "cpu_user_s": round(sum(g.cpu_user_s for g in games), 3), "cpu_sys_s": round(sum(g.cpu_sys_s for g in games), 3),
         "vu_fallbacks": sum(m.get("fallbacks") or 0 for m in missions),
@@ -666,6 +698,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, help="run directory (default build/runs/<UTC>)")
     ap.add_argument("--seconds", type=int)
+    ap.add_argument("--no-skip-logos", action="store_true", help="control run for measuring the isolated logo-skip boot saving")
+    ap.add_argument("--fps-target", type=int, choices=(60, 120), help="opt into a high-FPS target in this isolated run")
     ap.add_argument("--route", choices=("none", "first-mission", "missions"), default="none")
     ap.add_argument("--user-dir", type=Path)
     ap.add_argument("--save", type=Path, help="fixture directory containing a non-empty memcards/ subtree")
@@ -701,7 +735,7 @@ def main():
         if not fixture.is_dir() or not fixture_cards.is_dir() or not any(p.is_file() for p in fixture_cards.rglob("*")):
             print(f"save fixture missing or empty: {fixture} (copy a user dir's memcards/ subtree into it)", file=sys.stderr)
             return 2
-    seconds = args.seconds or (150 if args.route == "first-mission" else 60)
+    seconds = args.seconds or (210 if args.route == "first-mission" else 60)
     if args.route == "first-mission" and seconds < 140:
         ap.error("--route first-mission needs --seconds >= 140")
     if not 1 <= args.capture_frames <= 120 or args.capture_interval < 1 or args.capture_start_field < 0:
@@ -728,6 +762,10 @@ def main():
     if args.route != "none" and any(p.name != "experimental-settings.plist" for p in user_dir.iterdir()):
         ap.error("--route first-mission needs a --user-dir without saves (new game); only experimental-settings.plist is allowed")
     explicit_real = bool(args.user_dir) and user_dir == REAL_SUPPORT.resolve()
+    if not args.user_dir or not explicit_real:
+        write_run_settings(user_dir, skip_logos=(args.route == "none" and not args.no_skip_logos), fps_target=args.fps_target)
+    elif args.fps_target:
+        ap.error("--fps-target requires an isolated user directory")
     before = save_hash(REAL_SUPPORT)
 
     env = os.environ.copy()
@@ -794,10 +832,23 @@ def main():
     menu_at = last_hit = None
     next_ocr, profiled = 0.0, None
     route_i, route_delay, seen_len = 0, 0.0, 0
+    scan_pos, active_movie, gameplay_samples = 0, False, []
     try:
         while time.monotonic() < deadline and not child_exited(exit_watch):
             now = time.monotonic() - started
             text_now = log_text()
+            new_text = text_now[scan_pos:]
+            scan_pos = len(text_now)
+            for line in new_text.splitlines():
+                if re.search(r'\[sceCdSearchFile:ok\] path="[^"]*\.PSS', line):
+                    active_movie = True
+                elif re.search(r"\[iop-audio-rpc\] fn=11 .*\binit=0\b", line):
+                    active_movie = False
+                pm = PERIODIC_RE.search(line)
+                if pm and not active_movie and float(pm[4]) <= 10 and (not route or route_i == len(route)):
+                    rate = float(pm[3])
+                    if 20 <= rate <= 65:
+                        gameplay_samples.append((time.monotonic() - started, rate))
             if not args.keep_running_on_failure and any(m in text_now[seen_len:] for m in FAULT_MARKERS):
                 fault_stop = True
                 break
@@ -893,6 +944,7 @@ def main():
     target = "first-mission" if route else "title"
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
+        "fps_gameplay": gameplay_fps(gameplay_samples, args.fps_target or 25),
         "fps_dispfb2": metrics.get("fps_dispfb2"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),

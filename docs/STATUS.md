@@ -13,7 +13,7 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Saves | Card save/reload for one slot | All checkpoints, multiple slots |
 | Input | Keyboard remapping, SDL gamepads | Real PS5/Xbox pad testing |
 | Video | Native to 4x internal resolution, 16:9, optional sharpening, UI half-pixel coverage fix | Blurry tutorial text at higher scale |
-| Performance | Original 25 FPS; steady first-mission gameplay at the 60 target measures 35.8–40.0 swaps/s. The 150 s route's 26.1 spans movie/loading, not steady gameplay | VU1/VIF, GS submission and guest render cost; B14 needs a steady gameplay comparison |
+| Performance | Original 25 FPS; `tz run` reports movie-free `fps_gameplay` from periodic DISPFB2 samples after route confirmation. `fps_dispfb2` remains a mixed-phase diagnostic | VU1/VIF, GS submission and guest render cost; B14 needs a steady gameplay comparison |
 | Process | One app process; one build tree `build/game-metal`; settings in one plist | Settings window and fullscreen not scriptable, unverified after the in-process change |
 | Platforms | macOS arm64 | iOS/tvOS: feasibility only, see "iOS / tvOS track" |
 
@@ -44,7 +44,7 @@ Nearest guest stack frames, including their runtime callees (overlap the categor
 
 The proven RAM poll `0x3f8b98–0x3f8bac` compares produced/consumed counters `0x6B04F0/0x6B04F8`: 35.4% at 25 versus 3.0% at 60, including checkpoint work. Removing useful IOP/SPU2 execution from that stack leaves 25.7% versus 2.3% in polling/checkpoint overhead. Both targets consume about one CPU second per wall second; saved work at the original cap can become more polling.
 
-The 150 s route reproduces 26.1 from a 44.1 s statistics interval spanning movie/loading. Subsequent 5 s gameplay intervals measure 35.8–40.0. Do not use that mixed interval or capped-run CPU seconds to judge unlocked throughput.
+The probe starts `fps_gameplay` after the route is confirmed and excludes samples while a PSS movie is active or when their periodic interval exceeds 10 seconds. It averages eligible periodic DISPFB2 samples from the first pair of stable gameplay samples for up to 60 seconds; a bounded run can produce a shorter window. Use this field for throughput comparisons. `fps_dispfb2` retains the latest phase-agnostic periodic rate for diagnosis.
 
 Temporary counters, removed after diagnosis, at sync-callback entry, `fpsSync` and `osrSwapBuffer` in extended first-mission runs distinguish readiness from limiting: 60 VBlanks and callback entries per second, about 40 produced/consumed buffers and ready-path entries, every ready-path min-sync check passing with zero. The earlier branch at `0x3f8de0` returns when no produced buffer is pending. Swap gaps alternate one/two VBlanks; no fixed two-VBlank gate remains. EE time advances at the unchanged 294.9 million cycles/s: about 7.37 million elapsed cycles per frame versus 4.92 million per 60 Hz VBlank, reflecting host work rather than estimated charges. Reproduce the counters around those functions using `currentVSyncTick`, `dispfb2SwapCount`, the RAM counters and the scheduler's `eeCycle` snapshot; diagnostic rates are not throughput A/B evidence.
 

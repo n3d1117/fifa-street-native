@@ -25,8 +25,8 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 |---|---|
 | `./tz build` | generate if inputs changed, build `build/game-metal` (0.2 s no-op; long after a recompiler/config change). `--reconfigure` after exit 2 about path/case |
 | `./tz test` / `--full` | quick tier (ctest + VU generator tests, no disc, seconds) / adds slow tests and the local VU1 replay corpus |
-| `./tz run --seconds 60` | bounded boot check with a summary |
-| `./tz run --route first-mission` | scripted new game to first gameplay, isolated saves (about 3 min) |
+| `./tz run --seconds 60` | bounded boot check with isolated logo skip and a summary |
+| `./tz run --route first-mission [--fps-target 60|120]` | scripted new game through a steady gameplay window, isolated saves (about 3.5 min); optional target is isolated to this run |
 | `./tz run --route missions` | new game with Unlock all missions (this run only), then every Story Mode map mission: guarded select, ~45 s scripted play, quit via pause menu; per-mission table (about 25 min) |
 | `./tz run --save <fixture-dir> --seconds 60` | bounded boot with `<fixture-dir>/memcards/` copied into fresh isolated saves |
 | `./tz run --app <bundle> --quit-cycles N` | boot and quit the packaged app N times |
@@ -35,7 +35,7 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | `./tz deps [sync\|export\|status]` | upstream checkouts and our patch stack |
 | `./tz disc <iso>`, `./tz setup`, `./tz package` | disc import, one-time setup, app bundle |
 
-Judge a run by its summary (`reached`, `fps_dispfb2`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). CPU seconds are for the game child process only. Open the log only when the summary is wrong. Run `./tz run` on a quiet machine; it waits up to 60 s for one.
+Judge a run by its summary (`reached`, `fps_gameplay`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). `fps_gameplay` is the movie-free DISPFB2 rate over the first steady gameplay window (up to 60 s) and the first-mission default-target gate is at least 24.9; `fps_dispfb2` is a mixed-phase diagnostic. CPU seconds are for the game child process only. Open the log only when the summary is wrong. Run `./tz run` on a quiet machine; it waits up to 60 s for one.
 
 | You changed | Run before committing |
 |---|---|
