@@ -92,6 +92,14 @@ int main() {
         tarzan::apply_env_overrides(s, fake_env);
         assert(s.hdWidescreen && s.highFps && s.targetFps == 120 && s.renderScale == 4 &&
                s.sharperImage && !s.wallClock);
+        g_env = {{"TARZAN_BOOT_MISSION", "7,1,0"}};
+        Settings boot;
+        tarzan::apply_env_overrides(boot, fake_env);
+        assert(boot.bootLevel == 7 && boot.bootMode == 1 && boot.bootPlayer == 0);
+        g_env = {{"TARZAN_BOOT_MISSION", "7,1"}};
+        Settings badBoot;
+        tarzan::apply_env_overrides(badBoot, fake_env);
+        assert(badBoot.bootLevel == -1);
         Settings invalid;
         g_env = {{"TARZAN_EXPERIMENT_HD", "yes"}, {"TARZAN_EXPERIMENT_FPS", "90"},
                  {"TARZAN_EXPERIMENT_SCALE", "7"}, {"PS2X_WALLCLOCK", "1"}};

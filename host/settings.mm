@@ -3,6 +3,8 @@
 
 #include "settings.hpp"
 
+#include <cstdio>
+
 namespace tarzan {
 namespace {
 bool is_integer_number(id value) {
@@ -78,6 +80,15 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
     if (const char* scale = get("TARZAN_EXPERIMENT_SCALE"); scale && scale[0] >= '1' && scale[0] <= '4' && !scale[1])
         s.renderScale = scale[0] - '0';
     if (is(get("TARZAN_EXPERIMENT_SHARP"), "1")) s.sharperImage = true;
+    if (const char* boot = get("TARZAN_BOOT_MISSION")) {
+        int level, mode, player;
+        char extra;
+        if (std::sscanf(boot, "%d,%d,%d%c", &level, &mode, &player, &extra) == 3 && level >= 0 && mode >= 0 && player >= 0) {
+            s.bootLevel = level;
+            s.bootMode = mode;
+            s.bootPlayer = player;
+        }
+    }
     if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
 }
 

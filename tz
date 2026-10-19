@@ -8,8 +8,12 @@
                            (refuses, exit 2, if a build tree was configured from another path/case)
   tz test [--full]         quick tier: ctest (no GUI/slow tests); --full adds slow tests + VU1 replay corpus
   tz check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  tz run [--seconds N] [--route first-mission|missions] [--fps-target 60|120] [--measure] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
+  tz run [--seconds N] [--mission N|NAME] [--route first-mission|missions] [--fps-target 60|120] [--measure] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded run, isolated saves, summary block (tools/probe/probe.py)
+                           --mission: boot straight into one Story Mode mission (the default gate; about 35 s): 1 Free The Young,
+                           2 Surf For Terk, 3 Hang-sliding, 4 Tarzan Vs. Wolff, 5 In Search Of Porter, 6 Skiing The Swamp,
+                           7 Hunter's Trail, 8 Crocodile Clash, 9 Into The Caverns, 10 Underground Rapids, 11 Subterranean Search,
+                           12 The Elephant Graveyard; isolated saves, ~10 s scripted play (--measure: 60 s)
                            --route missions: new game with unlockAllMissions (this run only), then every Story Mode map
                            mission (~45 s scripted play each, quit via pause menu); per-mission table (default 3600 s)
                            --fps-target: opt into high FPS in isolated settings for this run; title and missions runs skip logos
@@ -333,6 +337,10 @@ def cmd_build(args):
         require(ELF, "./tz disc <iso>")
         require(GEN_CONFIG, "./tz disc <iso>")
         check_trees(run, args.reconfigure)
+        derived = (ROOT / "config/SLES-50350.template.toml").read_text().replace("@ROOT@", str(ROOT))
+        if GEN_CONFIG.read_text() != derived:  # the same derivation as tools/disc.py
+            GEN_CONFIG.write_text(derived)
+            run.say("config derived from the template")
         rebuilt = rebuild_stale_deps(run)
         cmake_build(run, "recompiler")
         want = generate_inputs_hash()
@@ -500,7 +508,7 @@ def cmd_run(args):
                 raise Failed(f"{bad} bad cycles, {len(new)} new crash reports")
             return f"{args.quit_cycles} clean quit cycles"
         cmd = [sys.executable, "tools/probe/probe.py", "--out", out, "--route", args.route or "none"]
-        for flag, value in (("--seconds", args.seconds), ("--route", args.route), ("--fps-target", args.fps_target), ("--save", args.save),
+        for flag, value in (("--seconds", args.seconds), ("--route", args.route), ("--fps-target", args.fps_target), ("--mission", args.mission), ("--save", args.save),
                             ("--user-dir", args.user_dir), ("--app", args.app)):
             if value:
                 cmd += [flag, value]
@@ -527,6 +535,10 @@ def cmd_run(args):
                       f"audio_boundary_underruns: {fmt(s.get('audio_boundary_underruns'))}",
                       "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
                       f"stubs: {stubs}"]
+        if s.get("phases"):
+            run.notes.append(f"mission: {s['mission']}; phases: " + ", ".join(f"{k} {fmt(v)}" for k, v in s["phases"].items()))
+        for n in s.get("notes", []):
+            run.notes.append(f"note: {n}")
         for m in s.get("missions", []):
             vu = f" vu1:{','.join(m['vu1_programs'])}" if m.get("vu1_programs") else ""
             mv = "".join(f" movie:{v['name']}:{'end' if v['to_end'] else 'open' if v['played'] else 'missing'}"
@@ -596,6 +608,7 @@ def main():
     r = sp.add_parser("run")
     r.add_argument("--seconds", type=int)
     r.add_argument("--route", choices=["none", "first-mission", "missions"])
+    r.add_argument("--mission", help="boot straight into one Story Mode mission (1-12 or a name from the map)")
     r.add_argument("--fps-target", type=int, choices=[60, 120], help="opt into a high-FPS target in isolated settings for this run")
     r.add_argument("--measure", action="store_true", help="collect a 60-second steady gameplay window")
     r.add_argument("--no-skip-logos", action="store_true", help="control run for measuring the title boot saving")

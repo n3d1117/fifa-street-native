@@ -26,7 +26,8 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | `./tz build` | generate if inputs changed, build `build/game-metal` (0.2 s no-op; long after a recompiler/config change). `--reconfigure` after exit 2 about path/case |
 | `./tz test` / `--full` | quick tier (no disc, seconds) / adds slow tests and the local VU1 replay corpus |
 | `./tz run --seconds 60` | bounded boot check with a summary |
-| `./tz run --route first-mission` | scripted new game through a 20 s steady gameplay gate, isolated saves (about 3 min) |
+| `./tz run --mission 1` | the default gate: boots straight into a map mission (1-12 or a name) through the game's own level start, plays 10 s (move, jump, attack, spear, side steps), isolated saves (about 35 s). Diagnostic hook, never active in normal play |
+| `./tz run --route first-mission` | scripted new game through the story movie to a 20 s steady gameplay gate, isolated saves (about 3 min) |
 | `... --fps-target 60 --measure` | 60 s steady window for performance A/Bs; the target applies to this run only |
 | `./tz run --route missions` | unlock-all new game, then every map mission with about 45 s scripted play; per-mission table (about 25 min) |
 | `./tz run --save <dir> --seconds 60` | boot with `<dir>/memcards/` copied into isolated saves |
@@ -36,16 +37,16 @@ Every `tz` command is quiet: PASS/FAIL, time, a log path (`build/logs/`), the fi
 | `./tz deps [sync\|export\|status]` | upstream checkouts and our patch stack |
 | `./tz disc <iso>`, `./tz setup`, `./tz package` | disc import, one-time setup, app bundle |
 
-Judge a run by its summary (`reached`, `scene`, `fps_gameplay`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). `scene` is `playable` only after OCR confirms the Continue card is gone; otherwise it names what blocked. `fps_gameplay` is the movie-free DISPFB2 rate over the first steady window of that scene; the default-target gate is at least 24.9. `fps_dispfb2` is a mixed-phase diagnostic. CPU seconds are the game child process only. Open the log only when the summary is wrong.
+Judge a run by its summary (`reached`, `scene`, `fps_gameplay`, `cpu_user_s`, `cpu_sys_s`, `vu_fallbacks`, `audio_underruns`, `crash`). `scene` is `playable` only after OCR confirms the Continue card is gone (a `--mission` run reports `playable` once two steady frame-rate samples follow the load, no OCR); otherwise it names what blocked. `fps_gameplay` is the movie-free DISPFB2 rate over the first steady window of that scene; the default-target gate is at least 24.9. `fps_dispfb2` is a mixed-phase diagnostic. CPU seconds are the game child process only. Open the log only when the summary is wrong.
 
-**Verification scope.** The gate is one first-mission route (or the fast mission run once it exists). Sweep missions only when a change targets later missions.
+**Verification scope.** The gate is `./tz run --mission 1`. Run the full first-mission route (movie and audio path) when audio, movie or boot code changes, and once per batch. Sweep missions only when a change targets later missions.
 
 | You changed | Run before committing |
 |---|---|
 | docs, `tools/` Python | `./tz check` |
-| `host/`, other compiled code | `./tz build && ./tz test && ./tz run --seconds 60` |
-| `deps/ps2recomp` runtime/HLE, VU, GS, SPU2, timing | the above, then `./tz test --full` and `./tz run --route first-mission` |
-| recompiler (`deps/ps2recomp/ps2xRecomp`) or `config/` | `./tz build` (regenerates), `./tz test --full`, `./tz run --route first-mission` |
+| `host/`, other compiled code | `./tz build && ./tz test && ./tz run --mission 1` |
+| `deps/ps2recomp` runtime/HLE, VU, GS, SPU2, timing | the above, then `./tz test --full` and `./tz run --mission 1` |
+| recompiler (`deps/ps2recomp/ps2xRecomp`) or `config/` | `./tz build` (regenerates), `./tz test --full`, `./tz run --mission 1` |
 
 ## Where a fix goes (first layer that works)
 

@@ -7,6 +7,8 @@ Merges the former run-native-check / diagnose-native / probe-first-level scripts
   --route missions       needs unlockAllMissions (written into its own isolated user dirs, this run only): new game, then every
                          mission on the Story Mode map in order: select, wait for gameplay (OCR guards), ~45 s scripted play,
                          quit to the map through the pause menu. Per-mission table in summary.json ("missions").
+  --mission NAME|N       boot straight into one Story Mode mission (the game's own SetCurrentLevel via the TARZAN_BOOT_MISSION
+                         hook, isolated user dir, no map, lock check or movie), ~10 s scripted play, then the usual summary
   --save DIR             seed a fresh isolated user dir from DIR/memcards
   --profile              macOS `sample` of the GameThread after --profile-after seconds
   --gpu-capture          bounded Metal frame capture (TARZAN_CAPTURE_*)
@@ -159,7 +161,7 @@ def parse_log(text):
     return out
 
 
-def write_run_settings(user_dir, *, skip_logos=False, unlock_missions=False):
+def write_run_settings(user_dir, *, skip_logos=False, unlock_missions=False, language=None):
     path = Path(user_dir) / "experimental-settings.plist"
     try:
         settings = plistlib.loads(path.read_bytes()) if path.exists() else {}
@@ -169,6 +171,8 @@ def write_run_settings(user_dir, *, skip_logos=False, unlock_missions=False):
         settings["skipLogos"] = bool(skip_logos)
     if unlock_missions:
         settings["unlockAllMissions"] = True
+    if language is not None:
+        settings["rememberLanguage"], settings["lastLanguage"] = True, language
     path.write_bytes(plistlib.dumps(settings))
 
 
@@ -297,8 +301,9 @@ class Game:
         env.setdefault("TARZAN_TRACE_FAULTS", "1")
         env.setdefault("TARZAN_TRACE_SPU2", "1")
         env["TARZAN_DIAGNOSTIC_INPUT_FIFO"] = str(fifo)
-        env["PS2X_VU1_CAPTURE"] = str(capture_dir)
-        env["PS2X_VU1_CAPTURE_EVERY"] = "1000000"  # first 8 MSCALs per (program, entry) only
+        if capture_dir:
+            env["PS2X_VU1_CAPTURE"] = str(capture_dir)
+            env["PS2X_VU1_CAPTURE_EVERY"] = "1000000"  # first 8 MSCALs per (program, entry) only
         runner = DEFAULT_RUNNER.resolve(strict=True)
         self.logf = self.log_path.open("wb")
         self.started = time.monotonic()
@@ -490,6 +495,22 @@ def mission_slice_stats(game, t0, t1, pos0, pos1):
             "stubs": out["stubs"], "faults": out["faults"]}
 
 
+def play_script(game, seconds, side_block):
+    """Hold Up; pulse Cross every 1.2 s, Square every 2 s, Circle every 3.5 s; step left and right in side_block-second blocks."""
+    t_start, tick = time.monotonic(), 0
+    while time.monotonic() - t_start < seconds and game.alive():
+        bits = {"up"}
+        if tick % 12 < 2: bits.add("cross")
+        if 5 <= tick % 20 < 7: bits.add("square")
+        if 10 <= tick % 35 < 12: bits.add("circle")
+        if int((time.monotonic() - t_start) // side_block) % 4 == 1: bits.add("left")
+        if int((time.monotonic() - t_start) // side_block) % 4 == 3: bits.add("right")
+        game.mask(bits)
+        tick += 1
+        time.sleep(0.1)
+    game.mask(())
+
+
 def play_mission(game, rec, deadline):
     """Select the highlighted mission and play it; returns when back on the map or when the game must be restarted."""
     t_sel, pos_sel = time.monotonic(), game.pos
@@ -545,19 +566,7 @@ def play_mission(game, rec, deadline):
     rec["reached"] = reached
     if result is None:
         t_play, p_play, cpu_play = time.monotonic(), game.pos, game.cpu_user()
-        tick = 0
-        while time.monotonic() - t_play < PLAY_SECONDS and game.alive():
-            t = time.monotonic() - t_play
-            bits = {"up"}
-            if tick % 12 < 2: bits.add("cross")
-            if 5 <= tick % 20 < 7: bits.add("square")
-            if 10 <= tick % 35 < 12: bits.add("circle")
-            if int(t // 6) % 4 == 1: bits.add("left")
-            if int(t // 6) % 4 == 3: bits.add("right")
-            game.mask(bits)
-            tick += 1
-            time.sleep(0.1)
-        game.mask(())
+        play_script(game, PLAY_SECONDS, 6)
         game.poll()
         t_end = time.monotonic()
         rec["play_seconds"] = round(t_end - t_play, 1)
@@ -716,6 +725,114 @@ def run_missions(args):
     return 0 if all_ok and not summary["save_dir_changed"] else 1
 
 
+# Story Mode map order as the map shows it: (name, "level,mode,player" as the map's ChangeMap hands to SetCurrentLevel;
+# mode 1 is Story Mode, player 0 Tarzan; level ids are the order of the w1_1_gm, w1_2_raft... names in the ELF).
+MISSIONS = [(name, f"{level},1,0") for name, level in (
+    ("Free The Young", 1), ("Surf For Terk", 2), ("Hang-sliding", 3), ("Tarzan Vs. Wolff", 4),
+    ("In Search Of Porter", 6), ("Skiing The Swamp", 7), ("Hunter's Trail", 8), ("Crocodile Clash", 9),
+    ("Into The Caverns", 11), ("Underground Rapids", 12), ("Subterranean Search", 13), ("The Elephant Graveyard", 14))]
+
+
+def pick_mission(arg):
+    """1-based index or a name (case-insensitive prefix/substring) -> (index, name, boot spec); None when unknown."""
+    if arg.isdigit():
+        i = int(arg) - 1
+        return (i, *MISSIONS[i]) if 0 <= i < len(MISSIONS) else None
+    hits = [(i, n, spec) for i, (n, spec) in enumerate(MISSIONS) if arg.casefold() in n.casefold()]
+    return hits[0] if len(hits) == 1 else None
+
+
+def run_mission(args, mission):
+    """Boot into one mission through the boot-mission hook, wait for its log lines, play, report the usual summary."""
+    index, name, spec = mission
+    seconds = args.seconds or 150
+    out = (args.out or ROOT / "build/runs" / time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    if not ELF.is_file():
+        print("extracted/disc/SLES_503.50 missing -> ./tz disc <iso>", file=sys.stderr)
+        return 2
+    user_dir = out / "user-dir"
+    user_dir.mkdir()
+    write_run_settings(user_dir, skip_logos=True, language=0)
+    os.environ["TARZAN_BOOT_MISSION"] = spec
+    before = save_hash(REAL_SUPPORT)
+    started = time.monotonic()
+    deadline = started + seconds
+    game = Game(out, "mission", user_dir, None)
+    marks, marks_pos, notes, pos = {}, {}, [], 0
+    waits = (("start", r"\[tarzan-mission\] start level", 60), ("loaded", r"\[tarzan-mission\] level-loaded n=2", 60))
+    reached = "timeout"
+    play = (60 if args.measure else 10)
+    try:
+        for key, pattern, limit in waits:
+            end = min(deadline, time.monotonic() + limit)
+            while key not in marks and time.monotonic() < end and game.alive():
+                game.poll()
+                chunk = game.text(pos)
+                m = re.search(pattern, chunk)
+                if m:
+                    marks[key] = time.monotonic()
+                    pos += len(chunk[:m.end()].encode())
+                    marks_pos[key] = pos
+                else:
+                    time.sleep(0.1)
+            if key not in marks:
+                notes.append(f"no '{key}' log line within {limit} s" if game.alive() else "game exited early")
+                break
+        target = args.fps_target or 25
+        while len(marks) == len(waits) and "playable" not in marks and game.alive() and time.monotonic() < deadline:
+            game.poll()  # loading and transitions present at 50 fields/s: playable is two steady periodic samples
+            last = [p for p in game.periodic if p[0] > marks["loaded"]][-2:]
+            if len(last) == 2 and all(0.8 * target <= p[4] <= 1.25 * target for p in last):
+                marks["playable"], marks_pos["playable"] = time.monotonic(), game.pos
+            else:
+                time.sleep(0.2)
+        if "playable" not in marks and len(marks) == len(waits):
+            notes.append("no steady frame rate after the level loaded")
+        if "playable" in marks:
+            t_play, p_play, cpu_play = time.monotonic(), game.pos, game.cpu_user()
+            play_script(game, play, 2.5)
+            game.poll()
+            t_end = time.monotonic()
+            marks["played"] = t_end
+            samples = [p[4] for p in game.periodic if t_play + 5.5 <= p[0] <= t_end + 0.5]
+            fps_gameplay = round(sum(samples) / len(samples), 1) if samples else None
+            if game.alive():
+                reached = "gameplay"
+    finally:
+        game.stop()
+    text = game.text()
+    metrics = parse_log(text)
+    if "playable" in marks_pos:  # loading bursts underruns (a known mission-transition artifact); judge play after it
+        metrics.update({k: v for k, v in parse_log(game.text(marks_pos["playable"])).items() if k.startswith("audio_")})
+    crash = crash_from(text, game.returncode, game.killed)
+    if crash:
+        reached = "crash"
+    if reached == "gameplay" and any(m in text for m in FAULT_MARKERS):
+        reached = "fault"
+    saves = [str(f.relative_to(user_dir)) for f in (user_dir / "memcards").rglob("*") if f.is_file()] if (user_dir / "memcards").is_dir() else []
+    changed = save_hash(REAL_SUPPORT) != before
+    if saves:
+        notes.append("mission run wrote save files: " + ", ".join(saves))
+    t = lambda a, b: round(marks[b] - marks[a], 1) if a in marks and b in marks else None
+    phases = {"boot_s": round(marks["start"] - started, 1) if "start" in marks else None, "load_s": t("start", "loaded"),
+              "settle_s": t("loaded", "playable"), "play_s": t("playable", "played")}
+    summary = {
+        "reached": reached, "target": "gameplay", "seconds": round(time.monotonic() - started, 1), "mission": name,
+        "phases": phases, "fps_gameplay": fps_gameplay if "played" in marks else None,
+        "scene": "playable" if "playable" in marks else None, "fps_dispfb2": metrics.get("fps_dispfb2"),
+        "cpu_user_s": game.cpu_user_s, "cpu_sys_s": game.cpu_sys_s,
+        "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
+        "audio_boundary_underruns": metrics.get("audio_boundary_underruns"), "audio_overruns": metrics.get("audio_overruns"),
+        "vu_native_fail": metrics.get("vu_native_fail"), "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
+        "black_frames": None, "save_dir_changed": changed or bool(saves), "exit_code": game.returncode, "profile_top": None,
+        "menu_confirmed_s": None, "keys": [], "notes": notes, "crash_report": None, "log": str(game.log_path),
+        "user_dir": str(user_dir), "quit_clean": None,
+    }
+    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return 0 if reached == "gameplay" and not summary["save_dir_changed"] and not summary["audio_underruns"] else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, help="run directory (default build/runs/<UTC>)")
@@ -724,6 +841,7 @@ def main():
     ap.add_argument("--fps-target", type=int, choices=(60, 120), help="opt into a high-FPS target in this isolated run")
     ap.add_argument("--measure", action="store_true", help="collect a 60-second steady gameplay window")
     ap.add_argument("--route", choices=("none", "first-mission", "missions"), default="none")
+    ap.add_argument("--mission", help="boot straight into one Story Mode mission: 1-based index or name (see MISSIONS)")
     ap.add_argument("--user-dir", type=Path)
     ap.add_argument("--save", type=Path, help="fixture directory containing a non-empty memcards/ subtree")
     ap.add_argument("--runner", type=Path)
@@ -743,6 +861,13 @@ def main():
     args = ap.parse_args()
     if args.fps_target:
         os.environ["TARZAN_EXPERIMENT_FPS"] = str(args.fps_target)
+    if args.mission:
+        if args.route != "none" or args.app or args.save or args.user_dir or args.runner or args.desktop_input:
+            ap.error("--mission uses its own isolated user dir and the build runner; no --route/--app/--save/--user-dir/--runner/--desktop-input")
+        mission = pick_mission(args.mission)
+        if not mission:
+            ap.error("unknown mission; use 1-%d or a unique part of: %s" % (len(MISSIONS), ", ".join(n for n, _ in MISSIONS)))
+        return run_mission(args, mission)
     if args.route == "missions":
         if args.app or args.save or args.user_dir or args.runner or args.desktop_input:
             ap.error("--route missions uses its own isolated user dirs and the build runner; no --app/--save/--user-dir/--runner/--desktop-input")

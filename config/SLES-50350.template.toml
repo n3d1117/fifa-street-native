@@ -1181,6 +1181,12 @@ redirect = "0x2dada4"
 address = "0x35e2c4"  # startup jal: skip the logo movie, continue at 0x35e2cc
 when = "before"
 redirect = "0x35e2cc"
+[[hooks]]
+address = "0x2dbfb0"  # CLevelManager::SetCurrentLevel entry (mission start log)
+when = "before"
+[[hooks]]
+address = "0x345590"  # DLG_vEndOfLevelLoading entry (level loaded log)
+when = "before"
 
 # Performance critical functions (may need manual optimization)
 [performance]

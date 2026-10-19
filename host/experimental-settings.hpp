@@ -32,6 +32,8 @@ int tarzan_experiments_skip_logos();
 int tarzan_experiments_extra_lives_99();
 int tarzan_experiments_unlimited_spears();
 int tarzan_experiments_unlock_all_missions();
+// Diagnostic boot mission (TARZAN_BOOT_MISSION): the level id, or -1 when off; mode and player by pointer.
+int tarzan_experiments_boot_mission(int* mode, int* player);
 int tarzan_experiments_builtin_cheat(const uint8_t* rdram, uint32_t owner);
 int tarzan_experiments_skip_startup_logo(const uint8_t* rdram, uint32_t name);
 // Call only after the guest accepts a language selection.

@@ -308,10 +308,10 @@ extern "C" void tarzan_experiments_configure(const char* userDirectory) {
     s_active = settings;
     s_pending = settings;
     std::fprintf(stderr, "[tarzan-settings] highFps=%d target=%d widescreen=%d scale=%d sharp=%d rememberLanguage=%d "
-                         "lastLanguage=%d skipLogos=%d lives99=%d spears=%d unlockMissions=%d wallClock=%d\n",
+                         "lastLanguage=%d skipLogos=%d lives99=%d spears=%d unlockMissions=%d wallClock=%d bootLevel=%d\n",
                  settings.highFps, settings.targetFps, settings.hdWidescreen, settings.renderScale,
                  settings.sharperImage, settings.rememberLanguage, settings.lastLanguage, settings.skipLogos,
-                 settings.extraLives99, settings.unlimitedSpears, settings.unlockAllMissions, settings.wallClock);
+                 settings.extraLives99, settings.unlimitedSpears, settings.unlockAllMissions, settings.wallClock, settings.bootLevel);
     s_savedLanguage.store(settings.lastLanguage, std::memory_order_relaxed);
 }
 
@@ -339,6 +339,11 @@ extern "C" int tarzan_experiments_saved_language() {
 extern "C" int tarzan_experiments_skip_logos() { return s_active.skipLogos ? 1 : 0; }
 extern "C" int tarzan_experiments_extra_lives_99() { return s_active.extraLives99 ? 1 : 0; }
 extern "C" int tarzan_experiments_unlimited_spears() { return s_active.unlimitedSpears ? 1 : 0; }
+extern "C" int tarzan_experiments_boot_mission(int* mode, int* player) {
+    *mode = s_active.bootMode;
+    *player = s_active.bootPlayer;
+    return s_active.bootLevel;
+}
 extern "C" int tarzan_experiments_unlock_all_missions() { return s_active.unlockAllMissions ? 1 : 0; }
 
 extern "C" void tarzan_experiments_accept_language(uint32_t languageID) {

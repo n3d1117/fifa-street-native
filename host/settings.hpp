@@ -23,6 +23,9 @@ struct Settings {
     bool unlimitedSpears = false;
     bool unlockAllMissions = false;
     bool wallClock = true;         // pace guest time from the host clock (PS2X_WALLCLOCK=0 turns it off)
+    int bootLevel = -1;            // diagnostic, env only (TARZAN_BOOT_MISSION=level,mode,player): start this level after boot
+    int bootMode = 0;
+    int bootPlayer = 0;
 
     friend bool operator==(const Settings&, const Settings&) = default;
 };
@@ -35,7 +38,7 @@ Settings load_settings_file(const std::string& user_dir);
 
 // Debug overrides, applied after the file: TARZAN_EXPERIMENT_HD=1,
 // TARZAN_EXPERIMENT_FPS=60|120, TARZAN_EXPERIMENT_SCALE=1..4,
-// TARZAN_EXPERIMENT_SHARP=1, PS2X_WALLCLOCK=0.
+// TARZAN_EXPERIMENT_SHARP=1, PS2X_WALLCLOCK=0, TARZAN_BOOT_MISSION=level,mode,player.
 void apply_env_overrides(Settings& settings, EnvLookup lookup);
 
 // Writes every user option, keeping keys this build does not know about.

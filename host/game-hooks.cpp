@@ -9,6 +9,7 @@
 #include "game_overrides.h"
 #include "experimental-settings.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -16,6 +17,8 @@ namespace {
 
 // Hook ABI: (rdram, ctx, runtime). Registers follow the MIPS names used by the
 // original text patches: $at=1 $v0=2 $a0=4 $s0=16 $s1=17 $s2=18 $sp=29 $ra=31.
+
+void missionMenuTick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
 
 // Camera: PAL-M zoom constant, applied after `lui $v0, 0x3F00` at 0x369a3c.
 uint32_t cameraZoom(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
@@ -68,14 +71,80 @@ uint32_t languageStart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
 }
 
 // Language: advance saved-language startup state once per CMenu::Process entry.
-uint32_t languageMenu(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
+uint32_t languageMenu(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
     tarzan_experiments_boot_language_menu(rdram, GPR_U32(ctx, 4));
+    missionMenuTick(rdram, ctx, runtime);
+    return 0;
+}
+
+// Boot mission (diagnostic, TARZAN_BOOT_MISSION): after the menu level is up and the language is settled,
+// call the game's own mission start, CLevelManager::SetCurrentLevel(this, level, mode, player), exactly as the
+// map's ChangeMap handler does after its lock check and story movie. Saves are never touched.
+constexpr uint32_t kSetCurrentLevel = 0x2DBFB0u;
+constexpr uint32_t kLevelManagerInstance = 0x281E00u;
+constexpr uint32_t kLevelNameBuffer = 0x4D19AEu;
+constexpr uint32_t kMenuTicksBeforeStart = 25u;
+std::atomic<bool> g_languageDone{false};
+std::atomic<uint32_t> g_menuTicks{0}, g_levelLoads{0};
+std::atomic<bool> g_missionRequested{false};
+
+uint32_t callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t entry,
+                   uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3) {
+    PS2Runtime::RecompiledFunction fn = runtime->lookupFunction(entry);
+    if (!fn) return 0;
+    const R5900Context saved = *ctx;
+    SET_GPR_U32(ctx, 29, (GPR_U32(ctx, 29) - 0x100u) & ~0xFu);
+    SET_GPR_U32(ctx, 31, saved.pc);
+    SET_GPR_U32(ctx, 4, a0);
+    SET_GPR_U32(ctx, 5, a1);
+    SET_GPR_U32(ctx, 6, a2);
+    SET_GPR_U32(ctx, 7, a3);
+    ctx->in_delay_slot = false;
+    ctx->pc = entry;
+    fn(rdram, ctx, runtime);
+    const uint32_t result = GPR_U32(ctx, 2);
+    *ctx = saved;
+    return result;
+}
+
+void missionMenuTick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+    int mode = 0, player = 0;
+    const int level = tarzan_experiments_boot_mission(&mode, &player);
+    if (level < 0 || g_missionRequested.load() || !g_languageDone.load()) return;
+    if (g_menuTicks.fetch_add(1) + 1 < kMenuTicksBeforeStart) return;
+    g_missionRequested.store(true);
+    const uint32_t manager = callGuest(rdram, ctx, runtime, kLevelManagerInstance, 0, 0, 0, 0);
+    std::fprintf(stderr, "[tarzan-mission] start level=%d mode=%d player=%d manager=0x%x inLevelMode=%u loads=%u\n", level, mode, player, manager, (unsigned)READ8(0x4D1748u), g_levelLoads.load());
+    if (!manager) return;
+    callGuest(rdram, ctx, runtime, kSetCurrentLevel, manager, static_cast<uint32_t>(level),
+              static_cast<uint32_t>(mode), static_cast<uint32_t>(player));
+}
+
+bool missionActive() {
+    int mode, player;
+    return tarzan_experiments_boot_mission(&mode, &player) >= 0;
+}
+
+uint32_t missionLevelRequested(uint8_t *, R5900Context *ctx, PS2Runtime *) {
+    if (!missionActive()) return 0;
+    std::fprintf(stderr, "[tarzan-mission] SetCurrentLevel a1=0x%x a2=0x%x a3=0x%x\n",
+                 GPR_U32(ctx, 5), GPR_U32(ctx, 6), GPR_U32(ctx, 7));
+    return 0;
+}
+
+uint32_t missionLevelLoaded(uint8_t *rdram, R5900Context *, PS2Runtime *) {
+    const uint32_t count = g_levelLoads.fetch_add(1) + 1;
+    if (!missionActive()) return 0;
+    char name[32] = {};
+    std::memcpy(name, rdram + kLevelNameBuffer, sizeof(name) - 1);
+    std::fprintf(stderr, "[tarzan-mission] level-loaded n=%u name=%.31s\n", count, name);
     return 0;
 }
 
 // Language: request handler returned success (0x2cd48c) / language change accepted (0x2c0e40).
 uint32_t languageAccepted(uint8_t *, R5900Context *ctx, PS2Runtime *) {
     tarzan_experiments_language_accepted(GPR_U32(ctx, 16));
+    g_languageDone.store(true);
     return 0;
 }
 
@@ -114,7 +183,7 @@ const Hook kHooks[] = {
     {0x35EC74u, true, fpsInit},      {0x3F8DF4u, true, fpsSync},    {0x360388u, true, clockTrace},
     {0x34FCE0u, false, languageStart}, {0x350350u, false, languageMenu},
     {0x2CD48Cu, false, languageAccepted}, {0x2C0E40u, false, languageAccepted},
-    {0x2DAC2Cu, false, cheats},      {0x35E2C4u, false, skipLogo},
+    {0x2DAC2Cu, false, cheats},      {0x2DBFB0u, false, missionLevelRequested}, {0x345590u, false, missionLevelLoaded},      {0x35E2C4u, false, skipLogo},
 };
 
 struct Word {
@@ -132,7 +201,7 @@ const Word kExpected[] = {
     {0x2DAE68, 0x24060001}, {0x35E2B0, 0x3C02004B}, {0x35E2B4, 0x24446460},
     {0x35E2C4, 0x0C0D8EAC}, {0x35E2C8, 0x70004628}, {0x4B6460, 0x6F676F4C},
     {0x34FCE0, 0x0C0D5B88}, {0x350350, 0x27BDFFB0}, {0x2CD48C, 0x7BBF0010},
-    {0x2C0E40, 0x24020001}, {0x2DB810, 0x27BDFFC0}, {0x2C3E90, 0x27BDFED0},
+    {0x2C0E40, 0x24020001}, {0x2DBFB0, 0x27BDFF30}, {0x281E00, 0x27BDFFD0}, {0x345590, 0x27BDFFD0}, {0x2DB810, 0x27BDFFC0}, {0x2C3E90, 0x27BDFED0},
     {0x2C41DC, 0x0C0B6E04}, {0x2C43A4, 0x0C0B6E04}, {0x2C441C, 0x0C0B6E04},
     {0x2C448C, 0x0C0B6E04}, {0x2C4634, 0x0C0B6E04}, {0x2C46CC, 0x0C0B6E04},
 };
