@@ -1,0 +1,227 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 18:00:27 +0200
+Subject: [PATCH 46/47] Discovery: a jump or branch into code no function
+ covers (or only a stub's extent) is a function start
+
+
+diff --git a/ps2xRecomp/src/lib/control_flow_analyzer.cpp b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+index ed7578dd19d169ba1890b746e6df070ff2984739..72e68a2ed330778589a94c9d006dfe6683dfdd8a 100644
+--- a/ps2xRecomp/src/lib/control_flow_analyzer.cpp
++++ b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+@@ -85,6 +85,9 @@ namespace ps2recomp
+             const Function *containingFn = findContainingExternalFunction(target);
+             if (!containingFn)
+             {
++                // Tail call into code no discovered function covers (or only a
++                // stub's extent): the target is itself a function start.
++                result.externalEntryPoints.insert(target);
+                 return;
+             }
+ 
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index 56736018db88fe684caedb36e21afaa7f9977371..a2336cc77bfe36c4380d6d3a3b6a9712504503b9 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -1964,6 +1964,87 @@ namespace ps2recomp
+             }
+         }
+ 
++        // Tail calls: a J or branch that leaves its function for code no recompiled
++        // function covers (typically inside a stub's extent) marks a function start.
++        // Each new function can expose further targets, so iterate to a fixed point.
++        for (size_t pass = 0; pass < 16u; ++pass)
++        {
++            std::vector<std::pair<uint32_t, uint32_t>> ranges;
++            ranges.reserve(m_functions.size());
++            for (const auto &function : m_functions)
++            {
++                if (function.isRecompiled && !function.isStub && !function.isSkipped &&
++                    function.end > function.start)
++                {
++                    ranges.emplace_back(function.start, function.end);
++                }
++            }
++            std::sort(ranges.begin(), ranges.end());
++            std::vector<uint32_t> prefixMaxEnd;
++            prefixMaxEnd.reserve(ranges.size());
++            uint32_t runningEnd = 0u;
++            for (const auto &range : ranges)
++            {
++                runningEnd = std::max(runningEnd, range.second);
++                prefixMaxEnd.push_back(runningEnd);
++            }
++            auto covered = [&](uint32_t address) -> bool
++            {
++                auto it = std::upper_bound(ranges.begin(), ranges.end(), std::make_pair(address, UINT32_MAX));
++                if (it == ranges.begin())
++                {
++                    return false;
++                }
++                return prefixMaxEnd[static_cast<size_t>(std::distance(ranges.begin(), it)) - 1u] > address;
++            };
++
++            std::unordered_set<uint32_t> tailCallStarts;
++            for (const auto &function : m_functions)
++            {
++                if (!function.isRecompiled || function.isStub || function.isSkipped)
++                {
++                    continue;
++                }
++                auto decodedIt = m_decodedFunctions.find(function.start);
++                if (decodedIt == m_decodedFunctions.end())
++                {
++                    continue;
++                }
++                const auto analysis = m_codeGenerator->collectInternalBranchTargets(
++                    function, decodedIt->second, &m_functions);
++                for (uint32_t target : analysis.externalEntryPoints)
++                {
++                    if (!covered(target))
++                    {
++                        tailCallStarts.insert(target);
++                    }
++                }
++            }
++
++            if (tailCallStarts.empty())
++            {
++                break;
++            }
++
++            const EntryDiscoveryStats tailStats = discoverAdditionalEntryPointsImpl(
++                m_functions,
++                m_decodedFunctions,
++                m_sections,
++                nullptr,
++                [this](Function &function)
++                { return decodeFunction(function); },
++                tailCallStarts);
++            if (tailStats.discoveredCount == 0u)
++            {
++                break;
++            }
++            m_reporter.recordAdditionalEntryPoints(tailStats.discoveredCount);
++            std::ostringstream msg;
++            msg << "tail-call discovery pass " << (pass + 1u) << ": "
++                << tailStats.discoveredCount << " new function start(s)";
++            m_reporter.progress(msg.str());
++        }
++
+         auto findContainingFunction = [&](uint32_t address) -> const Function *
+         {
+             const Function *best = nullptr;
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index 7bdb0be452fd8cad122f414d7e4b580903c20534..1853da513cc57f0f072a223dbafbb8b82482dcac 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -947,6 +947,42 @@ void register_code_generator_tests()
+                  "cross-function jump into the middle of a function should become an external entry candidate");
+     });
+ 
++    tc.Run("control-flow analysis reports a jump to uncovered code as an external entry candidate", [](TestCase &t) {
++        Function caller;
++        caller.name = "caller";
++        caller.start = 0x4000;
++        caller.end = 0x4008;
++        caller.isRecompiled = true;
++        caller.isStub = false;
++
++        Function stub;
++        stub.name = "sdk_stub";
++        stub.start = 0x5000;
++        stub.end = 0x5100;
++        stub.isRecompiled = false;
++        stub.isStub = true;
++
++        Instruction j{};
++        j.address = 0x4000;
++        j.opcode = OPCODE_J;
++        j.target = (0x5040u >> 2) & 0x3FFFFFFu;
++        j.hasDelaySlot = true;
++        j.raw = (OPCODE_J << 26) | (j.target & 0x3FFFFFFu);
++
++        std::vector<Instruction> instructions{j, makeNop(0x4004)};
++        std::vector<Function> functions{caller, stub};
++        std::vector<Section> sections = {
++            {".text", 0x4000u, 0x2000u, 0u, true, false, false, true, nullptr}
++        };
++
++        CodeGenerator gen({}, sections);
++        CodeGenerator::AnalysisResult analysis =
++            gen.collectInternalBranchTargets(caller, instructions, &functions);
++
++        t.IsTrue(analysis.externalEntryPoints.contains(0x5040u),
++                 "tail call into a stub's extent should become a function start");
++    });
++
+     tc.Run("control-flow analysis promotes JALR fallthrough as a resumable entry", [](TestCase &t) {
+         Function func;
+         func.name = "jalr_resume";
+diff --git a/ps2xTest/src/ps2_recompiler_tests.cpp b/ps2xTest/src/ps2_recompiler_tests.cpp
+index 963238bb76d324ec1ab64d2f8995d5eed1230206..fbaf1dbbb998923b5800d8294a3cce75d4b53753 100644
+--- a/ps2xTest/src/ps2_recompiler_tests.cpp
++++ b/ps2xTest/src/ps2_recompiler_tests.cpp
+@@ -247,7 +247,8 @@ static bool writeMinimalMipsElfWithReginfo(const std::filesystem::path &elfPath,
+     return writer.save(elfPath.string());
+ }
+ 
+-static bool writeMinimalMipsElfWithUnmappedEntryHint(const std::filesystem::path &elfPath)
++static bool writeMinimalMipsElfWithUnmappedEntryHint(const std::filesystem::path &elfPath,
++                                                     uint32_t firstWord = 0x03E00008u)
+ {
+     ELFIO::elfio writer;
+     writer.create(ELFIO::ELFCLASS32, ELFIO::ELFDATA2LSB);
+@@ -262,7 +263,7 @@ static bool writeMinimalMipsElfWithUnmappedEntryHint(const std::filesystem::path
+     text->set_addr_align(4);
+     text->set_address(0x00100000u);
+     const std::array<uint32_t, 10> textWords = {
+-        0x03E00008u, 0x00000000u, // known function at 0x00100000
++        firstWord, 0x00000000u, // known function at 0x00100000
+         0x00000000u, 0x00000000u,
+         0x03E00008u, 0x00000000u, // omitted entry at 0x00100010
+         0x00000000u, 0x00000000u,
+@@ -1503,6 +1504,43 @@ void register_ps2_recompiler_tests()
+             std::filesystem::remove_all(tempRoot, removeError);
+         });
+ 
++        tc.Run("a J into a stub's extent synthesizes a function start there", [](TestCase &t) {
++            const std::string uniqueSuffix =
++                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
++            const std::filesystem::path tempRoot =
++                std::filesystem::temp_directory_path() / ("ps2recomp-tailcall-" + uniqueSuffix);
++            const std::filesystem::path elfPath = tempRoot / "tailcall.elf";
++            const std::filesystem::path configPath = tempRoot / "tailcall.toml";
++            const std::filesystem::path outputPath = tempRoot / "output";
++            std::filesystem::create_directories(tempRoot);
++
++            // known_before: j 0x00100010, inside the stub at 0x00100008..0x00100020.
++            const bool elfWritten = writeMinimalMipsElfWithUnmappedEntryHint(elfPath, 0x08040004u);
++            const bool configWritten = writeRecompilerTestConfig(
++                configPath, elfPath, outputPath, {}, {"InitAlarm@0x00100008"});
++            t.IsTrue(elfWritten && configWritten, "tail-call regression inputs should be generated");
++
++            if (elfWritten && configWritten)
++            {
++                PS2Recompiler recompiler(configPath.string());
++                t.IsTrue(recompiler.initialize(), "tail-call config should initialize");
++                t.IsTrue(recompiler.recompile(), "tail-call ELF should recompile");
++                recompiler.generateOutput();
++
++                std::ifstream registrationFile(outputPath / "register_functions.cpp");
++                const std::string registration{
++                    std::istreambuf_iterator<char>(registrationFile),
++                    std::istreambuf_iterator<char>()};
++                t.IsTrue(registration.find("// 0x100010") != std::string::npos,
++                         "the J target must be registered as a function start");
++                t.IsTrue(recompiler.reportCounters().additionalEntryPoints >= 1u,
++                         "the tail-call start is counted as a discovered entry");
++            }
++
++            std::error_code removeError;
++            std::filesystem::remove_all(tempRoot, removeError);
++        });
++
+         tc.Run("standalone entry_ blocks register resume points for their JAL return addresses", [](TestCase &t) {
+             const std::string uniqueSuffix =
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());

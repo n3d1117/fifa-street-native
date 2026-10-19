@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 18:00:30 +0200
+Subject: [PATCH 47/47] Control flow: a JALR is a call; it needs its return
+ point, not an entry at every instruction
+
+
+diff --git a/ps2xRecomp/src/lib/control_flow_analyzer.cpp b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+index 72e68a2ed330778589a94c9d006dfe6683dfdd8a..dcaa9a17a7f56567ec59ec6f662b25e536e67b06 100644
+--- a/ps2xRecomp/src/lib/control_flow_analyzer.cpp
++++ b/ps2xRecomp/src/lib/control_flow_analyzer.cpp
+@@ -197,7 +197,10 @@ namespace ps2recomp
+             {
+                 if (jrInst->function == SPECIAL_JALR)
+                 {
++                    // A JALR is a call: its target is another function and
++                    // control comes back at +8, which is the only entry it needs.
+                     queueResumeEntryTarget(jrInst->address + 8u);
++                    continue;
+                 }
+ 
+                 bool foundTable = false;
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index 1853da513cc57f0f072a223dbafbb8b82482dcac..f3bd6d19124a017d39d37f13006236edd1524062 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -983,6 +983,36 @@ void register_code_generator_tests()
+                  "tail call into a stub's extent should become a function start");
+     });
+ 
++    tc.Run("control-flow analysis does not fall back over every instruction for JALR calls", [](TestCase &t) {
++        Function func;
++        func.name = "jalr_only";
++        func.start = 0x1200;
++        func.end = 0x1218;
++        func.isRecompiled = true;
++        func.isStub = false;
++
++        std::vector<Instruction> instructions;
++        instructions.push_back(makeNop(0x1200));
++        instructions.push_back(makeJalr(0x1204, 2, 31));
++        instructions.push_back(makeNop(0x1208));
++        instructions.push_back(makeNop(0x120C));
++        instructions.push_back(makeJr(0x1210, 31));
++        instructions.push_back(makeNop(0x1214));
++
++        std::vector<Function> functions{func};
++        std::vector<Section> sections = {
++            {".text", 0x1000u, 0x1000u, 0u, true, false, false, true, nullptr}
++        };
++
++        CodeGenerator gen({}, sections);
++        CodeGenerator::AnalysisResult analysis =
++            gen.collectInternalBranchTargets(func, instructions, &functions);
++
++        t.IsTrue(analysis.resumeEntryPoints.contains(0x120Cu), "JALR return point stays resumable");
++        t.IsTrue(analysis.indirectFallbackEntryPoints.empty(),
++                 "JALR is a call and must not promote every instruction");
++    });
++
+     tc.Run("control-flow analysis promotes JALR fallthrough as a resumable entry", [](TestCase &t) {
+         Function func;
+         func.name = "jalr_resume";
+@@ -1041,7 +1071,7 @@ void register_code_generator_tests()
+                   "unresolved JR should not pretend it has a resolved local jump table");
+     });
+ 
+-    tc.Run("unresolved JALR marks internal labels as indirect fallback resume entries", [](TestCase &t) {
++    tc.Run("unresolved JALR resumes at its return point only, with no indirect fallback labels", [](TestCase &t) {
+         Function func;
+         func.name = "unresolved_jalr_fallback";
+         func.start = 0x3200;
+@@ -1060,10 +1090,12 @@ void register_code_generator_tests()
+         CodeGenerator gen({}, {});
+         CodeGenerator::AnalysisResult analysis = gen.collectInternalBranchTargets(func, instructions);
+ 
+-        t.IsTrue(analysis.indirectFallbackEntryPoints.contains(0x320Cu),
+-                 "unresolved JALR should register internal labels as resumable entries for the owning function");
+-        t.IsTrue(analysis.entryPoints.contains(0x320Cu),
+-                 "unresolved JALR fallback targets should still emit labels in the owner");
++        t.IsTrue(analysis.resumeEntryPoints.contains(0x320Cu),
++                 "unresolved JALR should keep its return point resumable");
++        t.IsTrue(analysis.indirectFallbackEntryPoints.empty(),
++                 "a JALR call must not promote every instruction as a fallback entry");
++        t.IsFalse(analysis.entryPoints.contains(0x3210u),
++                  "instructions that are not return points get no entry");
+         t.IsFalse(analysis.jumpTableTargets.contains(0x3204u),
+                   "unresolved JALR should not pretend it has a resolved local jump table");
+     });
