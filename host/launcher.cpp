@@ -5,11 +5,15 @@
 #include "runtime/ps2_host_arena.h"
 
 #include <cstdlib>
+#include <cstdint>
+#include <cstring>
 #include <exception>
+#include <fstream>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <mach-o/dyld.h>
@@ -109,6 +113,35 @@ std::filesystem::path resolveDefaultElf(const std::filesystem::path &relative)
         }
     }
     return relative;
+}
+
+// PT_LOAD ranges of a 32-bit little-endian ELF.
+std::vector<std::pair<uint32_t, uint32_t>> elfLoadSegments(const std::filesystem::path &elf)
+{
+    std::vector<std::pair<uint32_t, uint32_t>> segments;
+    std::ifstream in(elf, std::ios::binary);
+    unsigned char header[52];
+    if (!in.read(reinterpret_cast<char *>(header), sizeof(header)))
+        return segments;
+    uint32_t phoff;
+    uint16_t phentsize, phnum;
+    std::memcpy(&phoff, header + 28, 4);
+    std::memcpy(&phentsize, header + 42, 2);
+    std::memcpy(&phnum, header + 44, 2);
+    for (uint16_t i = 0; i < phnum; ++i)
+    {
+        unsigned char entry[32];
+        in.seekg(static_cast<std::streamoff>(phoff) + static_cast<std::streamoff>(i) * phentsize);
+        if (!in.read(reinterpret_cast<char *>(entry), sizeof(entry)))
+            break;
+        uint32_t type, vaddr, memsz;
+        std::memcpy(&type, entry, 4);
+        std::memcpy(&vaddr, entry + 8, 4);
+        std::memcpy(&memsz, entry + 20, 4);
+        if (type == 1u && memsz != 0u)
+            segments.emplace_back(vaddr, vaddr + memsz);
+    }
+    return segments;
 }
 
 void printUsage(const char *program)
@@ -216,6 +249,11 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         // neither slow it down nor accelerate audio during movie playback.
         hostConfig.wallClock = host::active_settings().wallClock;
         ps2SetHostConfig(hostConfig);
+        // Callback and interrupt stacks live in kernel RAM below the ELF, never on the game's stack or heap.
+        uint32_t kernelStackFloor = 0, kernelStackTop = 0;
+        if (!ps2KernelStackArena(elfLoadSegments(elfPath), kernelStackFloor, kernelStackTop))
+            throw std::runtime_error("No kernel stack range below the ELF's load segments");
+        ps2SetRuntimeArena(0u, 0u, kernelStackFloor, kernelStackTop);
         // Never destroyed: teardown order of the runtime's threads is not worth
         // risking after the window is gone; the process exits right after.
         PS2Runtime &runtime = *new PS2Runtime;
