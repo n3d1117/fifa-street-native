@@ -227,7 +227,7 @@ def main():
     if args.save:
         logf.write(f"[probe] seeded {card_files} memory-card files from fixture into {user_dir / 'memcards'}\n".encode())
         logf.flush()
-    # Own process group so nothing the game spawns outlives the run; probe death (SIGTERM, SIGHUP, a
+    # Own process group (not a new session: the terminal keeps its file-access grant) so nothing the game spawns outlives the run; probe death (SIGTERM, SIGHUP, a
     # closed pipe) unwinds through the same cleanup as a timeout.
     def _unwind(signum, _frame):
         raise KeyboardInterrupt
@@ -235,7 +235,7 @@ def main():
         signal.signal(sig, _unwind)
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT,
-                            start_new_session=True)
+                            preexec_fn=os.setpgrp)
     exit_watch = select.kqueue()
     exit_watch.control([select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,

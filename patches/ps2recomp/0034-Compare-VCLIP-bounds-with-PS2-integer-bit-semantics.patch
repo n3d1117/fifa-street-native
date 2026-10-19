@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 22:29:48 +0200
-Subject: [PATCH 34/52] Compare VCLIP bounds with PS2 integer bit semantics
+Subject: [PATCH 34/53] Compare VCLIP bounds with PS2 integer bit semantics
 
 The emitter regression failed because VCLIPw used host floating comparisons. Compare signed float bit patterns against absolute Ft.w, replacing an exponent-zero bound with 0x007fffff so denormal Fs lanes never clip. Preserve all 24 history bits. Reference: PCSX2 VUops.cpp _vuCLIP; regress hardware ps2autotests vu/upper/clip.expected normal, signed-zero and MAX/MIN cases plus denormal and exponent-255 mantissa edges. ./tz test passes 54/54; full replay and route validation follow in the batch export.
 

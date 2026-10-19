@@ -319,6 +319,10 @@ def rebuild_stale_deps(run):
     return [n for n, _, _ in stale]
 
 
+# Every generated unit includes these: touching one recompiles all of generated/.
+GENERATED_INCLUDED_HEADERS = {"ps2_runtime.h", "ps2_runtime_macros.h", "ps2_syscalls.h", "ps2_stubs.h", "ps2_log.h"}
+
+
 def cmd_build(args):
     def body(run):
         check_trees(run, args.reconfigure)
@@ -337,6 +341,11 @@ def cmd_build(args):
         if not CONFIG.is_file() or CONFIG.read_text() != derived:
             CONFIG.write_text(derived)
             run.say("config derived from the template")
+        changed = subprocess.run(["git", "-C", str(ROOT / "deps/ps2recomp"), "diff", "--name-only", "HEAD"],
+                                 capture_output=True, text=True).stdout.split()
+        wide = [Path(c).name for c in changed if Path(c).name in GENERATED_INCLUDED_HEADERS]
+        if wide:
+            run.say(f"WARNING: uncommitted change to {', '.join(wide)} -> full generated-code rebuild (minutes)")
         want = generate_inputs_hash()
         have = STAMP.read_text().strip() if STAMP.is_file() else ""
         note = "generated code current"
