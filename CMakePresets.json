@@ -13,15 +13,11 @@
       "toolchainFile": "${sourceDir}/cmake/toolchain-llvm19.cmake",
       "cacheVariables": {
         "CMAKE_MAKE_PROGRAM": "${sourceDir}/tools/build/ninja-1.13.1/ninja",
-        "CMAKE_PREFIX_PATH": "${sourceDir}/tools/build/llvm19;${sourceDir}/tools/metal-deps/prefix",
-        "PKG_CONFIG_ARGN": "--static",
-        "PKG_CONFIG_EXECUTABLE": "${sourceDir}/tools/pkgconf/bin/pkg-config",
+        "CMAKE_PREFIX_PATH": "${sourceDir}/tools/build/llvm19;${sourceDir}/tools/metal-deps/prefix;${sourceDir}/tools/ffmpeg/arm64",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       },
       "environment": {
-        "ZERO_AR_DATE": "1",
-        "PKG_CONFIG_PATH": "${sourceDir}/tools/ffmpeg/arm64/lib/pkgconfig",
-        "PATH": "${sourceDir}/tools/pkgconf/bin:$penv{PATH}"
+        "ZERO_AR_DATE": "1"
       }
     },
     {

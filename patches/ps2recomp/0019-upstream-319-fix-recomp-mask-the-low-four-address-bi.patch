@@ -1,0 +1,233 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 17:13:50 +0200
+Subject: [PATCH 19/38] upstream #319: fix(recomp): mask the low four address
+ bits of quadword accesses
+
+
+diff --git a/ps2xRecomp/src/lib/instruction_translator.cpp b/ps2xRecomp/src/lib/instruction_translator.cpp
+index 4bf8c7cf866d0af5a8273987505110e419054845..c00c1ae6d279b0b5aa0e3a8ea0e26b07132a8f85 100644
+--- a/ps2xRecomp/src/lib/instruction_translator.cpp
++++ b/ps2xRecomp/src/lib/instruction_translator.cpp
+@@ -60,6 +60,18 @@ namespace ps2recomp
+                 "FAST_WRITE{}({}, _value); }} while (0)",
+                 valueType, valueType, val, addr, memoryAccessSize(width), width, width, addr);
+         }
++
++        // LQ, SQ, LQC2 and SQC2 ignore the low four bits of their effective address. READ128 and
++        // WRITE128 mask it themselves; the resolved-address and MMIO paths below bypass them.
++        uint32_t accessAddress(int width, uint32_t address)
++        {
++            return width == 128 ? (address & ~0xFu) : address;
++        }
++
++        std::string accessAddressExpr(int width, const std::string &addr)
++        {
++            return width == 128 ? fmt::format("PS2_QWORD_ADDR({})", addr) : addr;
++        }
+     }
+ 
+     InstructionTranslator::InstructionTranslator(CodeGenerator &codeGenerator)
+@@ -85,7 +97,7 @@ namespace ps2recomp
+     {
+         if (memoryHint.hasAddress)
+         {
+-            const uint32_t resolvedAddress = memoryHint.address;
++            const uint32_t resolvedAddress = accessAddress(width, memoryHint.address);
+             const std::string resolvedAddressExpr = addressLiteral(resolvedAddress);
+             if (inst.isMmio || Ps2IsSpecialAddress(resolvedAddress))
+             {
+@@ -96,7 +108,7 @@ namespace ps2recomp
+ 
+         if (inst.isMmio)
+         {
+-            return fmt::format("runtime->Load{}(rdram, ctx, {})", width, addr);
++            return fmt::format("runtime->Load{}(rdram, ctx, {})", width, accessAddressExpr(width, addr));
+         }
+         return fmt::format("READ{}({})", width, addr);
+     }
+@@ -109,7 +121,7 @@ namespace ps2recomp
+     {
+         if (memoryHint.hasAddress)
+         {
+-            const uint32_t resolvedAddress = memoryHint.address;
++            const uint32_t resolvedAddress = accessAddress(width, memoryHint.address);
+             const std::string resolvedAddressExpr = addressLiteral(resolvedAddress);
+             if (inst.isMmio || Ps2IsSpecialAddress(resolvedAddress))
+             {
+@@ -120,7 +132,7 @@ namespace ps2recomp
+ 
+         if (inst.isMmio)
+         {
+-            return fmt::format("runtime->Store{}(rdram, ctx, {}, {})", width, addr, value);
++            return fmt::format("runtime->Store{}(rdram, ctx, {}, {})", width, accessAddressExpr(width, addr), value);
+         }
+         return fmt::format("WRITE{}({}, {})", width, addr, value);
+     }
+diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
+index 50689d19124289788487224bc0a2c9f7d00a65bc..036b9ffbd0974591d8342e4478c3ee95366d1f3b 100644
+--- a/ps2xRuntime/include/ps2_runtime_macros.h
++++ b/ps2xRuntime/include/ps2_runtime_macros.h
+@@ -666,8 +666,13 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+         ? runtime->Load64(rdram, ctx, _addr)                  \
+         : FAST_READ64(_addr); }())
+ 
++// 128-bit accesses are LQ, SQ, LQC2 and SQC2. The EE ignores the low four bits of their effective
++// address (PCSX2's interpreter and recompiler mask them the same way), so neither macro can touch
++// a misaligned quadword.
++#define PS2_QWORD_ADDR(addr) ((uint32_t)(addr) & ~0xFu)
++
+ #define READ128(addr) ([&]() -> __m128i {                     \
+-    uint32_t _addr = (uint32_t)(addr);                        \
++    uint32_t _addr = PS2_QWORD_ADDR(addr);                    \
+     return PS2Runtime::isSpecialAddress(_addr)                \
+         ? runtime->Load128(rdram, ctx, _addr)                 \
+         : FAST_READ128(_addr); }())
+@@ -727,7 +732,7 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+ #define WRITE128(addr, val)                                                          \
+     do                                                                               \
+     {                                                                                \
+-        uint32_t _addr = (addr);                                                     \
++        uint32_t _addr = PS2_QWORD_ADDR(addr);                                       \
+         __m128i _value = (val);                                                      \
+         if (PS2Runtime::isSpecialAddress(_addr))                                     \
+             runtime->Store128(rdram, ctx, _addr, _value);                            \
+diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
+index 42ab0b079cf92d375dee8099475cbd9f57a206ec..6283728e57ca80fa3fd0b2a0b582ee5a12d528a4 100644
+--- a/ps2xTest/CMakeLists.txt
++++ b/ps2xTest/CMakeLists.txt
+@@ -43,6 +43,7 @@ add_library(ps2_test_lib STATIC
+     src/ps2_vu0_fdiv_tests.cpp
+     src/ps2_vu0_ftoi_tests.cpp
+     src/ps2_vu0_vf0_tests.cpp
++    src/ps2_qword_access_tests.cpp
+ )
+ 
+ # Exercise native VU helpers with the shipping arithmetic contract.
+diff --git a/ps2xTest/src/main.cpp b/ps2xTest/src/main.cpp
+index ff92de4ce78efa559e138fa1c24cafdd5109bdf8..7d306875381bfc34fd00a66f3b15fe093c808b7e 100644
+--- a/ps2xTest/src/main.cpp
++++ b/ps2xTest/src/main.cpp
+@@ -24,6 +24,7 @@ void register_ps2_fpu_order_tests();
+ void register_ps2_vu0_fdiv_tests();
+ void register_ps2_vu0_ftoi_tests();
+ void register_ps2_vu0_vf0_tests();
++void register_ps2_qword_access_tests();
+ void reset_ps2_test_function_table();
+ 
+ int main()
+@@ -52,6 +53,7 @@ int main()
+     register_ps2_vu0_fdiv_tests();
+     register_ps2_vu0_ftoi_tests();
+     register_ps2_vu0_vf0_tests();
++    register_ps2_qword_access_tests();
+     int res = MiniTest::Run();
+     std::cout.flush();
+     std::cerr.flush();
+diff --git a/ps2xTest/src/ps2_qword_access_tests.cpp b/ps2xTest/src/ps2_qword_access_tests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..b565be8ca89aaed4073f8a46e99bd80979448ae5
+--- /dev/null
++++ b/ps2xTest/src/ps2_qword_access_tests.cpp
+@@ -0,0 +1,101 @@
++#include "MiniTest.h"
++#include "ps2recomp/code_generator.h"
++#include "ps2recomp/instructions.h"
++#include "ps2recomp/r5900_decoder.h"
++#include "ps2recomp/types.h"
++#include "ps2_runtime_macros.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <vector>
++
++// The EE ignores the low four address bits of LQ, SQ, LQC2 and SQC2 (the manuals define the
++// effective address as a quadword address; PCSX2 masks it in interpreter and recompiler alike).
++// A misaligned address must access the containing quadword, not straddle two.
++
++using namespace ps2recomp;
++
++namespace
++{
++    std::string lanes(const uint32_t *words, int count)
++    {
++        std::string text;
++        for (int i = 0; i < count; ++i)
++        {
++            char word[12];
++            std::snprintf(word, sizeof(word), "%s%08X", i ? " " : "", words[i]);
++            text += word;
++        }
++        return text;
++    }
++
++    void expectWords(TestCase &t, __m128i value, const uint32_t (&expected)[4], const std::string &what)
++    {
++        alignas(16) uint32_t got[4];
++        _mm_store_si128(reinterpret_cast<__m128i *>(got), value);
++        const bool same = got[0] == expected[0] && got[1] == expected[1] && got[2] == expected[2] && got[3] == expected[3];
++        t.IsTrue(same, what + ": expected " + lanes(expected, 4) + ", got " + lanes(got, 4));
++    }
++
++    __m128i words(uint32_t w0, uint32_t w1, uint32_t w2, uint32_t w3)
++    {
++        return _mm_set_epi32(static_cast<int>(w3), static_cast<int>(w2), static_cast<int>(w1), static_cast<int>(w0));
++    }
++
++    bool contains(const std::string &text, const std::string &part)
++    {
++        return text.find(part) != std::string::npos;
++    }
++}
++
++void register_ps2_qword_access_tests()
++{
++    MiniTest::Case("PS2QuadwordAccess", [](TestCase &tc)
++    {
++        tc.Run("WRITE128 and READ128 ignore the low four address bits", [](TestCase &t)
++        {
++            std::vector<uint8_t> ram(PS2_RAM_SIZE, 0xEEu);
++            uint8_t *rdram = ram.data();
++            R5900Context context;
++            R5900Context *ctx = &context;
++            PS2Runtime *runtime = nullptr; // only touched for special (I/O) addresses
++            (void)runtime;
++            (void)ctx;
++
++            const __m128i value = words(0x00112233u, 0x44556677u, 0x8899AABBu, 0xCCDDEEFFu);
++            WRITE128(0x00100107u, value);
++            uint32_t stored[4];
++            std::memcpy(stored, rdram + 0x00100100u, sizeof(stored));
++            t.IsTrue(stored[0] == 0x00112233u && stored[1] == 0x44556677u && stored[2] == 0x8899AABBu && stored[3] == 0xCCDDEEFFu,
++                     "SQ at 0x00100107 must store the quadword at 0x00100100, got " + lanes(stored, 4));
++            t.IsTrue(rdram[0x00100110u] == 0xEEu && rdram[0x001000FFu] == 0xEEu,
++                     "SQ at 0x00100107 must not touch the neighbouring quadwords");
++
++            expectWords(t, READ128(0x0010010Fu), {0x00112233u, 0x44556677u, 0x8899AABBu, 0xCCDDEEFFu},
++                        "LQ at 0x0010010F must read the quadword at 0x00100100");
++        });
++
++        tc.Run("resolved-address and I/O quadword accesses are masked by the emitter", [](TestCase &t)
++        {
++            CodeGenerator gen({}, {});
++            Instruction sq{};
++            sq.opcode = OPCODE_SQ;
++            sq.rs = 4;
++            sq.rt = 5;
++            sq.simmediate = 7;
++            MemoryAccessHint hint;
++            hint.hasAddress = true;
++            hint.address = 0x00100107u;
++            const std::string fast = gen.translateInstruction(sq, hint);
++            t.IsTrue(contains(fast, "FAST_WRITE128(0x100100u") && !contains(fast, "0x100107"),
++                     "a resolved SQ address must be masked to 0x100100 but got: " + fast);
++
++            sq.isMmio = true;
++            const std::string io = gen.translateInstruction(sq);
++            t.IsTrue(contains(io, "runtime->Store128(rdram, ctx, PS2_QWORD_ADDR(ADD32(GPR_U32(ctx, 4), 7))"),
++                     "an I/O SQ address must go through PS2_QWORD_ADDR but got: " + io);
++        });
++    });
++}

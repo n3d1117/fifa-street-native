@@ -1,0 +1,100 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 17:21:01 +0200
+Subject: [PATCH 24/38] Reconcile local codegen tests with upstream
+ #201/#283/#319 emission (QMTC2 text, LQ/SQ mask via READ128, LQC2 mmio rows)
+
+
+diff --git a/ps2xRecomp/src/lib/instruction_translator.cpp b/ps2xRecomp/src/lib/instruction_translator.cpp
+index 7e9a7cab3a3241da3de0f8cef0982e54d4547839..5c401e730fccfe925e7f3ee67a814d08c6eb4d0e 100644
+--- a/ps2xRecomp/src/lib/instruction_translator.cpp
++++ b/ps2xRecomp/src/lib/instruction_translator.cpp
+@@ -212,11 +212,12 @@ namespace ps2recomp
+             return genWrite(16, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("(uint16_t)GPR_U32(ctx, {})", inst.rt)) + ";";
+         case OPCODE_SW:
+             return genWrite(32, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("GPR_U32(ctx, {})", inst.rt)) + ";";
+-        // LQ/SQ silently ignore the low four address bits instead of raising an address error.
++        // LQ/SQ silently ignore the low four address bits instead of raising an address error; READ128/WRITE128
++        // and the PS2_QWORD_ADDR paths of translateMemoryRead/Write mask the address themselves.
+         case OPCODE_LQ:
+-            return fmt::format("SET_GPR_VEC(ctx, {}, {});", inst.rt, genRead(128, fmt::format("ADD32(GPR_U32(ctx, {}), {}) & ~0xFu", inst.rs, inst.simmediate)));
++            return fmt::format("SET_GPR_VEC(ctx, {}, {});", inst.rt, genRead(128, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate)));
+         case OPCODE_SQ:
+-            return genWrite(128, fmt::format("ADD32(GPR_U32(ctx, {}), {}) & ~0xFu", inst.rs, inst.simmediate), fmt::format("GPR_VEC(ctx, {})", inst.rt)) + ";";
++            return genWrite(128, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("GPR_VEC(ctx, {})", inst.rt)) + ";";
+         case OPCODE_LD:
+             return fmt::format("SET_GPR_U64(ctx, {}, {});", inst.rt, genRead(64, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate)));
+         case OPCODE_SD:
+diff --git a/ps2xRecomp/src/lib/vu_translator.cpp b/ps2xRecomp/src/lib/vu_translator.cpp
+index f61f3e0176ba7455612cb4b696104457346dd2f2..c78fcf573ee0df142cc385a16d54480253aec146 100644
+--- a/ps2xRecomp/src/lib/vu_translator.cpp
++++ b/ps2xRecomp/src/lib/vu_translator.cpp
+@@ -71,7 +71,7 @@ namespace ps2recomp
+         std::string code = translateUnfixed(inst);
+         const uint8_t format = inst.rs;
+         if (format == COP2_QMTC2 && inst.rd == 0)
+-            return "// QMTC2 to VF0 ignored";
++            return "// QMTC2 to $vf0 discarded";
+         if (format < kCop2Co)
+             return code;
+ 
+diff --git a/ps2xTest/src/code_generator_tests.cpp b/ps2xTest/src/code_generator_tests.cpp
+index 0adc1e99d6830ffeb7d925bb1444233e4e733535..6c8751552ee2ec9a2c6b15dca51f8c0512f7435f 100644
+--- a/ps2xTest/src/code_generator_tests.cpp
++++ b/ps2xTest/src/code_generator_tests.cpp
+@@ -424,11 +424,19 @@ static const Lqc2MemoryPath lqc2MemoryPaths[] = {
+ // The load expression a row must produce for a given decoded fixture.
+ static std::string lqc2ExpectedLoad(const Lqc2MemoryPath &path, const Instruction &inst)
+ {
++    std::ostringstream ss;
++    if (!path.hasHint && path.isMmio)
++    {
++        // Without a resolved address the I/O path loads through the address built from the
++        // instruction's own operands (our emitter never folds inst.mmioAddress into the load).
++        ss << "runtime->Load128(rdram, ctx, PS2_QWORD_ADDR(ADD32(GPR_U32(ctx, " << inst.rs << "), "
++           << inst.simmediate << ")))";
++        return ss.str();
++    }
+     if (path.expectedLoad != nullptr)
+     {
+         return path.expectedLoad;
+     }
+-    std::ostringstream ss;
+     ss << "READ128(ADD32(GPR_U32(ctx, " << inst.rs << "), " << inst.simmediate << "))";
+     return ss.str();
+ }
+@@ -550,17 +558,18 @@ void register_code_generator_tests()
+                  "LWU must not sign-extend bit 31 into the allocator bitmap value");
+     });
+ 
+-    tc.Run("EE LQ/SQ align effective addresses while VU0 LQC2/SQC2 preserve them", [](TestCase &t) {
++    tc.Run("EE LQ/SQ/LQC2/SQC2 align effective addresses through the quadword access macros", [](TestCase &t) {
+         CodeGenerator gen({}, {});
+         const std::string lq = gen.translateInstruction(makeIType(0x8F20u, OPCODE_LQ, 1u, 2u, 3u));
+         const std::string sq = gen.translateInstruction(makeIType(0x8F24u, OPCODE_SQ, 1u, 2u, 3u));
+         const std::string lqc2 = gen.translateInstruction(makeIType(0x8F28u, OPCODE_LQC2, 1u, 2u, 3u));
+         const std::string sqc2 = gen.translateInstruction(makeIType(0x8F2Cu, OPCODE_SQC2, 1u, 2u, 3u));
+ 
+-        t.IsTrue(lq.find("& ~0xFu") != std::string::npos, "LQ must align its effective address down to 16 bytes");
+-        t.IsTrue(sq.find("& ~0xFu") != std::string::npos, "SQ must align its effective address down to 16 bytes");
+-        t.IsTrue(lqc2.find("& ~0xFu") == std::string::npos, "LQC2 must preserve the unaligned effective address");
+-        t.IsTrue(sqc2.find("& ~0xFu") == std::string::npos, "SQC2 must preserve the unaligned effective address");
++        // READ128/WRITE128 align the address down to 16 bytes themselves.
++        t.IsTrue(lq.find("READ128(") != std::string::npos, "LQ must read through READ128");
++        t.IsTrue(sq.find("WRITE128(") != std::string::npos, "SQ must write through WRITE128");
++        t.IsTrue(lqc2.find("READ128(") != std::string::npos, "LQC2 must read through READ128");
++        t.IsTrue(sqc2.find("WRITE128(") != std::string::npos, "SQC2 must write through WRITE128");
+ 
+         MemoryAccessHint hint{};
+         hint.hasAddress = true;
+@@ -569,8 +578,8 @@ void register_code_generator_tests()
+         const std::string hintedLqc2 = gen.translateInstruction(makeIType(0x8F34u, OPCODE_LQC2, 1u, 2u, 3u), hint);
+         t.IsTrue(hintedLq.find("FAST_READ128(0x1000u)") != std::string::npos,
+                  "resolved LQ memory hints must use the aligned effective address");
+-        t.IsTrue(hintedLqc2.find("FAST_READ128(0x1003u)") != std::string::npos,
+-                 "resolved LQC2 memory hints must retain the raw effective address");
++        t.IsTrue(hintedLqc2.find("FAST_READ128(0x1000u)") != std::string::npos,
++                 "resolved LQC2 memory hints must use the aligned effective address (upstream #319)");
+     });
+ 
+     tc.Run("SYSCALL publishes its continuation before entering the runtime", [](TestCase &t) {

@@ -104,16 +104,6 @@ if(TARZAN_VU1GEN_SELECTED STREQUAL TARZAN_VU1GEN_CANONICAL)
     endif()
 endif()
 
-# CMake's option de-duplication collapses repeated `-framework` tokens from
-# pkg-config's static FFmpeg flags. Keep each framework and its name grouped.
-if(TARGET PkgConfig::FFMPEG)
-    set_property(TARGET PkgConfig::FFMPEG PROPERTY INTERFACE_LINK_OPTIONS
-        "-pthread"
-        "SHELL:-framework CoreFoundation"
-        "SHELL:-framework CoreVideo"
-        "SHELL:-framework CoreMedia")
-endif()
-
 if(NOT TARGET ps2EntryRunner OR NOT TARGET ps2_runtime)
     message(FATAL_ERROR "Upstream PS2Recomp did not define its runtime targets")
 endif()

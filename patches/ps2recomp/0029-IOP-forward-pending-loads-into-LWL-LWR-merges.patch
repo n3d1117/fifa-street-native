@@ -1,0 +1,146 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 22:13:48 +0200
+Subject: [PATCH 29/38] IOP: forward pending loads into LWL/LWR merges
+
+Reproduce the lost-byte bug with LWR t0,1(a0); LWL t0,4(a0); nop over bytes 11 22 33 44 55. The new test failed before the fix; both pair orders now produce 0x55443322. Cover unaligned offsets, same and different pending destinations, and ordinary ALU/store/overwrite load delays.
+
+Only the LWL/LWR merge operand reads a matching pending load. Address calculation and ordinary instruction operands retain their load delays.
+
+Verified with ./tz build, ./tz test (54/54), ./tz test --full (1106 VU runs, zero mismatches/rejected), ./tz run --seconds 60 (title, zero underruns, no crash), and ./tz run --route first-mission (25.2 fps_dispfb2, zero VU fallbacks and steady audio underruns, no crash). Supplied baseline: 25.1 FPS; this is a correctness fix, with no measured A/B performance claim.
+
+diff --git a/ps2xIOP/src/emulator/core/iop_cpu.cpp b/ps2xIOP/src/emulator/core/iop_cpu.cpp
+index 21c2a8ecf4d561de8c7b23e86add6f9e9fcb2d04..3dc9a6859c953ae806bf6d9314389c894fa2e72a 100644
+--- a/ps2xIOP/src/emulator/core/iop_cpu.cpp
++++ b/ps2xIOP/src/emulator/core/iop_cpu.cpp
+@@ -368,7 +368,7 @@ namespace ps2x::iop::detail
+         {
+             const uint32_t address = cpu.gpr[rs] + static_cast<uint32_t>(simm);
+             const uint32_t memory = m_memory.read32(address & ~3u);
+-            const uint32_t old = cpu.gpr[rt];
++            const uint32_t old = cpu.pendingLoad && cpu.pendingLoadReg == rt ? cpu.pendingLoadValue : cpu.gpr[rt];
+             static constexpr uint32_t masks[4] = {0x00FFFFFFu, 0x0000FFFFu, 0x000000FFu, 0x00000000u};
+             static constexpr uint32_t shifts[4] = {24u, 16u, 8u, 0u};
+             load(rt, (old & masks[address & 3u]) | (memory << shifts[address & 3u]));
+@@ -389,7 +389,7 @@ namespace ps2x::iop::detail
+         {
+             const uint32_t address = cpu.gpr[rs] + static_cast<uint32_t>(simm);
+             const uint32_t memory = m_memory.read32(address & ~3u);
+-            const uint32_t old = cpu.gpr[rt];
++            const uint32_t old = cpu.pendingLoad && cpu.pendingLoadReg == rt ? cpu.pendingLoadValue : cpu.gpr[rt];
+             static constexpr uint32_t masks[4] = {0x00000000u, 0xFF000000u, 0xFFFF0000u, 0xFFFFFF00u};
+             static constexpr uint32_t shifts[4] = {0u, 8u, 16u, 24u};
+             load(rt, (old & masks[address & 3u]) | (memory >> shifts[address & 3u]));
+diff --git a/ps2xIOP/tests/iop_import_tests.cpp b/ps2xIOP/tests/iop_import_tests.cpp
+index 53a5116bf1e3a9ae1e8d5a71fb238bdb5692b770..238e3a91e4d0928f33a7ed7901b2bd7ba47f27ca 100644
+--- a/ps2xIOP/tests/iop_import_tests.cpp
++++ b/ps2xIOP/tests/iop_import_tests.cpp
+@@ -102,6 +102,99 @@ namespace
+         return false;
+     }
+ 
++    bool testUnalignedLoadPairs()
++    {
++        IopMemory memory;
++        IopCpuCore core(memory);
++        memory.write32(0x1000u, 0x44332211u);
++        memory.write32(0x1004u, 0x88776655u);
++        const uint32_t expected[] = {0u, 0x55443322u, 0x66554433u, 0x77665544u};
++        for (uint32_t offset = 1u; offset <= 3u; ++offset)
++        {
++            for (bool leftFirst : {false, true})
++            {
++                for (uint32_t initial : {0u, 0xAABBCCDDu})
++                {
++                    IopCpuState cpu{};
++                    cpu.gpr[4] = 0x1000u;
++                    cpu.gpr[8] = initial;
++                    const uint32_t left = 0x88880000u | (offset + 3u); // lwl t0, offset+3(a0)
++                    const uint32_t right = 0x98880000u | offset;       // lwr t0, offset(a0)
++                    memory.write32(0u, leftFirst ? left : right);
++                    memory.write32(4u, leftFirst ? right : left);
++                    memory.write32(8u, 0u);
++                    if (!expect(core.executeInstruction(cpu) && cpu.gpr[8] == initial && cpu.pendingLoad,
++                                "first unaligned load bypassed its load delay") ||
++                        !expect(core.executeInstruction(cpu), "second unaligned load stopped") ||
++                        !expect(core.executeInstruction(cpu) && cpu.gpr[8] == expected[offset],
++                                leftFirst ? "LWL/LWR lost bytes from pending LWL" : "LWR/LWL lost bytes from pending LWR"))
++                        return false;
++                }
++            }
++        }
++        return true;
++    }
++
++    bool testUnalignedLoadMergeSources()
++    {
++        IopMemory memory;
++        IopCpuCore core(memory);
++        memory.write32(0x1000u, 0x44332211u);
++        memory.write32(0x1004u, 0xAABBCCDDu);
++        const uint32_t pendingExpected[2][4] = {
++            {0x11BBCCDDu, 0x2211CCDDu, 0x332211DDu, 0x44332211u},
++            {0x44332211u, 0xAA443322u, 0xAABB4433u, 0xAABBCC44u},
++        };
++        const uint32_t registerExpected[2][4] = {
++            {0x11345678u, 0x22115678u, 0x33221178u, 0x44332211u},
++            {0x44332211u, 0x12443322u, 0x12344433u, 0x12345644u},
++        };
++        for (uint32_t right = 0u; right < 2u; ++right)
++            for (uint32_t offset = 0u; offset < 4u; ++offset)
++                for (uint32_t priorRt : {0u, 8u, 9u})
++                {
++                    IopCpuState cpu{};
++                    cpu.gpr[4] = 0x1000u;
++                    cpu.gpr[8] = 0x12345678u;
++                    memory.write32(0u, 0x8C800004u | (priorRt << 16u)); // lw priorRt, 4(a0)
++                    memory.write32(4u, (right ? 0x98880000u : 0x88880000u) | offset);
++                    memory.write32(8u, 0u);
++                    const uint32_t expected = priorRt == 8u ? pendingExpected[right][offset] : registerExpected[right][offset];
++                    if (!expect(core.executeInstruction(cpu) && core.executeInstruction(cpu) &&
++                                    core.executeInstruction(cpu) && cpu.gpr[8] == expected,
++                                "unaligned load used the wrong merge source") ||
++                        !expect(cpu.gpr[0] == 0u && (priorRt != 9u || cpu.gpr[9] == 0xAABBCCDDu),
++                                "unaligned load corrupted another load destination"))
++                        return false;
++                }
++        return true;
++    }
++
++    bool testOrdinaryLoadDelay()
++    {
++        IopMemory memory;
++        IopCpuCore core(memory);
++        memory.write32(0x1000u, 0xAABBCCDDu);
++        for (uint32_t consumer : {0x01004821u, 0xAC880004u, 0x24080007u}) // addu t1,t0,zero; sw t0,4(a0); addiu t0,zero,7
++        {
++            IopCpuState cpu{};
++            cpu.gpr[4] = 0x1000u;
++            cpu.gpr[8] = 0x12345678u;
++            memory.write32(0u, 0x8C880000u); // lw t0,0(a0)
++            memory.write32(4u, consumer);
++            if (!expect(core.executeInstruction(cpu) && cpu.gpr[8] == 0x12345678u &&
++                            core.executeInstruction(cpu), "ordinary load bypassed its delay") ||
++                !expect(cpu.gpr[8] == (consumer == 0x24080007u ? 7u : 0xAABBCCDDu),
++                        "ordinary load commit or overwrite changed") ||
++                !expect(consumer != 0x01004821u || cpu.gpr[9] == 0x12345678u,
++                        "ALU read a pending load") ||
++                !expect(consumer != 0xAC880004u || memory.read32(0x1004u) == 0x12345678u,
++                        "store read a pending load"))
++                return false;
++        }
++        return true;
++    }
++
+     bool testLoadcoreRebootLibraryMode()
+     {
+         IopMemory memory;
+@@ -504,6 +597,8 @@ namespace
+ 
+ int main()
+ {
++    if (!testUnalignedLoadPairs() || !testUnalignedLoadMergeSources() || !testOrdinaryLoadDelay())
++        return 1;
+     if (!testHeapReusesReleasedTransientBuffers() || !testLoadcoreRebootLibraryMode() || !testCdvdSpecialControl() || !testCdvdSearchFile() ||
+         !testTimrmanPeriodicCallback() || !testHostSpu2MmioAndDma())
+         return 1;

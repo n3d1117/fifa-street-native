@@ -101,7 +101,7 @@ Reference measurements (8-core M1, 8 GiB): generated code is about 91% of game-b
 | B1 | Path casing at the source (`tz` resolves the on-disk root) | quiet logs | S | done |
 | B2 | Drop raylib/GLFW/rlImGui/ImGui from the Metal build (conditional FetchContent and `ps2_host_backend` link; debug panel behind an option; no OpenGL/Carbon links) | smaller runner, faster configure | S-M | open |
 | B3 | Minimal FFmpeg: `--disable-everything --enable-decoder=mpeg2video --enable-parser=mpegvideo`, avcodec/avutil/swscale only; PSS frames must stay bit-identical | smaller runner, FFmpeg build under 1 min | S | open |
-| B4 | Drop pkgconf: `find_library` the FFmpeg `.a` files plus frameworks | one dependency fewer | S | open |
+| B4 | Direct FFmpeg archive linking on Apple: avcodec, required swresample dependency, avutil, swscale, and CoreFoundation/CoreVideo/CoreMedia; other platforms keep pkg-config | one dependency fewer | S | done |
 | B5 | ccache or a content-keyed wrapper for unity batches with stable batch membership | rebuild after unchanged regen in about a minute | S | open |
 | B6 | Host-derived parallelism with a Ninja job pool for heavy TUs (`tools/jobs.py`, `TZ_JOBS`) | no swapping | S | done |
 | B7 | Split `vu1rec_guarded.cpp` into 4+ TUs at emit time, or start it first | removes the serial tail | S-M | open |

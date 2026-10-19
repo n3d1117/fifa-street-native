@@ -1,0 +1,412 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 18:46:42 +0200
+Subject: [PATCH 27/38] Instruction hooks: config [[hooks]] emits host calls at
+ instruction addresses
+
+A hook is declared by address (before/after, optional redirect) in the recompiler
+config. The generated function calls g_ps2InstructionHooks[i] when set; a before
+hook returning nonzero jumps to its redirect label. Hosts register with
+PS2Runtime::registerInstructionHook. With nothing registered the guest code runs
+as recompiled, so games can add mid-function behavior without patching generated
+text.
+
+diff --git a/ps2xRecomp/include/ps2recomp/code_generator.h b/ps2xRecomp/include/ps2recomp/code_generator.h
+index 1bdf0f612b7129cbbc08b0d356dfc83040e584ef..9786db2caa9173f81bd17c973532db5a7641111b 100644
+--- a/ps2xRecomp/include/ps2recomp/code_generator.h
++++ b/ps2xRecomp/include/ps2recomp/code_generator.h
+@@ -8,6 +8,7 @@
+ #include <unordered_map>
+ #include <unordered_set>
+ #include "ps2recomp/control_flow_analyzer.h"
++#include "ps2recomp/types.h"
+ 
+ namespace ps2recomp
+ {
+@@ -54,6 +55,8 @@ namespace ps2recomp
+         void setConfiguredJumpTables(const std::vector<JumpTable> &jumpTables);
+         void setResumeEntryTargets(const std::unordered_map<uint32_t, std::vector<uint32_t>> &resumeTargetsByOwner);
+         void setEmitInstructionComments(bool emitInstructionComments);
++        // Hooks sorted by (address, after); the position is the index into g_ps2InstructionHooks.
++        void setInstructionHooks(std::vector<InstructionHook> hooks);
+         void setReporter(RecompilerReporter *reporter);
+ 
+         AnalysisResult collectInternalBranchTargets(const Function &function,
+@@ -66,6 +69,7 @@ namespace ps2recomp
+         std::unordered_map<uint32_t, std::string> m_relocationCallNames;
+         std::unordered_map<uint32_t, std::vector<uint32_t>> m_configJumpTableTargetsByAddress;
+         std::unordered_map<uint32_t, std::vector<uint32_t>> m_resumeEntryTargetsByOwner;
++        std::vector<InstructionHook> m_instructionHooks;
+         const std::vector<Section>& m_sections;
+         BootstrapInfo m_bootstrapInfo;
+         bool m_emitInstructionComments = true;
+diff --git a/ps2xRecomp/include/ps2recomp/types.h b/ps2xRecomp/include/ps2recomp/types.h
+index 9bd687df8867febd20edda7ccb5563e0f0527127..2e14edf807b89723ad5cee31dbdd651727d5df0e 100644
+--- a/ps2xRecomp/include/ps2recomp/types.h
++++ b/ps2xRecomp/include/ps2recomp/types.h
+@@ -172,6 +172,16 @@ namespace ps2recomp
+         std::string calleeName;
+     };
+ 
++    // A host call emitted at one instruction address (config `[[hooks]]`).
++    // `before`: runs ahead of the instruction; a nonzero return jumps to `redirect`
++    // (when set) instead of executing it. `after`: runs after a non-branch instruction.
++    struct InstructionHook
++    {
++        uint32_t address = 0;
++        bool after = false;
++        uint32_t redirect = 0;
++    };
++
+     // Recompiler configuration
+     struct RecompilerConfig
+     {
+@@ -190,6 +200,7 @@ namespace ps2recomp
+         std::vector<std::string> entryPointHints;
+         std::unordered_map<uint32_t, uint32_t> mmioByInstructionAddress;
+         std::vector<JumpTable> jumpTables;
++        std::vector<InstructionHook> instructionHooks;
+     };
+ 
+ } // namespace ps2recomp
+diff --git a/ps2xRecomp/src/lib/code_generator.cpp b/ps2xRecomp/src/lib/code_generator.cpp
+index 68b09847551dca0b444b377560842a310da7645b..8b7d5ded9b658697d3f9b95e2a582eb8ccae49ee 100644
+--- a/ps2xRecomp/src/lib/code_generator.cpp
++++ b/ps2xRecomp/src/lib/code_generator.cpp
+@@ -140,6 +140,22 @@ namespace ps2recomp
+         }
+     }
+ 
++    void CodeGenerator::setInstructionHooks(std::vector<InstructionHook> hooks)
++    {
++        std::sort(hooks.begin(), hooks.end(), [](const InstructionHook &a, const InstructionHook &b)
++                  { return a.address != b.address ? a.address < b.address : a.after < b.after; });
++        for (size_t i = 1; i < hooks.size(); ++i)
++        {
++            if (hooks[i].address == hooks[i - 1].address && hooks[i].after == hooks[i - 1].after)
++            {
++                std::ostringstream oss;
++                oss << "duplicate [[hooks]] entry at 0x" << std::hex << hooks[i].address;
++                throw std::runtime_error(oss.str());
++            }
++        }
++        m_instructionHooks = std::move(hooks);
++    }
++
+     void CodeGenerator::setResumeEntryTargets(const std::unordered_map<uint32_t, std::vector<uint32_t>> &resumeTargetsByOwner)
+     {
+         m_resumeEntryTargetsByOwner = resumeTargetsByOwner;
+diff --git a/ps2xRecomp/src/lib/config_manager.cpp b/ps2xRecomp/src/lib/config_manager.cpp
+index 97dc2ddb40a1a37944f8fc721af18be02724a9ea..d044b0a8e35dd886b239e4fccbc84a569a0b11e5 100644
+--- a/ps2xRecomp/src/lib/config_manager.cpp
++++ b/ps2xRecomp/src/lib/config_manager.cpp
+@@ -147,6 +147,36 @@ namespace ps2recomp
+                 }
+             }
+ 
++            if (data.contains("hooks") && data.at("hooks").is_array())
++            {
++                auto readAddress = [](const toml::value &table, const char *key) -> uint32_t
++                {
++                    const auto &v = table.at(key);
++                    if (v.is_string())
++                        return static_cast<uint32_t>(std::stoul(v.as_string(), nullptr, 0));
++                    return static_cast<uint32_t>(v.as_integer());
++                };
++                for (const auto &entry : data.at("hooks").as_array())
++                {
++                    if (!entry.contains("address"))
++                        throw std::runtime_error("[[hooks]] entry lacks `address`");
++                    InstructionHook hook;
++                    hook.address = readAddress(entry, "address");
++                    if (entry.contains("when"))
++                    {
++                        const std::string when = toml::find<std::string>(entry, "when");
++                        if (when != "before" && when != "after")
++                            throw std::runtime_error("[[hooks]] `when` must be \"before\" or \"after\"");
++                        hook.after = (when == "after");
++                    }
++                    if (entry.contains("redirect"))
++                        hook.redirect = readAddress(entry, "redirect");
++                    if (hook.after && hook.redirect != 0)
++                        throw std::runtime_error("[[hooks]] `redirect` needs when = \"before\"");
++                    config.instructionHooks.push_back(hook);
++                }
++            }
++
+             if (data.contains("mmio") && data.at("mmio").is_table())
+             {
+                 const auto &mmioTable = toml::find(data, "mmio").as_table();
+@@ -358,6 +388,27 @@ namespace ps2recomp
+         patches["instructions"] = instPatches;
+         data["patches"] = patches;
+ 
++        if (!config.instructionHooks.empty())
++        {
++            toml::array hooks;
++            for (const auto &hook : config.instructionHooks)
++            {
++                toml::table h;
++                std::ostringstream addrStream;
++                addrStream << "0x" << std::hex << hook.address;
++                h["address"] = addrStream.str();
++                h["when"] = hook.after ? "after" : "before";
++                if (hook.redirect != 0)
++                {
++                    std::ostringstream redirectStream;
++                    redirectStream << "0x" << std::hex << hook.redirect;
++                    h["redirect"] = redirectStream.str();
++                }
++                hooks.push_back(h);
++            }
++            data["hooks"] = hooks;
++        }
++
+         std::ofstream file(m_configPath);
+         if (!file)
+         {
+diff --git a/ps2xRecomp/src/lib/function_emitter.cpp b/ps2xRecomp/src/lib/function_emitter.cpp
+index 3192e90ac6a8b49029abbddaf45d8f07b93333c4..5271db9dcc59d234197659641088fe838e2a2070 100644
+--- a/ps2xRecomp/src/lib/function_emitter.cpp
++++ b/ps2xRecomp/src/lib/function_emitter.cpp
+@@ -9,6 +9,7 @@
+ #include <algorithm>
+ #include <sstream>
+ #include <stdexcept>
++#include <unordered_map>
+ #include <unordered_set>
+ 
+ namespace ps2recomp
+@@ -69,6 +70,40 @@ namespace ps2recomp
+             analysisResult.entryPoints.insert(target);
+         }
+ 
++        // Config [[hooks]] inside this function: index in the generated g_ps2InstructionHooks table.
++        struct FunctionHook
++        {
++            size_t index;
++            const InstructionHook *hook;
++        };
++        std::unordered_map<uint32_t, FunctionHook> beforeHooks;
++        std::unordered_map<uint32_t, FunctionHook> afterHooks;
++        for (size_t h = 0; h < cg.m_instructionHooks.size(); ++h)
++        {
++            const InstructionHook &hook = cg.m_instructionHooks[h];
++            if (hook.address < function.start || hook.address >= function.end)
++            {
++                continue;
++            }
++            (hook.after ? afterHooks : beforeHooks)[hook.address] = FunctionHook{h, &hook};
++            if (!hook.after)
++            {
++                // A before-hook sits at a label; an after-hook leaves the instruction's code untouched.
++                analysisResult.entryPoints.insert(hook.address);
++            }
++            if (hook.redirect != 0u)
++            {
++                if (hook.redirect < function.start || hook.redirect >= function.end)
++                {
++                    std::ostringstream oss;
++                    oss << "hook at 0x" << std::hex << hook.address << ": redirect 0x" << hook.redirect
++                        << " is outside " << function.name;
++                    throw std::runtime_error(oss.str());
++                }
++                analysisResult.entryPoints.insert(hook.redirect);
++            }
++        }
++        size_t emittedHooks = 0;
+         const std::unordered_set<uint32_t> &internalTargets = analysisResult.entryPoints;
+         ConstantRegisterState constantRegisters;
+         GifDmaKickPlan gifDmaKickPlan{};
+@@ -116,6 +151,25 @@ namespace ps2recomp
+                 ss << "label_" << std::hex << inst.address << std::dec << ":\n";
+             }
+ 
++            if (const auto hookIt = beforeHooks.find(inst.address); hookIt != beforeHooks.end())
++            {
++                const FunctionHook &fh = hookIt->second;
++                ss << "    // game hook (before) 0x" << std::hex << inst.address << std::dec << "\n";
++                ss << "    if (g_ps2InstructionHooks[" << fh.index << "] != nullptr) {\n";
++                if (fh.hook->redirect != 0u)
++                {
++                    ss << "        if (g_ps2InstructionHooks[" << fh.index << "](rdram, ctx, runtime)) goto label_"
++                       << std::hex << fh.hook->redirect << std::dec << ";\n";
++                }
++                else
++                {
++                    ss << "        g_ps2InstructionHooks[" << fh.index << "](rdram, ctx, runtime);\n";
++                }
++                ss << "    }\n";
++                ++emittedHooks;
++                constantRegisters.clear();
++            }
++
+             if (cg.m_emitInstructionComments)
+             {
+                 ss << "    // 0x" << std::hex << inst.address << ": 0x" << inst.raw << std::dec;
+@@ -210,7 +264,19 @@ namespace ps2recomp
+                     }
+                     ss << "\n";
+ 
+-                    updateConstantRegisters(inst, constantRegisters);
++                    if (const auto hookIt = afterHooks.find(inst.address); hookIt != afterHooks.end())
++                    {
++                        const size_t index = hookIt->second.index;
++                        ss << "    // game hook (after) 0x" << std::hex << inst.address << std::dec << "\n";
++                        ss << "    if (g_ps2InstructionHooks[" << index << "] != nullptr) g_ps2InstructionHooks["
++                           << index << "](rdram, ctx, runtime);\n";
++                        ++emittedHooks;
++                        constantRegisters.clear();
++                    }
++                    else
++                    {
++                        updateConstantRegisters(inst, constantRegisters);
++                    }
+                 }
+             }
+             catch (const std::exception &e)
+@@ -226,6 +292,14 @@ namespace ps2recomp
+             }
+         }
+ 
++        if (emittedHooks != beforeHooks.size() + afterHooks.size())
++        {
++            std::ostringstream oss;
++            oss << "a [[hooks]] address in " << function.name
++                << " is not a plain instruction start (delay slot, branch with `after`, or undecoded)";
++            throw std::runtime_error(oss.str());
++        }
++
+         // Fallthrough with no terminating branch: publish the next PC so the EE dispatcher does not re-enter this function.
+         if (!instructions.empty() && !lastInstructionWasControlFlow)
+         {
+diff --git a/ps2xRecomp/src/lib/function_table_emitter.cpp b/ps2xRecomp/src/lib/function_table_emitter.cpp
+index 0d9bda5eecdd1ca79d6b88850312af7d6aafb4f2..b8f18fa881b75a575efe37f66d612b0384fa4abc 100644
+--- a/ps2xRecomp/src/lib/function_table_emitter.cpp
++++ b/ps2xRecomp/src/lib/function_table_emitter.cpp
+@@ -157,6 +157,30 @@ namespace ps2recomp
+         ss << "extern const uint32_t g_ps2RecompiledFunctionTableSlotCount = " << std::dec << slotCount << "u;\n";
+         ss << "PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[" << std::dec << (slotCount == 0u ? 1u : slotCount) << "u] = {};\n\n";
+ 
++        const size_t hookCount = cg.m_instructionHooks.size();
++        ss << "extern const uint32_t g_ps2InstructionHookCount = " << std::dec << hookCount << "u;\n";
++        ss << "extern const uint32_t g_ps2InstructionHookAddresses[" << (hookCount == 0u ? 1u : hookCount) << "u] = {";
++        for (const auto &hook : cg.m_instructionHooks)
++        {
++            ss << "0x" << std::hex << hook.address << "u, ";
++        }
++        if (hookCount == 0u)
++        {
++            ss << "0u";
++        }
++        ss << "};\n";
++        ss << "extern const uint8_t g_ps2InstructionHookAfter[" << std::dec << (hookCount == 0u ? 1u : hookCount) << "u] = {";
++        for (const auto &hook : cg.m_instructionHooks)
++        {
++            ss << (hook.after ? "1, " : "0, ");
++        }
++        if (hookCount == 0u)
++        {
++            ss << "0";
++        }
++        ss << "};\n";
++        ss << "PS2Runtime::InstructionHookFn g_ps2InstructionHooks[" << std::dec << (hookCount == 0u ? 1u : hookCount) << "u] = {};\n\n";
++
+         // A single function body with one statement per table entry scales very
+         // poorly in compiler frontends (debug-info line tables, stack layout,
+         // etc. all rescan the whole function): for a full retail game this can
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index 8c1c7c5e2823cd22923f7fe91d4d175836269771..56143eb78f33a492925284df323f987b258d9ff0 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -1022,6 +1022,7 @@ namespace ps2recomp
+             m_codeGenerator->setRelocationCallNames(relocationCallNames);
+             m_codeGenerator->setBootstrapInfo(m_bootstrapInfo);
+             m_codeGenerator->setConfiguredJumpTables(m_config.jumpTables);
++            m_codeGenerator->setInstructionHooks(m_config.instructionHooks);
+             m_codeGenerator->setEmitInstructionComments(true);
+ 
+             fs::create_directories(m_config.outputPath);
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index d57dc0e410bc3c94377bdd1310d6cfec0ce01dcb..c6dedef6a668d19824a158044ebd7667e561c114 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -349,6 +349,13 @@ public:
+         SkipCallDebug = 3,
+     };
+ 
++    // Host code at an instruction address inside a recompiled function, declared by config
++    // `[[hooks]]` so the recompiler emits the call. A `before` hook with a redirect jumps
++    // there when it returns nonzero; otherwise the return value is ignored.
++    using InstructionHookFn = uint32_t (*)(uint8_t *, R5900Context *, PS2Runtime *);
++    // False when the generated code has no hook site for (address, after).
++    bool registerInstructionHook(uint32_t address, bool after, InstructionHookFn fn);
++
+     bool replaceFunction(uint32_t address, RecompiledFunction func);
+     // TODO remove this later need to update all tests
+     bool registerFunction(uint32_t address, RecompiledFunction func);
+@@ -571,5 +578,9 @@ extern const uint32_t g_ps2RecompiledFunctionTableBase;
+ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
+ extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
+ extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
++extern const uint32_t g_ps2InstructionHookCount;
++extern const uint32_t g_ps2InstructionHookAddresses[];
++extern const uint8_t g_ps2InstructionHookAfter[];
++extern PS2Runtime::InstructionHookFn g_ps2InstructionHooks[];
+ 
+ #endif // PS2_RUNTIME_H
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index af00f52d6bb027283d747fd7e031a1eaf772b630..d236a3cf786d8960e4b905da7153e94106fca0ea 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1482,6 +1482,19 @@ bool PS2Runtime::replaceFunction(uint32_t address, RecompiledFunction func)
+     return true;
+ }
+ 
++bool PS2Runtime::registerInstructionHook(uint32_t address, bool after, InstructionHookFn fn)
++{
++    for (uint32_t i = 0; i < g_ps2InstructionHookCount; ++i)
++    {
++        if (g_ps2InstructionHookAddresses[i] == address && (g_ps2InstructionHookAfter[i] != 0) == after)
++        {
++            g_ps2InstructionHooks[i] = fn;
++            return true;
++        }
++    }
++    return false;
++}
++
+ bool PS2Runtime::registerFunction(uint32_t address, RecompiledFunction func)
+ {
+     return replaceFunction(address, func);
+diff --git a/ps2xRuntime/src/runner/register_functions.cpp b/ps2xRuntime/src/runner/register_functions.cpp
+index 85cc2e348d60cfae0a4f220fc2a0535f7a756fa2..bbed532cab8d31b655ce4453ac6a83a3c1c37fd3 100644
+--- a/ps2xRuntime/src/runner/register_functions.cpp
++++ b/ps2xRuntime/src/runner/register_functions.cpp
+@@ -4,4 +4,9 @@
+ extern const uint32_t g_ps2RecompiledFunctionTableBase = 0x00000000u;
+ extern const uint32_t g_ps2RecompiledFunctionTableEnd = 0x01000000u;
+ extern const uint32_t g_ps2RecompiledFunctionTableSlotCount = (g_ps2RecompiledFunctionTableEnd - g_ps2RecompiledFunctionTableBase) >> 2;
++extern const uint32_t g_ps2InstructionHookCount = 0u;
++extern const uint32_t g_ps2InstructionHookAddresses[1] = {0u};
++extern const uint8_t g_ps2InstructionHookAfter[1] = {0};
++PS2Runtime::InstructionHookFn g_ps2InstructionHooks[1] = {};
++
+ PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[g_ps2RecompiledFunctionTableSlotCount] = {};
+\ No newline at end of file
+diff --git a/ps2xTest/src/test_function_table.cpp b/ps2xTest/src/test_function_table.cpp
+index be6a8889f742d2a7bda21ccad8eb2fd332b418ea..5f19a753c91f9f8b93eedb19c0c829891e43a754 100644
+--- a/ps2xTest/src/test_function_table.cpp
++++ b/ps2xTest/src/test_function_table.cpp
+@@ -8,6 +8,11 @@ extern const uint32_t g_ps2RecompiledFunctionTableBase = 0x00000000u;
+ extern const uint32_t g_ps2RecompiledFunctionTableEnd = PS2_RAM_SIZE;
+ extern const uint32_t g_ps2RecompiledFunctionTableSlotCount = (g_ps2RecompiledFunctionTableEnd - g_ps2RecompiledFunctionTableBase) >> 2;
+ 
++extern const uint32_t g_ps2InstructionHookCount = 0u;
++extern const uint32_t g_ps2InstructionHookAddresses[1] = {0u};
++extern const uint8_t g_ps2InstructionHookAfter[1] = {0};
++PS2Runtime::InstructionHookFn g_ps2InstructionHooks[1] = {};
++
+ PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[g_ps2RecompiledFunctionTableSlotCount] = {};
+ 
+ void reset_ps2_test_function_table()

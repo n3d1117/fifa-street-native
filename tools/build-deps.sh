@@ -3,7 +3,7 @@
 # sources. Idempotent: each section is skipped when its output already exists.
 #   tools/build-deps.sh                      # build what is missing
 #   TARZAN_FORCE="bridge spu2" tools/build-deps.sh   # rebuild named sections
-# Sections: pkgconf ffmpeg metal-deps metal-resources bridge spu2
+# Sections: ffmpeg metal-deps metal-resources bridge spu2
 # Needs: toolchain/bootstrap.sh done (or TARZAN_LLVM set), `python3 tools/deps.py sync` done.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -41,25 +41,6 @@ needed() { # section output...   (true when the section must run)
   for f in "$@"; do [[ -e "$f" ]] || return 0; done
   echo "== $s: up to date"
   return 1
-}
-
-# ---------------------------------------------------------------- pkgconf
-build_pkgconf() {
-  local base="$ROOT/tools/pkgconf" ver=3.0.5
-  fetch "pkgconf-$ver.tar.xz" "https://distfiles.ariadne.space/pkgconf/pkgconf-$ver.tar.xz" \
-    3acd3a8a3cce65a8d620321855d92fb602e026cbe8e13ee36bdec58483b59ace "$base/src"
-  [[ -d "$base/src/pkgconf-$ver" ]] || tar -xJf "$base/src/pkgconf-$ver.tar.xz" -C "$base/src"
-  mkdir -p "$base/bin"
-  (
-    cd "$base/src/pkgconf-$ver"
-    export CC="$(xcrun --find clang)"
-    export CFLAGS="-arch arm64 -mmacosx-version-min=11.0 -isysroot $SDK"
-    export LDFLAGS="$CFLAGS"
-    ./configure --prefix="$base" --disable-shared --enable-static 2>&1 | tee "$LOGS/pkgconf-configure.log"
-    make -j"$NCPU" 2>&1 | tee "$LOGS/pkgconf-build.log"
-    make install 2>&1 | tee "$LOGS/pkgconf-install.log"
-  )
-  ln -sf pkgconf "$base/bin/pkg-config"
 }
 
 # ----------------------------------------------------------------- ffmpeg
@@ -100,7 +81,6 @@ build_metal_deps() {
   export PATH="$LLVM/bin:$(dirname "$CMAKE"):$(dirname "$NINJA"):$PATH"
   export CC="$LLVM/bin/clang" CXX="$LLVM/bin/clang++" OBJC="$LLVM/bin/clang" OBJCXX="$LLVM/bin/clang++"
   export MACOSX_DEPLOYMENT_TARGET=11.0
-  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig"
   export CFLAGS="-I$prefix/include -ffile-prefix-map=$ROOT=." CXXFLAGS="-I$prefix/include -ffile-prefix-map=$ROOT=." LDFLAGS="-L$prefix/lib"
   local sdk="$SDK" nproc="$NCPU" cmake="$CMAKE" ninja="$NINJA"
   extract() { local archive="$1" directory="$2"; if [[ ! -d "$src/$directory" ]]; then mkdir -p "$src/$directory"; tar -xf "$src/$archive" -C "$src/$directory" --strip-components=1; fi; }
@@ -190,7 +170,6 @@ build_bridge() {
   rel="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$LLVM/lib" "$build/pcsx2-gs-bridge")"
   local link="-L$LLVM/lib -stdlib=libc++ -Wl,-rpath,@loader_path/$rel"
   export PATH="$(dirname "$NINJA"):$PATH"
-  export PKG_CONFIG_PATH="$deps_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
   "$CMAKE" -S "$pcsx2" -B "$build" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -227,7 +206,6 @@ build_spu2() {
 
 # ------------------------------------------------------------------- main
 RES="$ROOT/build/metal-bridge/pcsx2-2.8.2-resources"
-if needed pkgconf "$ROOT/tools/pkgconf/bin/pkgconf" "$ROOT/tools/pkgconf/bin/pkg-config"; then build_pkgconf; fi
 if needed ffmpeg "$ROOT/tools/ffmpeg/arm64/lib/libavcodec.a"; then build_ffmpeg; fi
 if needed metal-deps "$ROOT/tools/metal-deps/prefix/metal-deps-manifest.json"; then (build_metal_deps); fi
 if needed metal-resources "$RES/default.metallib" "$RES/Metal22.metallib" "$RES/Metal23.metallib"; then build_metal_resources; fi

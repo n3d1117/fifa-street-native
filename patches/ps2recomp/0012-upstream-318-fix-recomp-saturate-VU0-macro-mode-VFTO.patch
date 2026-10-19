@@ -1,0 +1,180 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 17:10:41 +0200
+Subject: [PATCH 12/38] upstream #318: fix(recomp): saturate VU0 macro-mode
+ VFTOI conversions by sign
+
+
+diff --git a/ps2xRecomp/src/lib/vu_translation_helpers.cpp b/ps2xRecomp/src/lib/vu_translation_helpers.cpp
+index cc620e0413baa9622ca69d9658f063dc5363b80e..803f90939d6003f6064f4309ddb43d4d011a6ab6 100644
+--- a/ps2xRecomp/src/lib/vu_translation_helpers.cpp
++++ b/ps2xRecomp/src/lib/vu_translation_helpers.cpp
+@@ -755,10 +755,7 @@ namespace ps2recomp
+         uint8_t dest_mask = inst.vectorInfo.vectorField;
+         float scale = (shift == 0) ? 1.0f : static_cast<float>(1 << shift);
+ 
+-        return fmt::format("{{ __m128 src = ctx->vu0_vf[{}]; "
+-                           "src = _mm_mul_ps(src, _mm_set1_ps({})); "
+-                           "__m128i res_i = _mm_cvttps_epi32(src); "
+-                           "__m128 res = _mm_castsi128_ps(res_i); "
++        return fmt::format("{{ __m128 res = _mm_castsi128_ps(ps2_vu_ftoi(ctx->vu0_vf[{}], {})); "
+                            "__m128i mask = _mm_set_epi32({}, {}, {}, {}); "
+                            "ctx->vu0_vf[{}] = _mm_blendv_ps(ctx->vu0_vf[{}], res, _mm_castsi128_ps(mask)); }}",
+                            vfs, codegen::formatFloatLiteral(scale),
+diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
+index 805bff7f5622b4e79b77b7e413c8794d9e35a2a5..56a3a1e073e8742d6c76517376d8f01aa64a8ade 100644
+--- a/ps2xRuntime/include/ps2_runtime_macros.h
++++ b/ps2xRuntime/include/ps2_runtime_macros.h
+@@ -389,6 +389,18 @@ inline float ps2_vu_rsqrt(float fs, float ft)
+     return std::bit_cast<float>((s & PS2_FLOAT_EXP_MASK) != 0u ? (sign | PS2_FLOAT_MAX_BITS) : sign);
+ }
+ 
++// VFTOIn: x * 2^n truncated toward zero. |x * 2^n| >= 2^31 (exponent 158 or more, so the VU's
++// exponent-255 numbers too) saturates by sign to 0x7FFFFFFF / 0x80000000 (PCSX2 VUops.cpp
++// floatToInt). cvttps alone returns 0x80000000 for both signs.
++inline __m128i ps2_vu_ftoi(__m128 value, float scale)
++{
++    const __m128 scaled = _mm_mul_ps(value, _mm_set1_ps(scale));
++    const __m128i bits = _mm_castps_si128(scaled);
++    const __m128i big = _mm_cmpgt_epi32(_mm_and_si128(bits, _mm_set1_epi32(0x7FFFFFFF)), _mm_set1_epi32(0x4EFFFFFF));
++    const __m128i saturated = _mm_xor_si128(_mm_set1_epi32(0x7FFFFFFF), _mm_srai_epi32(bits, 31));
++    return _mm_or_si128(_mm_and_si128(big, saturated), _mm_andnot_si128(big, _mm_cvttps_epi32(scaled)));
++}
++
+ enum class Ps2VecOp
+ {
+     Add,
+diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
+index 1a292611b8eb0e62559d9c4b82fb3ced63ce75fb..060b234f97a9d059452bea441f31396affe3ad13 100644
+--- a/ps2xTest/CMakeLists.txt
++++ b/ps2xTest/CMakeLists.txt
+@@ -41,6 +41,7 @@ add_library(ps2_test_lib STATIC
+     src/ps2_float_semantics_tests.cpp
+     src/ps2_fpu_order_tests.cpp
+     src/ps2_vu0_fdiv_tests.cpp
++    src/ps2_vu0_ftoi_tests.cpp
+ )
+ 
+ # Exercise native VU helpers with the shipping arithmetic contract.
+diff --git a/ps2xTest/src/main.cpp b/ps2xTest/src/main.cpp
+index ceb49ea7ec0f50c7c37838dc46d8e1166a9c937e..ad409fcb5c4c0febb64e8b9bb9bc6c2267289144 100644
+--- a/ps2xTest/src/main.cpp
++++ b/ps2xTest/src/main.cpp
+@@ -22,6 +22,7 @@ void register_ps2_runtime_expansion_tests();
+ void register_ps2_float_semantics_tests();
+ void register_ps2_fpu_order_tests();
+ void register_ps2_vu0_fdiv_tests();
++void register_ps2_vu0_ftoi_tests();
+ void reset_ps2_test_function_table();
+ 
+ int main()
+@@ -48,6 +49,7 @@ int main()
+     register_ps2_float_semantics_tests();
+     register_ps2_fpu_order_tests();
+     register_ps2_vu0_fdiv_tests();
++    register_ps2_vu0_ftoi_tests();
+     int res = MiniTest::Run();
+     std::cout.flush();
+     std::cerr.flush();
+diff --git a/ps2xTest/src/ps2_vu0_ftoi_tests.cpp b/ps2xTest/src/ps2_vu0_ftoi_tests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..e357eb86faba2acf070e384d4cefb48066b67318
+--- /dev/null
++++ b/ps2xTest/src/ps2_vu0_ftoi_tests.cpp
+@@ -0,0 +1,96 @@
++#include "MiniTest.h"
++#include "ps2recomp/code_generator.h"
++#include "ps2recomp/instructions.h"
++#include "ps2recomp/r5900_decoder.h"
++#include "ps2recomp/types.h"
++#include "ps2_runtime_macros.h"
++
++#include <bit>
++#include <cstdint>
++#include <cstdio>
++#include <string>
++
++// VFTOIn truncates toward zero and saturates by sign at 2^31 (PCSX2 VUops.cpp floatToInt).
++// _mm_cvttps_epi32 alone gives 0x80000000 for every out-of-range value, both signs.
++
++using namespace ps2recomp;
++
++namespace
++{
++    void expectWords(TestCase &t, __m128i value, const uint32_t (&expected)[4], const std::string &what)
++    {
++        alignas(16) uint32_t got[4];
++        _mm_store_si128(reinterpret_cast<__m128i *>(got), value);
++        const bool same = got[0] == expected[0] && got[1] == expected[1] && got[2] == expected[2] && got[3] == expected[3];
++        std::string text = what + ": expected";
++        char word[16];
++        for (int i = 0; i < 4; ++i)
++        {
++            std::snprintf(word, sizeof(word), " %08X", expected[i]);
++            text += word;
++        }
++        text += ", got";
++        for (int i = 0; i < 4; ++i)
++        {
++            std::snprintf(word, sizeof(word), " %08X", got[i]);
++            text += word;
++        }
++        t.IsTrue(same, text);
++    }
++
++    float fromBits(uint32_t value)
++    {
++        return std::bit_cast<float>(value);
++    }
++
++    __m128 floats(float x, float y, float z, float w)
++    {
++        return _mm_set_ps(w, z, y, x);
++    }
++
++    // COP2 Special2 macro instruction: dest, ft, fs, and the 7-bit Special2 opcode.
++    uint32_t cop2Special2(uint32_t dest, uint32_t ft, uint32_t fs, uint32_t op)
++    {
++        return (OPCODE_COP2 << 26) | (1u << 25) | ((dest & 0xFu) << 21) | ((ft & 31u) << 16) | ((fs & 31u) << 11) |
++               (((op >> 2) & 31u) << 6) | 0x3Cu | (op & 3u);
++    }
++
++    std::string translate(uint32_t address, uint32_t raw)
++    {
++        R5900Decoder decoder;
++        CodeGenerator gen({}, {});
++        return gen.translateInstruction(decoder.decodeInstruction(address, raw));
++    }
++
++    bool contains(const std::string &text, const std::string &part)
++    {
++        return text.find(part) != std::string::npos;
++    }
++}
++
++void register_ps2_vu0_ftoi_tests()
++{
++    MiniTest::Case("PS2Vu0Ftoi", [](TestCase &tc)
++    {
++        tc.Run("FTOI truncates and saturates by sign", [](TestCase &t)
++        {
++            expectWords(t, ps2_vu_ftoi(floats(1.75f, -1.75f, 3.0e9f, -3.0e9f), 1.0f),
++                        {1u, 0xFFFFFFFFu, 0x7FFFFFFFu, 0x80000000u}, "FTOI0 (1.75, -1.75, 3e9, -3e9)");
++            expectWords(t, ps2_vu_ftoi(floats(1.0f, 134217728.0f, -134217728.0f, fromBits(0x7F800001u)), 16.0f),
++                        {16u, 0x7FFFFFFFu, 0x80000000u, 0x7FFFFFFFu}, "FTOI4 (1, 2^27, -2^27, exponent 255)");
++            expectWords(t, ps2_vu_ftoi(floats(0.5f, -0.25f, 131072.0f, fromBits(0xFF800000u)), 32768.0f),
++                        {16384u, 0xFFFFE000u, 0x7FFFFFFFu, 0x80000000u}, "FTOI15 (0.5, -0.25, 2^17, -exponent 255)");
++            expectWords(t, ps2_vu_ftoi(floats(fromBits(0x00000001u), 0.5f, -2147483648.0f, 2147483520.0f), 1.0f),
++                        {0u, 0u, 0x80000000u, 0x7FFFFF80u}, "FTOI0 (denormal, 0.5, -2^31, largest float below 2^31)");
++        });
++
++        tc.Run("FTOI emitters scale and saturate through ps2_vu_ftoi", [](TestCase &t)
++        {
++            // vftoi4.xyzw $vf3, $vf7  (fs = vf7, ft = vf3)
++            const std::string code = translate(0x00200000u, cop2Special2(0xF, 3, 7, VU0_S2_VFTOI4));
++            t.IsTrue(contains(code, "ps2_vu_ftoi(ctx->vu0_vf[7], 16") && contains(code, "ctx->vu0_vf[3] ="),
++                     "vftoi4 $vf3, $vf7 should be vf3 = ftoi(vf7 * 16) but got: " + code);
++            t.IsTrue(!contains(code, "_mm_cvttps_epi32"), "vftoi4 must not truncate without saturation but got: " + code);
++        });
++    });
++}

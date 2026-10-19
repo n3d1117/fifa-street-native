@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 23:12:34 +0200
+Subject: [PATCH 35/38] Let FileIO semaphore helpers execute their guest bodies
+
+The generated FileIO guest test reproduced sceFsSemInit throwing. Removing config entries alone still auto-bound the registry aliases. Remove both TODO registry entries and dead handlers so the original initializer and SignalSema tail call execute against guest state.
+
+Verified through ./tz build, ./tz test and ./tz test --full: 55 tests pass, VU replay 1106 runs with zero mismatches/rejections. First-mission control/candidate: 25.1/25.1 FPS, CPU user 151.698/151.430 seconds, zero fallbacks and steady underruns, no crash. No FPS change.
+
+diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
+index 94a6fa123e9aad6a351633327eb20945208f6992..9e80ef2b42dfd434f0ddd5b4527a38e0c9969f61 100644
+--- a/ps2xRuntime/include/ps2_call_list.h
++++ b/ps2xRuntime/include/ps2_call_list.h
+@@ -229,8 +229,6 @@
+     X(sceFsDbChk)                             \
+     X(sceFsIntrSigSema)                       \
+     X(sceFsSemExit)                           \
+-    X(sceFsSemInit)                           \
+-    X(sceFsSigSema)                           \
+     X(sceIDC)                                 \
+     X(sceMpegFlush)                           \
+     X(sceRpcFreePacket)                       \
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
+index b1083af7743ceb943b3fe25f9b844dc7ee43e799..eada800bcf6dab5a3ac361e53ba758d09d3bff85 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.cpp
+@@ -18,16 +18,6 @@ namespace ps2_stubs
+         TODO_NAMED("sceFsSemExit", rdram, ctx, runtime);
+     }
+ 
+-    void sceFsSemInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+-    {
+-        TODO_NAMED("sceFsSemInit", rdram, ctx, runtime);
+-    }
+-
+-    void sceFsSigSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+-    {
+-        TODO_NAMED("sceFsSigSema", rdram, ctx, runtime);
+-    }
+-
+     void close(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         ps2_syscalls::fioClose(rdram, ctx, runtime);
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h
+index dc9268f39f1076ee006a5efe5c98f74bc6ece7cc..7673a80ba16bc5a2692127b0191b1e4a1ae79352 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/FileIO.h
+@@ -7,8 +7,6 @@ namespace ps2_stubs
+     void sceFsDbChk(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceFsIntrSigSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceFsSemExit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-    void sceFsSemInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-    void sceFsSigSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void close(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void fstat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void lseek(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);

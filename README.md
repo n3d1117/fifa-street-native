@@ -38,6 +38,8 @@ cd tarzan-freeride-native
 ./tz package --install          # optional: /Applications/Tarzan Freeride PS2.app
 ```
 
+Apple builds link only the required static FFmpeg archives directly through CMake.
+
 Saves and settings live in `~/Library/Application Support/TarzanFreeridePS2`.
 Controls: keyboard (remap in Settings, Keyboard) or any SDL-supported gamepad.
 `./tz --help` lists every command.

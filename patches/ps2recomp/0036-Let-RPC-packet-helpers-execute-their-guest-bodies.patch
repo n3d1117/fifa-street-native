@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 18 Oct 2026 23:21:28 +0200
+Subject: [PATCH 36/38] Let RPC packet helpers execute their guest bodies
+
+The generated packet action test reproduced sceRpcGetFPacket throwing. Remove the three automatic TODO bindings and delete their unused stub files. The disc helpers free packet fields, rotate 64-byte pool slots using signed remainder, and select an indexed pool with rotating fallback; all effects stay in guest registers and memory.
+
+Verified build, quick/full 56 tests, 1106 VU replay runs with zero mismatches/rejections, and boot to title. First-mission reached at 25.2 FPS, CPU user/sys 152.493/2.339 s, zero VU fallbacks and steady audio underruns, no crash or stubs.
+
+diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
+index 9e80ef2b42dfd434f0ddd5b4527a38e0c9969f61..2cefd80a2d29e5bcbd25aa56d1cd39c3002e5163 100644
+--- a/ps2xRuntime/include/ps2_call_list.h
++++ b/ps2xRuntime/include/ps2_call_list.h
+@@ -231,9 +231,6 @@
+     X(sceFsSemExit)                           \
+     X(sceIDC)                                 \
+     X(sceMpegFlush)                           \
+-    X(sceRpcFreePacket)                       \
+-    X(sceRpcGetFPacket)                       \
+-    X(sceRpcGetFPacket2)                      \
+     X(sceSDC)                                 \
+     X(sceSifCmdIntrHdlr)                      \
+     X(sceSifLoadElfPart)                      \
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/RPC.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/RPC.cpp
+deleted file mode 100644
+index 8c3a02d61014733718294d849238ab653b1f424c..0000000000000000000000000000000000000000
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/RPC.cpp
++++ /dev/null
+@@ -1,20 +0,0 @@
+-#include "Common.h"
+-#include "RPC.h"
+-
+-namespace ps2_stubs
+-{
+-    void sceRpcFreePacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+-    {
+-        TODO_NAMED("sceRpcFreePacket", rdram, ctx, runtime);
+-    }
+-
+-    void sceRpcGetFPacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+-    {
+-        TODO_NAMED("sceRpcGetFPacket", rdram, ctx, runtime);
+-    }
+-
+-    void sceRpcGetFPacket2(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+-    {
+-        TODO_NAMED("sceRpcGetFPacket2", rdram, ctx, runtime);
+-    }
+-}
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/RPC.h b/ps2xRuntime/src/lib/Kernel/Stubs/RPC.h
+deleted file mode 100644
+index abc4e23d75c8f63566fbb8f7c1af31cd07a62477..0000000000000000000000000000000000000000
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/RPC.h
++++ /dev/null
+@@ -1,10 +0,0 @@
+-#pragma once
+-
+-#include "ps2_stubs.h"
+-
+-namespace ps2_stubs
+-{
+-    void sceRpcFreePacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-    void sceRpcGetFPacket(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-    void sceRpcGetFPacket2(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+-}
