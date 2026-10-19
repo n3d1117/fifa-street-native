@@ -13,7 +13,6 @@
 
 @interface TarzanExperimentalSettingsActions : NSObject <NSWindowDelegate>
 - (void)settingChanged:(NSButton*)sender;
-- (void)targetChanged:(NSPopUpButton*)sender;
 - (void)renderScaleChanged:(NSPopUpButton*)sender;
 - (void)saveSettings:(id)sender;
 @end
@@ -37,7 +36,6 @@ NSButton* s_skipLogosButton;
 NSButton* s_extraLives99Button;
 NSButton* s_unlimitedSpearsButton;
 NSButton* s_unlockAllMissionsButton;
-NSPopUpButton* s_targetFPSPopup;
 NSPopUpButton* s_renderScalePopup;
 NSTextField* s_status;
 TarzanExperimentalSettingsActions* s_actions;
@@ -72,8 +70,6 @@ void refreshControls() {
         [s_unlimitedSpearsButton setState:s_pending.unlimitedSpears ? NSControlStateValueOn : NSControlStateValueOff];
     if (s_unlockAllMissionsButton)
         [s_unlockAllMissionsButton setState:s_pending.unlockAllMissions ? NSControlStateValueOn : NSControlStateValueOff];
-    if (s_targetFPSPopup)
-        [s_targetFPSPopup selectItemWithTag:s_pending.targetFps];
     if (s_renderScalePopup)
         [s_renderScalePopup selectItemWithTag:s_pending.renderScale];
 }
@@ -90,13 +86,6 @@ void updatePendingFromControl(NSButton* sender) {
     case kUnlimitedSpearsTag: s_pending.unlimitedSpears = enabled; break;
     case kUnlockAllMissionsTag: s_pending.unlockAllMissions = enabled; break;
     }
-    setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
-}
-
-void updatePendingTargetFromControl(NSPopUpButton* sender) {
-    const NSInteger selected = [[sender selectedItem] tag];
-    if (selected == 60 || selected == 120)
-        s_pending.targetFps = static_cast<int>(selected);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 
@@ -139,19 +128,11 @@ void showWindowOnMain() {
     [heading setFrame:NSMakeRect(22, 442, 546, 22)];
     [content addSubview:heading];
 
-    s_highFPSButton = [NSButton checkboxWithTitle:@"Higher frame rate" target:s_actions action:@selector(settingChanged:)];
+    s_highFPSButton = [NSButton checkboxWithTitle:@"60 FPS (smoother, uses more CPU)" target:s_actions action:@selector(settingChanged:)];
     [s_highFPSButton setTag:kHighFPSTag];
     [s_highFPSButton setFrame:NSMakeRect(22, 398, 350, 24)];
     [content addSubview:s_highFPSButton];
-    s_targetFPSPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(406, 396, 150, 28) pullsDown:NO];
-    [s_targetFPSPopup addItemWithTitle:@"60 FPS"];
-    [[s_targetFPSPopup lastItem] setTag:60];
-    [s_targetFPSPopup addItemWithTitle:@"120 FPS"];
-    [[s_targetFPSPopup lastItem] setTag:120];
-    [s_targetFPSPopup setTarget:s_actions];
-    [s_targetFPSPopup setAction:@selector(targetChanged:)];
-    [content addSubview:s_targetFPSPopup];
-    NSTextField* fpsDetail = [NSTextField labelWithString:@"Experimental; target may not be reached in all scenes."];
+    NSTextField* fpsDetail = [NSTextField labelWithString:@"Off keeps the original 25 FPS. Some scenes may not reach 60."];
     [fpsDetail setFrame:NSMakeRect(46, 364, 510, 24)];
     [fpsDetail setMaximumNumberOfLines:2];
     [[fpsDetail cell] setWraps:YES];
@@ -308,7 +289,6 @@ void showWindowOnMain() {
     // on close by default; ARC clients must disable that behavior.
 }
 - (void)settingChanged:(NSButton*)sender { updatePendingFromControl(sender); }
-- (void)targetChanged:(NSPopUpButton*)sender { updatePendingTargetFromControl(sender); }
 - (void)renderScaleChanged:(NSPopUpButton*)sender { updatePendingRenderScaleFromControl(sender); }
 - (void)saveSettings:(id)sender {
     (void)sender;

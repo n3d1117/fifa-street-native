@@ -55,7 +55,7 @@ Settings load_settings_file(const std::string& user_dir) {
         id target = plist[@"targetFPS"];
         if (is_integer_number(target)) {
             const int parsed = [target intValue];
-            if (parsed == 60 || parsed == 120) s.targetFps = parsed;
+            if (parsed == 60) s.targetFps = parsed;  // a stored 120 migrates to 60; 120 is env-only
         }
         id scale = plist[@"renderScale"];
         s.renderScale = scale ? valid_render_scale(scale) : (s.hdWidescreen ? 2 : 1);

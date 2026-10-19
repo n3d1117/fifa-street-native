@@ -12,7 +12,7 @@ namespace tarzan {
 
 struct Settings {
     bool highFps = false;
-    int targetFps = 60;            // 60 or 120
+    int targetFps = 60;            // 60; 120 only via TARZAN_EXPERIMENT_FPS
     bool hdWidescreen = false;
     int renderScale = 1;           // 1..4
     bool sharperImage = false;

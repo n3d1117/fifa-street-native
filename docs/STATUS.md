@@ -13,7 +13,7 @@ Experimental static recompilation, not a decompilation and not a verified comple
 | Saves | Card save/reload for one slot | All checkpoints, multiple slots |
 | Input | Keyboard remapping, SDL gamepads | Real PS5/Xbox pad testing |
 | Video | Native to 4x internal resolution, 16:9, optional sharpening, UI half-pixel coverage fix | Blurry tutorial text at higher scale |
-| Performance | Default 25 FPS PAL. The 60 target reaches 60.0 `fps_gameplay` in first-mission gameplay with the data-side worker (36.2 inline; the target caps the result, so headroom is unmeasured). Gameplay is CPU-bound | 120 target and later missions at 60 not measured; guest render/culling and VU1 flag helpers dominate the profile |
+| Performance | Default 25 FPS PAL. The 60 target reaches 60.0 `fps_gameplay` in first-mission gameplay with the data-side worker (36.2 inline; the target caps the result, so headroom is unmeasured). Gameplay is CPU-bound | later missions at 60 not measured; guest render/culling and VU1 flag helpers dominate the profile |
 | Process | One app process, one build tree `build/game-metal`, settings in one plist | Settings window and fullscreen are not scriptable |
 | Platforms | macOS arm64 | iOS/tvOS: plan only (below) |
 
@@ -27,12 +27,12 @@ macOS first, in this order.
 2. **Offline speed tests for VU1 and GS** from captures, with no game launch.
 3. **Profile-first CPU work.** VU1 FMAC flag cost, guest code speed (memory fast path, register stores, direct calls), native IOP. Only what the profile prices above about 3% of the game thread. Every change gets a kill-switch and, where results must match, a verify mode.
 4. **Smaller app and faster builds, by build profile.** Minimal FFmpeg (MPEG-2 decoder and parser only; PSS frames must stay bit-identical), split the largest translation units and the PCH, trim the GS bridge.
-5. **Later, nice-to-haves.** Apple GameController backend in place of SDL. Cheat-section features: FPS overlay, invincibility, character and trick unlocks, button-swap remap. Visual toggles: frame pacing, sharper tutorial text.
+5. **Later, nice-to-haves.** Apple GameController backend in place of SDL. Cheat-section features: FPS overlay, invincibility, character and trick unlocks, button-swap remap. Visual toggles: frame pacing, sharper tutorial text. 120 FPS: test on a 120 Hz display (60 Hz display measured 55.7, presentation-paced).
 6. **iOS/tvOS, last.** See the plan below.
 
 ## Open questions / known issues
 
-- Whether the 60 target holds in later missions and whether 120 is reachable (unmeasured).
+- Whether the 60 target holds in later missions (unmeasured).
 - Mission completion, boss outcomes and every save path are untested.
 - Intermittent audio underrun bursts at mission transitions are undiagnosed.
 

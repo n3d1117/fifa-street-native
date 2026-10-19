@@ -31,7 +31,7 @@ int main() {
 
         // Every field survives save -> load.
         Settings all;
-        all.highFps = true; all.targetFps = 120; all.hdWidescreen = true; all.renderScale = 3;
+        all.highFps = true; all.targetFps = 60; all.hdWidescreen = true; all.renderScale = 3;
         all.sharperImage = true; all.rememberLanguage = true; all.lastLanguage = 4;
         all.skipLogos = true; all.extraLives99 = true; all.unlimitedSpears = true;
         all.unlockAllMissions = true;
@@ -78,6 +78,9 @@ int main() {
         Settings loaded = tarzan::load_settings_file(dir);
         assert(!loaded.highFps && loaded.targetFps == 60 && loaded.renderScale == 1);
         assert(loaded.hdWidescreen && loaded.rememberLanguage && loaded.lastLanguage == -1);
+        assert([(@{@"highFPS": @YES, @"targetFPS": @120}) writeToFile:path atomically:YES]);
+        loaded = tarzan::load_settings_file(dir);
+        assert(loaded.highFps && loaded.targetFps == 60);
         NSDictionary* oldFormat = @{@"hdWidescreen": @YES};
         assert([oldFormat writeToFile:path atomically:YES]);
         assert(tarzan::load_settings_file(dir).renderScale == 2);

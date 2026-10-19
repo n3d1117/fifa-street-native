@@ -6,7 +6,7 @@ You supply your own disc. This repository contains no game code, data or assets.
 ## Status
 
 - Boots, plays movies with sound, and plays the first mission and most map missions at the original 25 FPS. Full progression and every save path are untested.
-- Options, off by default: internal resolution up to 4x, 16:9, 60/120 FPS targets, logo skip, remember language, and the game's own cheats.
+- Options, off by default: internal resolution up to 4x, 16:9, a 60 FPS mode, logo skip, remember language, and the game's own cheats.
 
 Details: [docs/STATUS.md](docs/STATUS.md). Contributors: [AGENTS.md](AGENTS.md).
 

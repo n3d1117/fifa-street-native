@@ -94,11 +94,11 @@ Transactional bank copies cost 3.1%; lookup is generation-cached and not a targe
 
 ## Settings and environment
 
-One `tarzan::Settings` (`host/settings.hpp`, defaults there) loads once from `<user dir>/experimental-settings.plist` (keys: `highFPS`, `targetFPS`, `hdWidescreen`, `renderScale`, `sharperImage`, `rememberLanguage`, `lastLanguage`, `skipLogos`, `extraLives99`, `unlimitedSpears`, `unlockAllMissions`; unknown keys preserved). All experiments default off and apply after restart; the normal path keeps original timing, 4:3 framing and native scale. Debug overrides apply on top; the runtime gets host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
+One `tarzan::Settings` (`host/settings.hpp`, defaults there) loads once from `<user dir>/experimental-settings.plist` (keys: `highFPS`, `targetFPS` (only 60 loads; a stored 120 migrates to 60), `hdWidescreen`, `renderScale`, `sharperImage`, `rememberLanguage`, `lastLanguage`, `skipLogos`, `extraLives99`, `unlimitedSpears`, `unlockAllMissions`; unknown keys preserved). All experiments default off and apply after restart; the normal path keeps original timing, 4:3 framing and native scale. Debug overrides apply on top; the runtime gets host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
 
 | Variable | Effect |
 |---|---|
-| `TARZAN_EXPERIMENT_HD=1`, `_FPS=60\|120`, `_SCALE=1..4`, `_SHARP=1` | override that setting for this process |
+| `TARZAN_EXPERIMENT_HD=1`, `_FPS=60\|120` (120 has no UI; `tz run --fps-target` sets it), `_SCALE=1..4`, `_SHARP=1` | override that setting for this process |
 | `PS2X_WALLCLOCK=0` | deterministic estimated-cycle timing |
 | `TARZAN_DIAGNOSTIC_INPUT_FIFO=<fifo>` | scripted input (routes, probe) |
 | `TARZAN_TRACE_FAULTS=1`, `TARZAN_TRACE_SPU2=1` | fault and audio-health lines (`tz run` sets both) |

@@ -159,7 +159,7 @@ def parse_log(text):
     return out
 
 
-def write_run_settings(user_dir, *, skip_logos=False, fps_target=None, unlock_missions=False):
+def write_run_settings(user_dir, *, skip_logos=False, unlock_missions=False):
     path = Path(user_dir) / "experimental-settings.plist"
     try:
         settings = plistlib.loads(path.read_bytes()) if path.exists() else {}
@@ -167,8 +167,6 @@ def write_run_settings(user_dir, *, skip_logos=False, fps_target=None, unlock_mi
         settings = {}
     if skip_logos is not None:
         settings["skipLogos"] = bool(skip_logos)
-    if fps_target:
-        settings.update(highFPS=True, targetFPS=fps_target)
     if unlock_missions:
         settings["unlockAllMissions"] = True
     path.write_bytes(plistlib.dumps(settings))
@@ -646,7 +644,7 @@ def run_missions(args):
         launches += 1
         user_dir = out / f"user-dir-{launches}"
         user_dir.mkdir()
-        write_run_settings(user_dir, skip_logos=True, fps_target=args.fps_target, unlock_missions=True)
+        write_run_settings(user_dir, skip_logos=True, unlock_missions=True)
         game = Game(out, f"{launches}", user_dir, capture)
         games.append(game)
         try:
@@ -743,6 +741,8 @@ def main():
     ap.add_argument("--desktop-input", action="store_true",
                     help="synthetic desktop key events instead of the diagnostic FIFO (needs Accessibility)")
     args = ap.parse_args()
+    if args.fps_target:
+        os.environ["TARZAN_EXPERIMENT_FPS"] = str(args.fps_target)
     if args.route == "missions":
         if args.app or args.save or args.user_dir or args.runner or args.desktop_input:
             ap.error("--route missions uses its own isolated user dirs and the build runner; no --app/--save/--user-dir/--runner/--desktop-input")
@@ -788,7 +788,7 @@ def main():
         ap.error("--route first-mission needs a --user-dir without saves (new game); only experimental-settings.plist is allowed")
     explicit_real = bool(args.user_dir) and user_dir == REAL_SUPPORT.resolve()
     if not args.user_dir or not explicit_real:
-        write_run_settings(user_dir, skip_logos=(args.route == "none" and not args.no_skip_logos), fps_target=args.fps_target)
+        write_run_settings(user_dir, skip_logos=(args.route == "none" and not args.no_skip_logos))
     elif args.fps_target:
         ap.error("--fps-target requires an isolated user directory")
     before = save_hash(REAL_SUPPORT)
