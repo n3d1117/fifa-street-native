@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 19:53:47 +0200
-Subject: [PATCH 52/59] Kernel: SetupHeap(-1) and EndOfHeap end the heap at the
+Subject: [PATCH 52/60] Kernel: SetupHeap(-1) and EndOfHeap end the heap at the
  main thread's stack bottom; SIF RPC packet pool base set by the host (default
  kept for fixtures)
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:56:00 +0200
-Subject: [PATCH 59/59] Loadfile client HLE: _lf_bind (bound, no server needed)
+Subject: [PATCH 59/60] Loadfile client HLE: _lf_bind (bound, no server needed)
  and sceSifSearchModuleByName (by the IRX's embedded IOPMOD name); IOP modules
  record their embedded names
 
