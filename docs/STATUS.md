@@ -1,17 +1,9 @@
-## Resume
-
-- Intent: boot FIFA Street past the first fault. Verified and pushed: tail-call discovery, gp from `.reginfo`, JALR fix, `sceCdCallback` completion, LBN map, TODO-stub unbind and build check, probe child kill.
-- Next: the boot stops at fault 0x2a62c0 (`sub_002A62A0`): EA's allocator memsets 0xCC55CC55 over `.data` at 0x480250. Suspect: EeScheduler invocation/callback stacks default to 0x1F00000.. (game stack 0x1FF0000, heap 0x57E900..). Move them below the ELF's lowest PT_LOAD via `ps2SetRuntimeArena` from the launcher, with an overlap test; re-run.
-- Then: IOP.BIG modules as LLE IRX on the virtual IOP kernel, MPC movies.
-- Key files: `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp`, `ps2_runtime.cpp` (arena), `host/launcher.cpp`.
-- Gotchas: lldb watchpoints on `rdram+addr` work (x0 = rdram, x1 = ctx, r[i] at ctx+16*i); `PS2X_TRACE_SYSCALLS/RPC/CD_IO`.
-
 ## Current
 
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Recompiles and links: 13533 functions discovered by the recompiler (no symbols; `sub_<ADDR>`), 13379 translated, 154 HLE-bound SDK stubs, 0 skipped. First run faults in the first seconds (see Next 1). No prior decompilation or recompilation of FIFA Street or any EA PS2 game is known |
+| Game | Recompiles and links (13533 functions discovered by the recompiler, no symbols; 144 HLE-bound SDK stubs). Boots: reads `IOP.BIG` by real LBN, loads its 7 IRX modules on the virtual IOP, and shows the FIFA Street loading screen with a progress bar, then stops (see Next 1). Movies and menus not reached |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -28,12 +20,14 @@
 
 ## Next
 
-1. **First boot fault.** `./rx run` stops at `guest-branch:missing-target`: `J 0x44b7d0` from `0x44b848` (ra `0x44b978`), a function start nobody calls with JAL, so discovery misses it (it sits right after the `InitAlarm` stub at `0x44b6f8`). Fix discovery or add an entry point in the template, then continue to the next fault. 5438 functions with a `JALR` promote every instruction as a resume entry (655k entries, 282 MB generated); excluding `JALR` calls from the indirect-jump fallback should cut build time (not measured).
-2. **Boot to menus.** IOP boot needs `IOPRP280.IMG` plus the 7 modules in `IOP.BIG` (refpack `BIG4`; the IOP layer must read them, including EA `snddrv`). EA `MPC` movies and `SCHl`/`.MUS` audio need decoders. Re-derive the runtime arena and IOP heap layout for this ELF: the launcher's previous fixed ranges were removed, and the ELF loads at `0x100000` to about `0x5A0000`, so any fixed arena there would overlap it.
+1. **Loadfile RPC.** The loading bar stops at about a third: the game polls `BindRpc` for SID `0x80000006` (IOP loadfile) from `sub_0044A588` (called through `sub_003E0698` / `sub_003DF818`, loading something beyond the 7 `IOP.BIG` modules). No IOP module serves it: `IOPRP280.IMG`'s Sony modules (loadfile, cdvdfsv, ...) are not run. Decision: HLE the loadfile RPC server (functions load module / load buffer / start / stop through the existing IOP loader) or load the IOPRP280 modules as LLE IRX. Check first what the game loads (path) with `PS2X_TRACE_RPC=1`.
+2. **Movies and menus.** `DATA/FEMOVIES/*.MPC` (EA `MPCh` wrapper, raw MPEG-2) not reached yet; EA `SCHl`/`.MUS` audio decoders. The run shows 224 audio underruns (measured, cause not looked at).
 3. **Play a match.** Add a scripted fast-match gate for `./rx run`.
 4. **Whole-game faithful pass** against PCSX2 behavior.
 5. **Performance.** Profile first. Native VU is a later step.
 6. **iOS/tvOS.** See the plan below.
+
+Diagnosis tools: `./rx run --seconds N` (N >= 8) puts a runtime state block (EE threads, semaphores, sampled pcs resolved to functions, DMA/VIF registers, IOP, recent RPC) in `summary.json` `state`; `PS2X_DUMP_MEM=<hexaddr>:<words>`, `PS2X_TRACE_SYSCALLS/RPC/CD_IO/FAULTS`, SIGUSR1 for a dump on demand. Code edits to headers the generated code includes (`ps2_runtime.h`, ...) cost a 5 minute rebuild; `.cpp` edits 3-10 s.
 
 Known risk: PCSX2 needs GIF FIFO and EE cycle-rate accuracy for FIFA Street 2; watch both.
 
