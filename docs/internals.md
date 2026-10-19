@@ -6,6 +6,7 @@ Mechanisms, invariants and constants. Commands are in `AGENTS.md`; state and roa
 
 - PAL: gameplay 25 FPS, VBlank 50 Hz, movies 25 fps (PTS-driven). Nothing may assume 59.94/60 Hz unless an opt-in experiment set it.
 - Interactive hardware time follows the monotonic host clock (`PS2X_WALLCLOCK=0` selects deterministic estimated-cycle time). Estimated block costs never accelerate it. EE, COP0 and IOP/SPU clocks are never changed to raise FPS; no overclock. The 60/120 experiment changes only the guest VBlank period and the FPS gate.
+- The ELF-verified swap loop (`0x3F8B98–0x3F8BB0`: LUI/LW/LUI/LW/NOP/BNE/NOP, RAM counters `0x6B04F0/0x6B04F8`) keeps its original loads/register effects but yields through `EeScheduler::idlePoll` to the earliest event, EE timer or IOP/SPU2 idle-service deadline; wall-clock sampling accounts slept time, pending SPU2 IRQs invalidate the IOP bound, and deterministic timing or runnable EE work keeps polling (`TARZAN_SWAP_IDLE=0` disables; `verify` compares loop register results and preserves the wait context except COP0 Count).
 - Synchronous guest IOP RPCs must not advance the SPU timeline on top of the EE-issued IOP budget: the scheduler accumulates an absolute issued target and credits work already executed; reset clears the target and the fractional 1:8 carry; the SPU epoch stays monotonic.
 - Movie presentation epoch is fixed. Late frames present promptly without shifting the PTS epoch or dropping decoded frames. PTS and PTS-less intervals use the effective VBlank period.
 - DISPFB2 changes, guest updates and presents are different metrics. `fps_dispfb2` in the `tz run` summary is the first; gameplay is 25/s, movies 50/s. With the data-side worker, target-60 gameplay reaches its cap while EE polls and VU1/GS overlap; target-120 attribution is in the profile section below. The upstream display-rate present throttle is enabled for high FPS.
@@ -62,7 +63,7 @@ Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity ac
 
 ## Profile attribution (decision basis)
 
-- Reproduce with `./tz run --mission 1 --fps-target 60 --measure`, then mission 8; take gameplay CPU counter deltas before `sample <child-pid> 20`. Sampling is attribution, never throughput evidence.
+- Baseline attribution uses `TARZAN_SWAP_IDLE=0`. Reproduce with `./tz run --mission 1 --fps-target 60 --measure`, then mission 8; take gameplay CPU counter deltas before `sample <child-pid> 20`. Sampling is attribution, never throughput evidence.
 - Use `proc_pidinfo` task/thread user+system deltas: task times need `mach_timebase_info` conversion, thread times are nanoseconds. Divide by window wall time for busy %, and by DISPFB2 rate × wall time for approximate CPU seconds/frame; exclude boot/loading.
 - Measured mission 1/8: EE busy 99.3/99.4%, worker 48.5/59.5%, main 0.49/0.44%, audio callbacks 0.56/0.51%; unnamed dispatch/driver pool 3.9/4.6% (queue identity inferred). Total CPU/frame ≈0.0255/0.0274 s at ≈60 updates/s.
 - EE leaf attribution (% of thread wall samples, mission 1/8): guest/VU0/helpers 41.0/38.9, IOP 17.0/14.9, SPU2 5.9/5.6, scheduler/checkpoints 33.0/34.7, VIF/DMA/queue 2.6/2.7, blocked 0.5/3.3. IOP and mixing remain on EE; audio callbacks are separate.
@@ -99,6 +100,7 @@ One `tarzan::Settings` (`host/settings.hpp`, defaults there) loads once from `<u
 |---|---|
 | `TARZAN_EXPERIMENT_HD=1`, `_FPS=60\|120` (120 has no UI; `tz run --fps-target` sets it), `_SCALE=1..4`, `_SHARP=1` | override that setting for this process |
 | `PS2X_WALLCLOCK=0` | deterministic estimated-cycle timing |
+| `TARZAN_SWAP_IDLE=0` / `verify` | disable swap-poll sleep / check translated poll registers and wait context (never measure verify mode) |
 | `TARZAN_DIAGNOSTIC_INPUT_FIFO=<fifo>` | scripted input (routes, probe) |
 | `TARZAN_TRACE_FAULTS=1`, `TARZAN_TRACE_SPU2=1` | fault and audio-health lines (`tz run` sets both) |
 | `TARZAN_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture (probe `--gpu-capture`) |

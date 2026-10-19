@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Tarzan game hooks: host code the recompiler calls at configured instruction
 // addresses (config/SLES-50350.template.toml, [[hooks]]). Each hook is gated by
-// the experimental settings and does nothing when its setting is off, so the
+// settings or diagnostic switches and does nothing when disabled, so the
 // recompiled guest code runs unmodified. Hooks are installed only when every
 // guest instruction word they depend on matches the verified retail ELF.
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 #include "game_overrides.h"
+#include "runtime/ee_scheduler.h"
 #include "experimental-settings.hpp"
 
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 namespace {
 
@@ -53,6 +55,56 @@ uint32_t fpsInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *) {
 // FPS gate sync: after `lbu $v0, 0xB8($at)` in osrSyncCallback at 0x3f8df4.
 uint32_t fpsSync(uint8_t *, R5900Context *ctx, PS2Runtime *) {
     if (tarzan_experiments_high_fps() != 0) SET_GPR_ZE32(ctx, 2, 0u);
+    return 0;
+}
+
+// The ELF-verified loop only reads RAM; keep its original instructions and
+// register effects, yielding to the dispatcher after each hardware deadline.
+uint32_t swapPoll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+    static const int mode = [] {
+        const char *value = std::getenv("TARZAN_SWAP_IDLE");
+        if (!value) return 1;
+        return std::strcmp(value, "0") == 0 ? 0 :
+            (std::strcmp(value, "verify") == 0 ? 2 : 1);
+    }();
+    if (!mode) return 0;
+    const uint32_t submitted = FAST_READ32(0x6B04F0u), completed = FAST_READ32(0x6B04F8u);
+    if (mode == 2) {
+        // Compare the translated loop's register results with its verified
+        // LUI/LW/LUI/LW/NOP words before allowing the idle path.
+        if (GPR_U64(ctx, 1) != 0x6B0000u ||
+            GPR_U64(ctx, 3) != static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(submitted))) ||
+            GPR_U64(ctx, 2) != static_cast<uint64_t>(static_cast<int64_t>(static_cast<int32_t>(completed)))) {
+            std::fprintf(stderr, "[tarzan-swap-idle] loop verification mismatch\n");
+            std::abort();
+        }
+    }
+    if (submitted == completed) return 0;
+    ctx->pc = 0x3F8B98u;
+    if (mode != 2) {
+        runtime->eeScheduler().idlePoll();
+        return 0;
+    }
+    struct VerifyWait {
+        R5900Context *ctx;
+        R5900Context before;
+        ~VerifyWait() {
+            R5900Context after;
+            std::memcpy(&after, ctx, sizeof(after));
+            after.cop0_count = before.cop0_count;
+            if (std::memcmp(&before, &after, sizeof(after))) {
+                std::fprintf(stderr, "[tarzan-swap-idle] wait context mismatch\n");
+                std::abort();
+            }
+            static bool reported = false;
+            if (!reported) {
+                std::fprintf(stderr, "[tarzan-swap-idle] loop and wait context verified\n");
+                reported = true;
+            }
+        }
+    } guard{ctx, {}};
+    std::memcpy(&guard.before, ctx, sizeof(*ctx));
+    runtime->eeScheduler().idlePoll();
     return 0;
 }
 
@@ -179,6 +231,7 @@ struct Hook {
 };
 
 const Hook kHooks[] = {
+    {0x3F8BA8u, false, swapPoll},
     {0x369A3Cu, true, cameraZoom}, {0x369A7Cu, true, cameraFov},
     {0x35EC74u, true, fpsInit},      {0x3F8DF4u, true, fpsSync},    {0x360388u, true, clockTrace},
     {0x34FCE0u, false, languageStart}, {0x350350u, false, languageMenu},
@@ -193,6 +246,9 @@ struct Word {
 
 // Guest instruction words (and the two cheat-code tables) the hooks depend on.
 const Word kExpected[] = {
+    {0x3F8B98, 0x3C01006B}, {0x3F8B9C, 0x8C2304F0}, {0x3F8BA0, 0x3C01006B},
+    {0x3F8BA4, 0x8C2204F8}, {0x3F8BA8, 0x00000000}, {0x3F8BAC, 0x1462FFFA},
+    {0x3F8BB0, 0x00000000},
     {0x369A3C, 0x3C023F00}, {0x369A7C, 0x4614A843}, {0x3699C0, 0x27BDFFB0},
     {0x3699C4, 0x7FBF0030}, {0x3699C8, 0x7FB10020}, {0x338BD8, 0x0C0DA670},
     {0x33B324, 0xAC850004}, {0x360388, 0xFC241A10}, {0x35EC74, 0xA02200B8},

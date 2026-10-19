@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Mon, 19 Oct 2026 15:54:54 +0200
+Subject: [PATCH 43/43] Yield pure guest polls at scheduler and IOP deadlines
+
+Expose the IOP scheduler's existing idle bound in EE cycles, including SPU2
+service/event deadlines, fractional cycle carry and synchronous RPC credit.
+Invalidate the bound when the final SPU2 advance raises an interrupt.
+
+Reuse waitForEvent for a wall-clock-only idlePoll primitive. Anchor relative
+deadlines before IOP service, account elapsed host time before and after the
+wait, and return to the dispatcher for interrupts/callbacks. Runnable EE work
+and deterministic-cycle timing keep the original poll path.
+
+Integrated Tarzan swap-poll A/B, task user+system CPU in steady gameplay:
+mission 1 at 25 FPS: 1.351457 -> 0.806470 CPU s/s (-40.33%),
+54.058 -> 32.259 ms/frame; at 60 FPS: 1.515577 -> 1.124713 CPU s/s
+(-25.79%), 25.260 -> 18.745 ms/frame. Both pairs hold 25.0/60.0 FPS,
+zero steady underruns and zero VU fallbacks. Control/candidate run back to
+back with TARZAN_SWAP_IDLE=0/1; no tracing or verification during timing.
+
+Validation: tz build; tz test; tz test --full (56/56 ctest,
+1130 VU replay runs, zero mismatches/rejected/skipped); mission 1 default,
+60 FPS A/B, verify mode; mission 8 at 60 FPS; full first-mission movie/audio
+route (25.0 FPS, zero steady underruns/fallbacks, no crash).
+
+diff --git a/ps2xIOP/include/ps2x/iop/iop_subsystem.h b/ps2xIOP/include/ps2x/iop/iop_subsystem.h
+index 68fec81cfb00d935d71e3c18c3d871e5450533b0..42caef86b8ef8eac31758596cb496917085c3943 100644
+--- a/ps2xIOP/include/ps2x/iop/iop_subsystem.h
++++ b/ps2xIOP/include/ps2x/iop/iop_subsystem.h
+@@ -27,6 +27,7 @@ namespace ps2x::iop
+         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments = nullptr, uint32_t argumentSize = 0);
+         [[nodiscard]] bool stopModule(int32_t moduleId, int32_t *result = nullptr);
+         void runEeCycles(uint64_t eeCycles) noexcept;
++        [[nodiscard]] uint64_t eeCyclesUntilService() const noexcept;
+ 
+         [[nodiscard]] RpcAbi selectRpcAbi(const RpcAbiRequest &request) const;
+         [[nodiscard]] bool canBindRpc(uint32_t sid) const noexcept;
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index 2582e247ce965ef93292871388b2acf13164230f..4a294c5a01ead9c16fdaddf673cd9e72a9fb9f33 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -191,6 +191,10 @@ namespace ps2x::iop::detail
+ 
+         void scheduleSpu2Interrupts(uint32_t pending)
+         {
++            // The final SPU2 advance in runCycles can create a new interrupt
++            // after scheduleStep computed its idle bound.
++            if (pending != 0u)
++                idleUntil = 0u;
+             if (pending & 1u)
+                 pendingDmaInterrupts[9] = totalCycles;
+             if ((pending & 2u) && memory.completeSpu2Dma(0))
+@@ -999,6 +1003,20 @@ namespace ps2x::iop::detail
+         return m_impl->stopModule(moduleId, result);
+     }
+ 
++    uint64_t IopEmulator::eeCyclesUntilService() const noexcept
++    {
++        // Reuse the scheduler's proven idle bound; unknown/runnable work gets
++        // no idle skip. Synchronous RPC work may already have earned credit.
++        const uint64_t next = m_impl->idleUntil > m_impl->totalCycles
++            ? m_impl->limitIdleSkip(m_impl->idleUntil) : m_impl->totalCycles;
++        if (next <= m_impl->eeIssuedIopCycleTarget)
++            return 0u;
++        const uint64_t remaining = next - m_impl->eeIssuedIopCycleTarget;
++        if (remaining > UINT64_MAX / 8u)
++            return UINT64_MAX;
++        return remaining * 8u - m_impl->eeCycleCarry;
++    }
++
+     void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
+     {
+         const uint64_t total = m_impl->eeCycleCarry + eeCycles;
+diff --git a/ps2xIOP/src/emulator/iop_emulator.h b/ps2xIOP/src/emulator/iop_emulator.h
+index 01b48df57482646c829ebf19e76e3c351da56105..61941ea9f179b60d44b8b2746cd86be886936e5b 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.h
++++ b/ps2xIOP/src/emulator/iop_emulator.h
+@@ -25,6 +25,7 @@ namespace ps2x::iop::detail
+         [[nodiscard]] ModuleLoadResult loadModuleBuffer(uint32_t guestAddress, const void *arguments, uint32_t argumentSize);
+         [[nodiscard]] bool stopModule(int32_t moduleId, int32_t *result);
+         void runEeCycles(uint64_t eeCycles) noexcept;
++        [[nodiscard]] uint64_t eeCyclesUntilService() const noexcept;
+         [[nodiscard]] RpcResult handleRpc(const RpcRequest &request);
+         [[nodiscard]] bool hasRpcServer(uint32_t sid) const noexcept;
+         void onSifTransfer(const SifTransfer &transfer);
+diff --git a/ps2xIOP/src/iop_subsystem.cpp b/ps2xIOP/src/iop_subsystem.cpp
+index b49815540952427b724770b5a9555994b5de99d7..117937627ab062d8d49b8997ba6439c26490ff5d 100644
+--- a/ps2xIOP/src/iop_subsystem.cpp
++++ b/ps2xIOP/src/iop_subsystem.cpp
+@@ -164,6 +164,11 @@ namespace ps2x::iop
+         return true;
+     }
+ 
++    uint64_t IopSubsystem::eeCyclesUntilService() const noexcept
++    {
++        return m_impl->emulator.eeCyclesUntilService();
++    }
++
+     void IopSubsystem::runEeCycles(uint64_t eeCycles) noexcept
+     {
+         m_impl->emulator.runEeCycles(eeCycles);
+diff --git a/ps2xIOP/tests/iop_emulator_tests.cpp b/ps2xIOP/tests/iop_emulator_tests.cpp
+index 11243a3b3d5f710cd97f0e33761cfa38d94ca552..738d1fdd9d697c980a3d1a1e35dcf0b39b0634a9 100644
+--- a/ps2xIOP/tests/iop_emulator_tests.cpp
++++ b/ps2xIOP/tests/iop_emulator_tests.cpp
+@@ -324,6 +324,13 @@ namespace
+     }
+ 
+     void noOpSpu2Advance(uint64_t) {}
++    uint64_t idleSpuCycle = 0u, idleSpuEvent = UINT64_MAX;
++    bool raiseIdleSpuIrq = false;
++    void recordIdleSpuAdvance(uint64_t cycle) {
++        idleSpuCycle = cycle;
++        if (raiseIdleSpuIrq) iopSpu2RaiseIrq();
++    }
++    uint64_t nextIdleSpuEvent() { return idleSpuEvent; }
+ 
+     void writeRpcSemaphoreSchedulerIrx(TestHost &host, uint32_t address, uint32_t sid)
+     {
+@@ -1136,6 +1143,8 @@ int main()
+     const uint64_t synchronousCycles = iop.debugSnapshot().emulatorCycles;
+     if (!expect(synchronousCycles > 1u,
+                 "Module/RPC fixture did not spend enough cycles to exercise IOP budget debt")) return 1;
++    if (!expect(iop.eeCyclesUntilService() >= 8u * synchronousCycles,
++                "Synchronous IOP work must count as EE idle credit")) return 1;
+     iop.runEeCycles(8u);
+     if (!expect(iop.debugSnapshot().emulatorCycles == synchronousCycles,
+                 "A one-cycle EE budget must not advance IOP time while synchronous work is already ahead")) return 1;
+@@ -1154,6 +1163,40 @@ int main()
+     if (!expect(iop.debugSnapshot().emulatorCycles == 11u,
+                 "Normal EE budget accumulation must advance the reset IOP timeline exactly")) return 1;
+ 
++    // EE idle waits must stop at the same SPU2 deadline as IOP scheduling,
++    // including fractional 1:8 carry and synchronous-work credit.
++    {
++        iop.reset();
++        if (!expect(iop.eeCyclesUntilService() == 0u,
++                    "Unknown/runnable IOP state must forbid an EE idle skip")) return 1;
++        IopHostSpu2 hooks{};
++        hooks.advance = recordIdleSpuAdvance;
++        hooks.nextEvent = nextIdleSpuEvent;
++        hooks.maxIdleStep = 64u;
++        iopSetHostSpu2(hooks);
++        iop.runEeCycles(8u);
++        if (!expect(iop.eeCyclesUntilService() == 63u * 8u,
++                    "EE idle skip must respect the SPU2 service bound")) return 1;
++        idleSpuEvent = idleSpuCycle + 37u;
++        if (!expect(iop.eeCyclesUntilService() == 37u * 8u,
++                    "An earlier SPU2 event must shorten the EE idle deadline")) return 1;
++        iop.runEeCycles(7u);
++        if (!expect(iop.eeCyclesUntilService() == 37u * 8u - 7u,
++                    "EE idle deadline must subtract fractional IOP carry")) return 1;
++        raiseIdleSpuIrq = true;
++        iop.runEeCycles(1u);
++        raiseIdleSpuIrq = false;
++        if (!expect(iop.eeCyclesUntilService() == 0u,
++                    "An SPU2 IRQ raised by the final advance must invalidate the cached idle bound")) return 1;
++        iopSetHostSpu2(IopHostSpu2{});
++        iop.reset();
++        if (!expect(iop.eeCyclesUntilService() == 0u,
++                    "Reset must invalidate a cached IOP idle deadline")) return 1;
++        iop.runEeCycles(8u);
++        if (!expect(iop.eeCyclesUntilService() == UINT64_MAX,
++                    "An unbounded idle deadline must not overflow EE cycle conversion")) return 1;
++    }
++
+     // Outside-thread RPC imports must let ready IOP work make progress. The
+     // worker marks itself and signals a zero-count semaphore; function 0 waits
+     // for that signal, while function 1 exercises outside-thread DelayThread.
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index f247ff998daaa9fec3c1569cafa75a09619e17cc..c05f012adf1c66d5bc0c415a9d9c90dca9f1b691 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -10,6 +10,7 @@
+ #include <deque>
+ #include <functional>
+ #include <mutex>
++#include <limits>
+ #include <optional>
+ #include <thread>
+ #include <unordered_map>
+@@ -280,6 +281,10 @@ public:
+     void postEvent(EeEvent event);
+     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
+     void accountCycles(uint32_t cycles) noexcept;
++    // Yield a proven pure guest poll to the next hardware/service deadline.
++    // Returns without waiting if deterministic time or runnable EE work forbids
++    // sleep; otherwise transfers back to the dispatcher after servicing time.
++    void idlePoll();
+     [[nodiscard]] bool isExecutingGuest() const noexcept;
+ 
+     // Kernel object API. All calls except postEvent/requestStop execute on the
+@@ -389,7 +394,8 @@ private:
+     [[nodiscard]] static bool eventCondition(uint32_t current, uint32_t requested, uint32_t mode);
+     static int waitObjectId(const EeWaitState &wait);
+     void writeGuestU32(uint32_t address, uint32_t value);
+-    void waitForEvent();
++    void waitForEvent(uint64_t serviceCycles = std::numeric_limits<uint64_t>::max(),
++                      std::chrono::steady_clock::time_point sampledAt = std::chrono::steady_clock::now());
+     void scheduleEvent(uint64_t deadlineCycle, std::chrono::steady_clock::time_point hostDeadline, EeEvent event);
+     void updateNextDeadline();
+     [[nodiscard]] bool hasReadyAtOrAbovePriority(int priority) const;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index c9085b6404f68360e8cb82b57515cfd38d217e2f..6b5e0f87c0ed3151ebfd44e0640a7b43f2d65f78 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1,4 +1,5 @@
+ #include "runtime/ee_scheduler.h"
++#include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_display_timing.h"
+ #include "runtime/ps2_host_arena.h"
+ 
+@@ -488,6 +489,25 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+     }
+ }
+ 
++void EeScheduler::idlePoll()
++{
++    assertExecutor();
++    if (!ps2HostConfig().wallClock || !currentThread() ||
++        !currentThread()->invocations.empty() || !m_pendingInvocations.empty() ||
++        hasReadyAtOrAbovePriority(currentThread()->currentPriority))
++        return;
++
++    // Force a fresh wall-clock sample before choosing relative deadlines.
++    // This does not charge estimated cycles in wall-clock mode.
++    const auto sampledAt = std::chrono::steady_clock::now();
++    accountCycles(294912u);
++    if (!m_checkpointPending.load(std::memory_order_acquire))
++        waitForEvent(m_runtime.m_iopSubsystem->eeCyclesUntilService(), sampledAt);
++    accountCycles(294912u);
++    // Dispatch interrupts/callbacks before the guest rereads its poll words.
++    throw EeDispatcherTransfer{};
++}
++
+ bool EeScheduler::isExecutingGuest() const noexcept
+ {
+     return m_guestExecuting.load(std::memory_order_acquire);
+@@ -2090,14 +2110,14 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+     std::memcpy(m_rdram + physical, &value, sizeof(value));
+ }
+ 
+-void EeScheduler::waitForEvent()
++void EeScheduler::waitForEvent(uint64_t serviceCycles, std::chrono::steady_clock::time_point sampledAt)
+ {
+     std::unique_lock lock(m_eventMutex);
+     if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
+     {
+         return;
+     }
+-    const uint64_t timerCycles = m_runtime.memory().cyclesUntilNextEeTimerInterrupt();
++    const uint64_t timerCycles = std::min(serviceCycles, m_runtime.memory().cyclesUntilNextEeTimerInterrupt());
+     const bool hasTimerDeadline = timerCycles != std::numeric_limits<uint64_t>::max();
+     if (m_deadlines.empty() && !hasTimerDeadline)
+     {
+@@ -2124,7 +2144,7 @@ void EeScheduler::waitForEvent()
+     }
+     if (hasTimerDeadline)
+     {
+-        const auto timerHostDeadline = std::chrono::steady_clock::now() + eeCyclesToHostDuration(timerCycles);
++        const auto timerHostDeadline = sampledAt + eeCyclesToHostDuration(timerCycles);
+         if (timerHostDeadline < hostDeadline)
+         {
+             deadlineCycle = m_eeCycle + timerCycles;

@@ -1188,6 +1188,10 @@ when = "before"
 address = "0x345590"  # DLG_vEndOfLevelLoading entry (level loaded log)
 when = "before"
 
+[[hooks]]
+address = "0x3f8ba8"  # osrSwapBuffer: after the pure RAM counter loads
+when = "before"
+
 # Performance critical functions (may need manual optimization)
 [performance]
 critical = [
