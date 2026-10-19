@@ -1,27 +1,25 @@
 #!/usr/bin/env python3
 """Locate a guest function: generated file, config entries, HLE handler. Also a symbol resolver for probe.py."""
 import bisect
-import csv
 import re
 import sys
 
-from game import GENERATED as GEN, ROOT, SYMBOLS, TEMPLATE as CONFIG
+from game import GENERATED as GEN, ROOT, TEMPLATE as CONFIG
 
 CALL_LIST = ROOT / "deps/ps2recomp/ps2xRuntime/include/ps2_call_list.h"
 HLE_SRC = ROOT / "deps/ps2recomp/ps2xRuntime/src"
 
 
 def load_symbols():
-    rows = []
-    if SYMBOLS.is_file():
-        with SYMBOLS.open() as f:
-            for r in csv.DictReader(f):
-                try:
-                    rows.append((int(r["Start"], 16), int(r["End"], 16), r["Name"]))
-                except (KeyError, ValueError):
-                    pass
-    rows.sort()
-    return rows
+    """Function map from the generated file names (<name>_0x<start>.cpp); End is the next start."""
+    starts = []
+    if GEN.is_dir():
+        for f in GEN.glob("*_0x*.cpp"):
+            m = re.fullmatch(r"(.+)_0x([0-9a-f]+)\.cpp", f.name)
+            if m:
+                starts.append((int(m[2], 16), m[1]))
+    starts.sort()
+    return [(s, starts[i + 1][0] if i + 1 < len(starts) else s + 4, n) for i, (s, n) in enumerate(starts)]
 
 
 def symbol_at(address, rows=None):
@@ -108,7 +106,7 @@ def unimplemented():
 def where(query):
     rows = load_symbols()
     if not rows:
-        return None, [f"{SYMBOLS.relative_to(ROOT)} missing (no function map yet)"]
+        return None, ["generated/ missing (no function map yet): ./rx build"]
     found = find(query, rows)
     if not found:
         return 1, [f"no symbol or function contains {query}"]

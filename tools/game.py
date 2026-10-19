@@ -13,5 +13,4 @@ DISC = ROOT / "extracted/disc"
 ELF = DISC / GAME["elf"]
 TEMPLATE = ROOT / f"config/{ID}.template.toml"  # tracked: hand-maintained recompiler config
 CONFIG = ROOT / f"config/{ID}.toml"             # derived by `rx build` (@ROOT@ substituted)
-SYMBOLS = ROOT / f"config/{ID}.symbols.csv"     # local function map the config points at
 GENERATED = ROOT / f"generated/{ID}"

@@ -2,7 +2,7 @@
 """Regenerate the game C++ from the canonical PS2Recomp config, safely.
 
 Compiles into a temporary directory (pure recompiler output), checks structural quality (0 skipped, 0 decode failures, 0 unhandled
-instructions, 0 errors, entry registered), compares the inventory with the
+instructions, 0 errors, entry registered, processed == discovered), compares the inventory with the
 previous run (build/generate-inventory.json) and only then atomically replaces
 the files that changed. Unchanged files keep their mtimes.
 
@@ -15,7 +15,6 @@ Exit codes: 0 ok, 1 failed, 2 missing prerequisite.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -102,20 +101,6 @@ def parse_summary(log_text: str) -> Dict[str, int]:
     return summary
 
 
-def symbol_map_info(path: Path) -> Tuple[int, int]:
-    with path.open("r", encoding="utf-8-sig", newline="") as stream:
-        rows = list(csv.DictReader(stream))
-    if not rows or not {"Name", "Start"}.issubset(rows[0]):
-        fail(f"symbol map is empty or lacks Name/Start columns: {path}")
-    starts = []
-    for row in rows:
-        try:
-            starts.append(int(row["Start"], 0))
-        except (TypeError, ValueError):
-            fail(f"invalid Start address in symbol map row: {row}")
-    return len(rows), starts[0]  # canonical map's first row is the ELF entry
-
-
 def startup_artifact_names(stage: Path, entry: int) -> Tuple[str, str]:
     register_name = "register_functions.cpp"
     suffix = f"_0x{entry:x}.cpp"
@@ -155,28 +140,6 @@ def write_report(path: Path, report: dict) -> None:
 
 
 
-def mapped_executable_bytes(elf: Path, symbol_map: Path) -> Tuple[int, int]:
-    """(mapped executable bytes, executable section bytes); coverage is not correctness."""
-    def merged(ranges):
-        total = end = 0
-        for lo, hi in sorted(ranges):
-            total += max(0, hi - max(lo, end))
-            end = max(end, hi)
-        return total
-    with symbol_map.open(newline="") as stream:
-        ranges = [(int(r["Start"], 0), int(r["End"], 0)) for r in csv.DictReader(stream)]
-    data = elf.read_bytes()
-    shoff = struct.unpack_from("<I", data, 32)[0]
-    shsize, shcount = struct.unpack_from("<HH", data, 46)
-    executable = []
-    for i in range(shcount):
-        _, _, flags, address, _, size = struct.unpack_from("<6I", data, shoff + i * shsize)
-        if flags & 4 and size:
-            executable.append((address, address + size))
-    inter = [(max(a, lo), min(b, hi)) for a, b in ranges for lo, hi in executable if max(a, lo) < min(b, hi)]
-    return merged(inter), merged(executable)
-
-
 def stub_count(stage: Path) -> int:
     path = stage / "ps2_recompiled_stubs.h"
     return len(set(re.findall(r"void \w+_0x([0-9a-f]+)\(", path.read_text(errors="replace")))) if path.is_file() else 0
@@ -212,26 +175,16 @@ def main() -> int:
         original_text = config.read_text(encoding="utf-8")
         input_value, _ = get_general_string(original_text, "input")
         output_value, _ = get_general_string(original_text, "output")
-        map_value, _ = get_general_string(original_text, "ghidra_output")
         elf = Path(input_value)
         if not elf.is_absolute():
             elf = config.parent / elf
         elf = elf.resolve()
         if not elf.is_file():
             raise Missing(f"ELF input not found: {elf} -> ./rx disc <iso>")
-        symbol_map = Path(map_value)
-        if not symbol_map.is_absolute():
-            symbol_map = config.parent / symbol_map
-        symbol_map = symbol_map.resolve()
-        if not symbol_map.is_file():
-            raise Missing(f"symbol map not found: {symbol_map} -> ./rx disc")
-        map_rows, map_entry = symbol_map_info(symbol_map)
         elf_head = elf.open("rb").read(28)
         if len(elf_head) < 28 or elf_head[:6] != b"\x7fELF\x01\x01":
             fail("expected a little-endian ELF32 input")
         elf_entry = struct.unpack_from("<I", elf_head, 24)[0]
-        if map_entry != elf_entry:
-            fail(f"symbol map first entry 0x{map_entry:x} != ELF e_entry 0x{elf_entry:x}")
         canonical_output = args.out if args.out else Path(output_value)
         if not canonical_output.is_absolute():
             canonical_output = (config.parent if not args.out else Path.cwd()) / canonical_output
@@ -276,8 +229,8 @@ def main() -> int:
                 bad = {k: summary[k] for k in ("skipped", "decode_failures", "unhandled", "errors") if summary[k] != 0}
                 if summary["processed"] != summary["recompiled"] + summary["stubs"]:
                     bad["processed_partition"] = summary["processed"]
-                if summary["processed"] != map_rows or summary["discovered"] != map_rows:
-                    bad["symbol_map_row_count"] = summary["processed"]
+                if summary["processed"] != summary["discovered"] or summary["discovered"] == 0:
+                    bad["discovered_vs_processed"] = summary["processed"]
                 if bad:
                     fail(f"compiler quality summary is not clean: {bad}; see {log_path}")
                 staged = regular_files(stage)
@@ -287,12 +240,10 @@ def main() -> int:
                 if register_name not in staged or Path(startup_name).stem not in staged[register_name].read_text(encoding="utf-8", errors="replace"):
                     fail(f"staged output lacks required registration/startup artifacts ({register_name}, {startup_name})")
 
-                mapped_bytes, exec_bytes = mapped_executable_bytes(elf, symbol_map)
-                inventory = {"elf_sha256": report["elf_sha256"], "mapped": map_rows,
+                inventory = {"elf_sha256": report["elf_sha256"], "discovered": summary["discovered"],
                              "translated": summary["recompiled"], "hle_bound_stubs": summary["stubs"],
                              "stub_declarations": stub_count(stage), "skipped": summary["skipped"],
-                             "decode_failures": summary["decode_failures"],
-                             "mapped_executable_bytes": mapped_bytes, "executable_section_bytes": exec_bytes}
+                             "decode_failures": summary["decode_failures"]}
                 report["inventory"] = inventory
                 previous = None
                 if INVENTORY.is_file():
@@ -329,9 +280,9 @@ def main() -> int:
                     write_json(INVENTORY, inventory)
                 report["status"] = "success"
                 write_json(args.report.resolve(), report)
-                print(f"generated: mapped {map_rows}, translated {summary['recompiled']}, HLE-bound stubs {summary['stubs']}, "
+                print(f"generated: discovered {summary['discovered']}, translated {summary['recompiled']}, HLE-bound stubs {summary['stubs']}, "
                       f"skipped {summary['skipped']}, errors {summary['errors']}; "
-                      f"mapped exec bytes {100 * mapped_bytes / exec_bytes:.1f}%; {len(changed)} files changed")
+                      f"{len(changed)} files changed")
                 return 0
         finally:
             try:

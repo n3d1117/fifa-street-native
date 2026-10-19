@@ -2,6 +2,7 @@
 #include "metal-host.hpp"
 #include "settings.hpp"
 #include "ps2_runtime.h"
+#include "runtime/ps2_host_arena.h"
 
 #include <cstdlib>
 #include <exception>

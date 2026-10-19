@@ -101,8 +101,10 @@ foreach(runner_source IN LISTS PS2X_RUNNER_SOURCES)
 endforeach()
 list(APPEND RX_FILTERED_RUNNER_SOURCES "${RX_ROOT}/host/launcher.cpp")
 set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${RX_FILTERED_RUNNER_SOURCES}")
-set_property(SOURCE "${RX_ROOT}/host/launcher.cpp" APPEND PROPERTY COMPILE_DEFINITIONS
-    "PS2X_APP_NAME=\"${RX_APP_NAME}\"" "PS2X_APP_EXECUTABLE=\"${RX_APP_EXECUTABLE}\"")
+# The target lives in the ps2recomp directory: source properties must be set in its scope.
+set_source_files_properties("${RX_ROOT}/host/launcher.cpp" TARGET_DIRECTORY ps2EntryRunner PROPERTIES
+    SKIP_UNITY_BUILD_INCLUSION ON
+    COMPILE_DEFINITIONS "PS2X_APP_NAME=\"${RX_APP_NAME}\";PS2X_APP_EXECUTABLE=\"${RX_APP_EXECUTABLE}\"")
 
 file(GLOB RX_GENERATED_SOURCES CONFIGURE_DEPENDS
     "${RX_GENERATED_DIR}/*.cpp")

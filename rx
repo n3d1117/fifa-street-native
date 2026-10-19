@@ -57,7 +57,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import game  # noqa: E402
 CMAKE = ROOT / "tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 CTEST = CMAKE.with_name("ctest")
-ELF, TEMPLATE, CONFIG, SYMBOLS, GENERATED = game.ELF, game.TEMPLATE, game.CONFIG, game.SYMBOLS, game.GENERATED
+ELF, TEMPLATE, CONFIG, GENERATED = game.ELF, game.TEMPLATE, game.CONFIG, game.GENERATED
 RECOMP_BIN = ROOT / "build/game-metal/ps2recomp/ps2xRecomp/ps2_recomp"
 STAMP = ROOT / "build/generate.stamp"
 ERROR_RE = re.compile(r"error:|\bFAILED\b|\*\*\*Failed|Traceback|fatal error|^FAIL|failed:|Errors? while running", re.I)
@@ -218,7 +218,7 @@ def sha256(path, h=None):
 
 def generate_inputs_hash():
     h = hashlib.sha256()
-    for p in (ELF, TEMPLATE, CONFIG, SYMBOLS, RECOMP_BIN, ROOT / "tools/generate.py"):
+    for p in (ELF, TEMPLATE, CONFIG, RECOMP_BIN, ROOT / "tools/generate.py"):
         if not p.is_file():
             continue
         h.update(p.name.encode())

@@ -7,7 +7,7 @@ Experimental static recompilation. Not a decompilation, and not a verified port 
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Not recompiled yet. No symbols exist: the ELF is stripped and no prior decompilation or recompilation of FIFA Street or any EA PS2 game is known |
+| Game | Recompiles and links: 13533 functions discovered by the recompiler (no symbols; `sub_<ADDR>`), 13379 translated, 154 HLE-bound SDK stubs, 0 skipped. First run faults in the first seconds (see Next 1). No prior decompilation or recompilation of FIFA Street or any EA PS2 game is known |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -24,7 +24,7 @@ Experimental static recompilation. Not a decompilation, and not a verified port 
 
 ## Next
 
-1. **First recompile.** Function discovery with ps2recomp's analyzer (`ps2_analyzer`) from entry `0x100008`; a first `config/SLES-53064.template.toml`.
+1. **First boot fault.** `./rx run` stops at `guest-branch:missing-target`: `J 0x44b7d0` from `0x44b848` (ra `0x44b978`), a function start nobody calls with JAL, so discovery misses it (it sits right after the `InitAlarm` stub at `0x44b6f8`). Fix discovery or add an entry point in the template, then continue to the next fault. 5438 functions with a `JALR` promote every instruction as a resume entry (655k entries, 282 MB generated); excluding `JALR` calls from the indirect-jump fallback should cut build time (not measured).
 2. **Boot to menus.** IOP boot needs `IOPRP280.IMG` plus the 7 modules in `IOP.BIG` (refpack `BIG4`; the IOP layer must read them, including EA `snddrv`). EA `MPC` movies and `SCHl`/`.MUS` audio need decoders. Re-derive the runtime arena and IOP heap layout for this ELF: the launcher's previous fixed ranges were removed, and the ELF loads at `0x100000` to about `0x5A0000`, so any fixed arena there would overlap it.
 3. **Play a match.** Add a scripted fast-match gate for `./rx run`.
 4. **Whole-game faithful pass** against PCSX2 behavior.

@@ -84,3 +84,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 
 - Fast-math or FP contraction: breaks PS2 arithmetic.
 - FPCR.FZ around native VU calls: inexact (`FLT_MIN + FLT_MIN * 0.5` gives `0x00800000`, the PS2 result is `0x00C00000`).
+
+## Function discovery and SDK binding (stripped ELF)
+
+No symbol map exists: the recompiler discovers functions itself (entry, JAL targets, prologues) and `generate.py` requires processed == discovered. `./rx where` reads the map from generated file names. SDK stubs in `config/SLES-53064.template.toml` come from `ps2_analyzer`'s embedded SDK signatures plus unique masked byte-pattern matches of the Tarzan port's SDK bodies (jal targets and non-stack immediates masked); libm/libc stay guest code.
