@@ -29,6 +29,15 @@ generated sources and headers to hit cache; CMake's sorted glob lists keep unity
 membership stable. Cache location, size and bypass controls are documented in
 README.md. T4's remaining build profiling, debug-info and linker trials stay open.
 
+B2 is complete: `TARZAN_USE_METAL` selects the backend before PS2Recomp
+configures. The Metal runtime does not fetch or link raylib/GLFW/rlImGui/ImGui; legacy
+window, sample-audio and input fallback code stays in the non-Metal backend.
+Metal input uses the native action IDs directly. The runner has no direct
+OpenGL/Carbon imports; SDL entry points resolve from the GS bridge, whose
+existing Carbon import remains outside this runner cleanup. The input smoke
+uses that same linkage. Verify the runner with `nm` and `otool -L` after
+`./tz build`.
+
 ## Next
 
 1. Play every mission beyond the sweep's 45 s: completion, boss outcomes, `Into the Caverns` (needs 45 film reels or an override of its requirement card), audio/video issues. Intermittent audio underrun bursts during mission transitions still need diagnosis; the game requests intro movies that are not on the disc for 9 mission entries (`W1_2_RAF` `W1_4_WAT` `W1_5_BOS` `W2_2_WAT` `W2_3_GM` `W2_5_BOS` `W3_3_RAF` `W3_4_GM` `W3_5_BOS`), which the game skips; `W1_1_GM` and `W2_1_GM` played to the end (about 40 s and 31 s wall); `Crocodile Clash` can end by itself inside 45 s of scripted play.
@@ -105,12 +114,11 @@ Ranked by expected value divided by effort and risk. Every item needs checking a
 
 ### Build, dependencies and test time
 
-Reference measurements (8-core M1, 8 GiB): generated code is about 91% of game-build CPU (318 unity batches); `vu1rec_guarded.cpp` is the serial floor (about 143 s); touching `ps2_runtime.h`, `ps2_syscalls.h` or `ps2_stubs.h` rebuilds the PCH and every batch; the runner is about 89 MB and the bridge dylib 16 MB. Regenerate with `./tz build -v` and `-ftime-trace`.
+Reference measurements (8-core M1, 8 GiB): generated code is about 91% of game-build CPU (318 unity batches); `vu1rec_guarded.cpp` is the serial floor (about 143 s); touching `ps2_runtime.h`, `ps2_syscalls.h` or `ps2_stubs.h` rebuilds the PCH and every batch; the runner is about 87 MB and the bridge dylib 16 MB. Regenerate with `./tz build -v` and `-ftime-trace`.
 
 | # | Item | Effect | Effort | State |
 |---|---|---|---|---|
 | B1 | Path casing at the source (`tz` resolves the on-disk root) | quiet logs | S | done |
-| B2 | Drop raylib/GLFW/rlImGui/ImGui from the Metal build (conditional FetchContent and `ps2_host_backend` link; debug panel behind an option; no OpenGL/Carbon links) | smaller runner, faster configure | S-M | open |
 | B3 | Minimal FFmpeg: `--disable-everything --enable-decoder=mpeg2video --enable-parser=mpegvideo`, avcodec/avutil/swscale only; PSS frames must stay bit-identical | smaller runner, FFmpeg build under 1 min | S | open |
 | B4 | Direct FFmpeg archive linking on Apple: avcodec, required swresample dependency, avutil, swscale, and CoreFoundation/CoreVideo/CoreMedia; other platforms keep pkg-config | one dependency fewer | S | done |
 | B6 | Host-derived parallelism with a Ninja job pool for heavy TUs (`tools/jobs.py`, `TZ_JOBS`) | no swapping | S | done |

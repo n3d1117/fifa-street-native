@@ -19,7 +19,6 @@ set(TARZAN_LIBCXX_INCLUDE "${TARZAN_LLVM}/include/c++/v1")
 
 if(TARZAN_GAME_READY)
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_definitions(ps2_runtime PRIVATE TARZAN_USE_METAL=1)
     add_library(tarzanMetalHost STATIC
         "${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm"
         "${CMAKE_CURRENT_SOURCE_DIR}/keyboard-controls.mm"
@@ -87,6 +86,11 @@ if(TARZAN_GAME_READY)
     endif()
     find_package(SDL3 CONFIG REQUIRED COMPONENTS SDL3-static
         PATHS "${TARZAN_SDL3_PREFIX}/lib/cmake/SDL3" NO_DEFAULT_PATH)
+    # SDL entry points and their Carbon dependency come from the GS bridge.
+    get_target_property(TARZAN_SDL3_LINK_LIBRARIES SDL3::SDL3-static INTERFACE_LINK_LIBRARIES)
+    list(FILTER TARZAN_SDL3_LINK_LIBRARIES EXCLUDE REGEX "FRAMEWORK,Carbon>")
+    set_property(TARGET SDL3::SDL3-static PROPERTY
+        INTERFACE_LINK_LIBRARIES "${TARZAN_SDL3_LINK_LIBRARIES}")
     set(TARZAN_LLVM_AVAILABILITY_SOURCE
         "${TARZAN_ROOT}/tools/metal-deps/compat/llvm19-os_version_check.c")
     if(NOT EXISTS "${TARZAN_LLVM_AVAILABILITY_SOURCE}")
@@ -97,8 +101,6 @@ if(TARZAN_GAME_READY)
     target_sources(tarzanMetalHost PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm")
     target_include_directories(tarzanMetalHost PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(tarzanMetalHost PRIVATE SDL3::SDL3-static tarzanCompilerAvailability)
-    set_property(SOURCE "${TARZAN_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/ps2_pad.cpp"
-        TARGET_DIRECTORY ps2_runtime APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm"
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON
         SKIP_PRECOMPILE_HEADERS ON)
@@ -112,7 +114,8 @@ if(TARZAN_GAME_READY)
     target_compile_options(tarzanGamepadSmoke PRIVATE -stdlib=libc++ -nostdinc++
         -isystem "${TARZAN_LIBCXX_INCLUDE}")
     target_link_options(tarzanGamepadSmoke PRIVATE -stdlib=libc++)
-    target_link_libraries(tarzanGamepadSmoke PRIVATE SDL3::SDL3-static
+    # Match the runner: its SDL entry points resolve from the GS bridge.
+    target_link_libraries(tarzanGamepadSmoke PRIVATE "${TARZAN_METAL_BRIDGE}" SDL3::SDL3-static
         tarzanCompilerAvailability "-framework AppKit")
     set_source_files_properties(
         "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm"

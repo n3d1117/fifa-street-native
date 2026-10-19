@@ -44,6 +44,7 @@ set(PS2X_BUILD_ANALYZER ON CACHE BOOL "" FORCE)
 set(PS2X_BUILD_TEST ON CACHE BOOL "" FORCE)
 set(PS2X_IOP_BUILD_TESTS ON CACHE BOOL "" FORCE)
 set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
+set(TARZAN_USE_METAL ON)
 set(PS2X_ENABLE_DEBUG_UI OFF CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_FFMPEG ON CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_RUNTIME_LOGS ON CACHE BOOL "" FORCE)
@@ -57,6 +58,8 @@ set(PS2X_VU0_GENERATOR "${TARZAN_ROOT}/tools/vu/vu1recomp.py" CACHE FILEPATH "VU
 set(PS2X_VU0GEN_DIR "${TARZAN_ROOT}/generated/vu0-native" CACHE PATH "Native VU0 source directory")
 set(PS2X_VU1GEN_DIR "${TARZAN_ROOT}/generated/vu1-disc-native" CACHE PATH "Disc-derived guarded VU1 source directory")
 add_subdirectory("${TARZAN_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
+set_property(SOURCE "${TARZAN_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/ps2_pad.cpp"
+    TARGET_DIRECTORY ps2_runtime APPEND PROPERTY INCLUDE_DIRECTORIES "${TARZAN_ROOT}/host")
 
 # Test targets: no LTO, strict floating point like the shipped runtime, and the
 # shipped TARZAN_USE_METAL configuration (see cmake/ps2x-tests.cmake).
