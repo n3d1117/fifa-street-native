@@ -92,7 +92,7 @@ Read this file before searching. Search with `git grep -n <pattern> -- <path>` (
 
 - **Rebuild cost.** Generated code is about 350 unity units; never change flags that regroup it (scope new defines to the host). A recompiler/config change means full regeneration and recompile: batch such changes.
 - **Path casing.** The checkout is reachable as `~/Downloads/...` and `~/downloads/...`; CMake treats them as different trees. Always go through `./tz`; never run `cmake`/`ninja` by hand.
-- **Toolchain.** `TARZAN_LLVM` selects an existing LLVM 19; otherwise `toolchain/bootstrap.sh` builds one into `tools/build`. Build parallelism comes from `tools/jobs.py` (`TZ_JOBS` overrides).
+- **Toolchain.** `TARZAN_LLVM` selects an existing LLVM 19; otherwise `toolchain/bootstrap.sh` builds one into `tools/build`. Setup also fetches pinned, checksum-verified ccache; `cmake/ccache.cmake` enables it when present (5 GiB in `build/game-metal/ccache`; `CCACHE_DISABLE=1` bypasses it). Build parallelism comes from `tools/jobs.py` (`TZ_JOBS` overrides).
 - **Installed app must be self-contained:** no `tools/` or Downloads paths in bundled binaries. `./tz package` audits this.
 - **Automation.** Use the probe's process-local diagnostic input, not synthetic key events. Screen recording is blocked; use window or GPU capture. Guard routes with screen-text checks; timed inputs land in the wrong menu.
 - **Measurement.** Never measure FPS with tracing, VU compare mode (runs each call 3x) or GPU capture on. A/B control and candidate back to back, same route, never concurrently. Gameplay is CPU-bound.

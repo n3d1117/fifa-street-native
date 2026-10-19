@@ -40,6 +40,16 @@ cd tarzan-freeride-native
 
 Apple builds link only the required static FFmpeg archives directly through CMake.
 
+`./tz setup` also installs a pinned, SHA-256-verified official ccache binary under
+`tools/build` (pins in `toolchain/bootstrap.sh`). Builds automatically use it when
+available, with the PCH settings in `cmake/ccache.cmake`; without it, compilation
+works as before. The cache lives in `build/game-metal/ccache`, capped at 5 GiB.
+Inspect it with `CCACHE_DIR="$PWD/build/game-metal/ccache" tools/build/ccache/ccache -s`.
+Use `CCACHE_DISABLE=1 ./tz build` to bypass caching or `CCACHE_RECACHE=1 ./tz build`
+to compile again and replace cached results (these affect work Ninja schedules;
+they do not force a rebuild). Generated-source glob lists are sorted by CMake,
+keeping unity batch membership stable across unchanged regenerations.
+
 Saves and settings live in `~/Library/Application Support/TarzanFreeridePS2`.
 Controls: keyboard (remap in Settings, Keyboard) or any SDL-supported gamepad.
 `./tz --help` lists every command.

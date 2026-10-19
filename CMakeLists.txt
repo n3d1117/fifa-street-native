@@ -6,6 +6,7 @@ if(NOT APPLE)
 endif()
 
 get_filename_component(TARZAN_ROOT "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+include("${TARZAN_ROOT}/cmake/ccache.cmake")
 set(TARZAN_PS2RECOMP_SOURCE_DIR "${TARZAN_ROOT}/deps/ps2recomp")
 set(TARZAN_GENERATED_DIR "${TARZAN_ROOT}/generated/SLES-50350-symbolmap-entry" CACHE PATH
     "Directory containing generated C++ and headers for the guest ELF")
