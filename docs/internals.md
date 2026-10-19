@@ -83,6 +83,10 @@ MPEG work layouts vary by SDK revision. Run retail Create and ClearRefBuff; the 
 
 Pressure mode reports packet ID `0x79`; analog mode without pressure reports `0x73`, digital `0x41` (PCSX2 `SIO/Pad/PadTypes.h`). The game validates `data[0] == 0` and `data[1] == 0x79` at `0x103750..0x10376C` before consuming buttons.
 
+SIF command handler tables use 8-byte user entries and 12-byte system entries (ps2sdk `sifcmd-common.h`). Packets use separate temporary IOP storage. The EE public SendCmd ABI passes destination/size in t0/t1; the internal entry adds mode in a1 and shifts packet/size/source/destination/extra-size through a2/a3/t0/t1/t2. Retail wrappers at `0x448290` and `0x448158` establish these layouts. SIF replies may interrupt HLE guest callbacks. `PS2X_TRACE_RPC=1` includes accepted SendCmd dispatch results.
+
+EA snddrv registers RPC SID `0x534E44`, then command ID 0 through IOP sifcmd import 10 (handler `0x268FC`, argument `0x331C0` after relocation); import 8 supplies the 16-entry handler table at `0x331C8`. Subcommand 4 replies to EE command ID 1/subcommand 5; EE handler `0x37AC58` forwards it to `0x385CE0`.
+
 ## Patch stack
 
 `deps.lock` pins each upstream (`ps2recomp`, `pcsx2`, `fukami`) by SHA. `./rx deps sync` creates `deps/<name>` at the pin on branch `rx` and applies `patches/<name>/*.patch` with `git am -3`. `./rx deps export` rewrites `patches/<name>/` with `git format-patch` (byte-stable) and refuses dirty trees. `./rx deps status` shows pin, commits and exported state; `./rx check` fails on unexported commits. Pull upstream in themed batches with a verifying test each; regenerate into a separate directory first (`tools/generate.py --out DIR`) to review output diffs.
