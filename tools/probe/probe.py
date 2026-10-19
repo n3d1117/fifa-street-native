@@ -220,9 +220,19 @@ def crash_from(text, returncode, killed_by_us):
             "pc": f"0x{pc:x}" if pc is not None else None, "symbol": sym[0] if sym else None}
 
 
+_EXITED_WATCHES = set()
+
+
 def child_exited(exit_watch):
-    """Check without reaping so wait4 can collect this child's resource usage."""
-    return bool(exit_watch.control(None, 0, 0))
+    """Check without reaping so wait4 can collect this child's resource usage.
+    max_events must be positive or kqueue returns nothing, and the NOTE_EXIT event
+    is delivered once, so the answer is remembered until the watch is closed."""
+    if exit_watch.fileno() in _EXITED_WATCHES:
+        return True
+    if exit_watch.control(None, 1, 0):
+        _EXITED_WATCHES.add(exit_watch.fileno())
+        return True
+    return False
 
 
 def sample_game_thread(pid, path):
@@ -371,6 +381,7 @@ class Game:
         _, status, usage = os.wait4(self.proc.pid, 0)
         self.returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)
         self.cpu_user_s, self.cpu_sys_s = round(usage.ru_utime, 3), round(usage.ru_stime, 3)
+        _EXITED_WATCHES.discard(self.exit_watch.fileno())
         self.exit_watch.close()
         self.logf.close()
         os.close(self.fifo_fd)
@@ -942,6 +953,7 @@ def main():
         proc.returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)
         if args.quit_at_end and quit_ok:
             quit_ok = proc.returncode == 0
+        _EXITED_WATCHES.discard(exit_watch.fileno())
         exit_watch.close()
         cpu_user_s = round(usage.ru_utime, 3)
         cpu_sys_s = round(usage.ru_stime, 3)
