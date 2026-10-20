@@ -28,7 +28,8 @@ Design:
     denormals to signed zero. Operands are clamped at each issue for safety.
   * MAC/status/clip flags are tracked as variables; a backward liveness pass
     removes every flag computation that no reader (FM*/FS*/FC*) can observe.
-    Both variants keep all flags live at exit; captures cannot bound future readers.
+    The live exit set comes from the complete program catalog and MSCNT fixpoint;
+    the full variant retains every flag computation.
   * XGKICK is emulated lazily but cycle-exactly: the PATH1 copy engine is
     advanced to the current cycle before every VU data store, so packets are
     byte-identical to the interpreter's even if the program overwrites a
@@ -1667,6 +1668,11 @@ def end_continuations(g: Generator) -> List[int]:
     return sorted({(n.pc + 8) & g.pc_mask for n in g.nodes if n.term and n.term[0] == 'end'})
 
 
+def liveness_is_uncertain(g: Generator) -> bool:
+    """Whether this image has a path or entry whose flag readers are not proven."""
+    return bool(g.failed_entries or any(n.term and n.term[0] == 'dyn' for n in g.nodes))
+
+
 def analyze_image(code: bytes, entries: List[int], name: str,
                   dynamic_targets: Optional[Dict[int, List[int]]] = None,
                   unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None,
@@ -1678,7 +1684,8 @@ def analyze_image(code: bytes, entries: List[int], name: str,
     if not g.entry_nodes:
         raise GenError("no entry could be generated")
     continuations = end_continuations(g) if unit == 'vu1' else []
-    info = {'g': g, 'conts': continuations, 'cont_g': None, 'cont_error': None}
+    info = {'g': g, 'conts': continuations, 'cont_g': None, 'cont_error': None,
+            'uncertain': liveness_is_uncertain(g)}
     conts = [c for c in info['conts'] if c not in g.entry_nodes]
     if conts and unit == 'vu1':
         try:
@@ -1697,6 +1704,8 @@ def image_entry_reads(info: dict, live_exit: set) -> Tuple[set, Dict[int, set], 
     g = info['g']
     ent = entry_live_in(g, live_exit, sorted(g.entry_nodes))
     reads = set().union(*ent.values()) if ent else set()
+    if info['uncertain']:
+        reads |= set(FLAG_REGS)
     cont = {}
     if info['cont_error'] is not None:
         reads |= set(FLAG_REGS)    # MSCNT could resume into code we cannot analyse
@@ -1745,7 +1754,7 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
             if op[0] == 'use':
                 readers.add(op[1])
     # An uncaptured program can read any persisted flag after this call.
-    fast_live = set(FLAG_REGS)
+    fast_live = set(live_exit if live_exit is not None else FLAG_REGS)
     full_live = set(FLAG_REGS)
     out = [VU0_HEADER if g.unit == 'vu0' else HEADER]
     if g.guarded:
@@ -1755,7 +1764,8 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     stats = {'nodes': len(g.nodes), 'pairs': len({n.pc for n in g.nodes}),
              'readers': sorted(readers), 'entries': sorted(g.entry_nodes),
              'failed': g.failed_entries, 'dt_pcs': sorted(g.dt_pcs), 'live_exit': sorted(fast_live)}
-    variants = (('full', full_live),) if (g.guarded or g.reloc) else (('fast', fast_live), ('full', full_live))
+    variants = (('live', fast_live), ('full', full_live)) if g.reloc else \
+               ((('full', full_live),) if g.guarded else (('fast', fast_live), ('full', full_live)))
     for variant, live in variants:
         compute_flag_liveness(g, live)
         em = Emitter(g, variant, live)
@@ -1764,7 +1774,7 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
         em.emit_function(f"{prefix}_{name}_{variant}", context_type)
         out.extend(l + "\n" for l in em.lines)
         out.append("\n")
-        if variant == 'fast':
+        if variant in ('fast', 'live'):
             dead = sum(1 for n in g.nodes if 'fmac' in n.new_slots and not n.flag_need.get('body', {}).get(('def_fmac', n.new_slots['fmac']), False))
             total = sum(1 for n in g.nodes if 'fmac' in n.new_slots)
             stats['fmac_flag_producers'] = total
@@ -1773,7 +1783,7 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
             cl_live = sum(1 for n in g.nodes if 'clip' in n.new_slots and n.flag_need.get('body', {}).get(('def_clip', n.new_slots['clip']), False))
             stats['clip_producers'] = cl
             stats['clip_producers_live'] = cl_live
-            stats['fast_commits'] = dict(sorted(em.commit_counts.items()))
+            stats['live_commits'] = dict(sorted(em.commit_counts.items()))
     if register:
         ent = ", ".join(f"0x{e:04x}u" for e in sorted(g.entry_nodes))
         out.append(f"const uint32_t kEntries[] = {{{ent}}};\n")
@@ -1783,7 +1793,7 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     return "".join(out), stats
 
 
-def generate_reloc_program(name: str, words: bytes) -> Tuple[str, dict]:
+def generate_reloc_program(name: str, words: bytes, live_exit: Optional[set] = None) -> Tuple[str, dict]:
     """Position-independent native code for one uploaded microprogram.
 
     The runtime proves that the program's exact words sit at some micro-memory base
@@ -1796,15 +1806,18 @@ def generate_reloc_program(name: str, words: bytes) -> Tuple[str, dict]:
     slots = len(words) // 8
     code = words + bytes(VU1_CODE_SIZE - len(words))
     entries = [0] + [e for e in jump_table_entries(code) if e < len(words)]
-    src, stats = generate_image(code, sorted(set(entries)), name, set(FLAG_REGS), {}, 'vu1',
+    src, stats = generate_image(code, sorted(set(entries)), name,
+                                set(FLAG_REGS) if live_exit is None else live_exit, {}, 'vu1',
                                 register=False, reloc_slots=slots)
     ent = ", ".join(f"0x{e:04x}u" for e in sorted(stats['entries']))
     lit = ", ".join(f"0x{struct.unpack_from('<Q', words, i)[0]:016x}ull" for i in range(0, len(words), 8))
     src = src.replace("} // namespace\n", "")
     src += f"const uint64_t kWords[] = {{{lit}}};\n"
     src += f"const uint32_t kEntries[] = {{{ent}}};\n"
+    live_flags = sum(1 << i for i, flag in enumerate(FLAG_REGS) if flag in stats['live_exit'])
     src += (f"const Vu1RecProgramRegistrar kRegistrar(\"{name}\", {slots}u, 0x{fnv1a64(words):016x}ull, kWords, kEntries,\n"
-            f"    sizeof(kEntries) / sizeof(kEntries[0]), &vu1rec_{name}_full, {'true' if stats['dt_pcs'] else 'false'});\n")
+            f"    sizeof(kEntries) / sizeof(kEntries[0]), &vu1rec_{name}_live, &vu1rec_{name}_full, {live_flags}u, "
+            f"{'true' if stats['dt_pcs'] else 'false'});\n")
     src += "} // namespace\n"
     return src, stats
 
@@ -1858,14 +1871,36 @@ def generate_programs(program_dir: str, out_dir: str) -> int:
     failed = 0
     with open(os.path.join(program_dir, "index.txt")) as f:
         rows = [line.split() for line in f if line.strip()]
+    programs = []
+    infos = []
     for name, slots, digest in rows:
         words = open(os.path.join(program_dir, f"{name}.vup"), "rb").read()
         if len(words) != int(slots) * 8 or f"{fnv1a64(words):016x}" != digest:
             print(f"[vu1recomp] {name}: program file does not match its index entry", file=sys.stderr)
             failed += 1
+            programs.append((name, None))
+            infos.append(None)
+            continue
+        programs.append((name, words))
+        try:
+            code = words + bytes(VU1_CODE_SIZE - len(words))
+            entries = [0] + [e for e in jump_table_entries(code) if e < len(words)]
+            infos.append(analyze_image(code, sorted(set(entries)), name, {}, 'vu1', reloc_slots=len(words) // 8))
+        except GenError as ex:
+            print(f"[vu1recomp] {name}: not analysable ({ex}); all flags live at exit", file=sys.stderr)
+            infos.append(None)
+    live_exit, live_log = compute_live_exit(infos)
+    for name, ent, cont, cerr in live_log:
+        print(f"[vu1recomp] {name}: entry flag live-in {ent}; MSCNT continuations {cont}"
+              + (f" UNANALYSABLE: {cerr}" if cerr else ""))
+    for (name, words), info in zip(programs, infos):
+        if words is None:
             continue
         try:
-            src, stats = generate_reloc_program(name, words)
+            # Missing entries or MSCNT continuations cannot establish safe liveness. Keep
+            # every flag live for this image while allowing proven images to use the fixpoint.
+            image_live = set(FLAG_REGS) if info is None or info['uncertain'] or info['cont_error'] else live_exit
+            src, stats = generate_reloc_program(name, words, image_live)
         except GenError as ex:
             print(f"[vu1recomp] {name}: FAILED: {ex}", file=sys.stderr)
             failed += 1
@@ -1876,7 +1911,8 @@ def generate_programs(program_dir: str, out_dir: str) -> int:
                 out.write(src)
         written.append(dst)
         print(f"[vu1recomp] program {name}: slots={slots} entries={['0x%04x' % e for e in stats['entries']]} "
-              f"nodes={stats['nodes']} pairs={stats['pairs']}"
+              f"nodes={stats['nodes']} pairs={stats['pairs']} live-at-exit={stats['live_exit']}"
+              f" fmac-flag-producers-dead={stats['fmac_flag_producers_dead']}"
               + (f" failed={stats['failed']}" if stats['failed'] else ""))
     for fn in os.listdir(out_dir):
         path = os.path.join(out_dir, fn)
