@@ -29,8 +29,8 @@ if(RX_GAME_READY)
         "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp")
     target_include_directories(metalHost PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
-        "${RX_ROOT}/deps/fukami/tools/pcsx2-gs-bridge"
-        "${RX_ROOT}/deps/fukami/tools/pcsx2-spu2"
+        "${RX_ROOT}/bridge/gs"
+        "${RX_ROOT}/bridge/spu2"
         "${RX_ROOT}/deps/pcsx2/3rdparty/soundtouch/soundtouch"
         "${RX_PS2RECOMP_SOURCE_DIR}/ps2xIOP/include")
     target_compile_features(metalHost PRIVATE cxx_std_20)
@@ -58,11 +58,11 @@ if(RX_GAME_READY)
 endif()
 
 add_executable(audioStretcherTest
-    "${RX_ROOT}/deps/fukami/tools/pcsx2-spu2/rrv_audio_stretcher.cpp"
+    "${RX_ROOT}/bridge/spu2/rrv_audio_stretcher.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/audio-stretcher-test.cpp")
 target_include_directories(audioStretcherTest PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${RX_ROOT}/deps/fukami/tools/pcsx2-spu2"
+    "${RX_ROOT}/bridge/spu2"
     "${RX_ROOT}/deps/pcsx2/3rdparty/soundtouch/soundtouch")
 target_compile_definitions(audioStretcherTest PRIVATE SOUNDTOUCH_FLOAT_SAMPLES)
 target_compile_features(audioStretcherTest PRIVATE cxx_std_20)
@@ -158,7 +158,7 @@ add_executable(metalGsAdapterTest
     "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp")
 target_include_directories(metalGsAdapterTest PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${RX_ROOT}/deps/fukami/tools/pcsx2-gs-bridge")
+    "${RX_ROOT}/bridge/gs")
 target_compile_features(metalGsAdapterTest PRIVATE cxx_std_20)
 target_compile_options(metalGsAdapterTest PRIVATE -UNDEBUG)
 target_link_options(metalGsAdapterTest PRIVATE -stdlib=libc++)

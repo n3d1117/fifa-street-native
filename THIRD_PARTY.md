@@ -6,7 +6,7 @@ The project is GPL-3.0-or-later (`LICENSE`). Upstream notices are retained in ea
 |---|---|---|
 | PS2Recomp | github.com/ran-j/PS2Recomp | GPL-3.0 |
 | PCSX2 (GS, SPU2, SoundTouch) | github.com/PCSX2/pcsx2 v2.8.2 | GPL-3.0; SoundTouch LGPL-2.1 |
-| fukami (GS/SPU2 bridges) | github.com/danisandoval/fukami | GPL-3.0 |
+| `bridge/` (GS bridge, SPU2 backend), vendored from fukami | github.com/danisandoval/fukami (e881812 plus local changes) | GPL-3.0 |
 | VU recompiler (`tools/vu`) | github.com/catsandsoup/Road-trip-Adventure-PS2-Recompile-MacOS | GPL-3.0 |
 | FFmpeg, SDL3, sse2neon | built locally by `./rx setup` | LGPL-2.1+, zlib, MIT |
 

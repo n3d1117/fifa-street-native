@@ -51,7 +51,7 @@ Judge a run by its summary: `reached`, `seconds`, `fps_dispfb2`, `cpu_user_s`, `
 
 1. `config/SLES-53064.template.toml`: stubs, entry points, jump tables, function boundaries. `config/SLES-53064.toml` is derived by `./rx disc`; edit the template.
 2. `deps/ps2recomp`: translation (`ps2xRecomp/`), runtime/HLE (`ps2xRuntime/`), IOP (`ps2xIOP/`).
-3. `deps/pcsx2`, `deps/fukami`: GS, SPU2, bridge.
+3. `deps/pcsx2` (GS, SPU2), `bridge/` (GS bridge `bridge/gs`, SPU2 backend `bridge/spu2`).
 4. `host/`: window, input, audio output, settings.
 
 Config `[[hooks]]` (instruction hooks) exist but none are used. Treat them as a last resort; each must be verified against the retail ELF words it depends on and must stay faithful.
@@ -73,7 +73,7 @@ Config `[[hooks]]` (instruction hooks) exist but none are used. Treat them as a 
 | threads, clocks; DMA, VIF, GIF, MFIFO | `deps/ps2recomp/ps2xRuntime/src/lib/` (`Kernel/EeScheduler.cpp`, `ps2_runtime.cpp`, `ps2_memory.cpp`, `ps2_vif1_interpreter.cpp`, `gs/`) |
 | VU interpreter | `deps/ps2recomp/ps2xRuntime/src/lib/vu/` |
 | IOP modules, SPU2, audio output | `deps/ps2recomp/ps2xIOP/src/`, `host/spu2-host.cpp` |
-| rendering, upscaling, presentation | `host/metal-gs-adapter.cpp`, `deps/pcsx2/pcsx2/GS/`, `deps/fukami/tools/pcsx2-gs-bridge/` |
+| rendering, upscaling, presentation | `host/metal-gs-adapter.cpp`, `deps/pcsx2/pcsx2/GS/`, `bridge/gs/` |
 | window, settings, input | `host/metal-host.mm`, `host/settings.hpp` (defaults), `host/settings.mm`, `host/settings-window.mm`, `host/keyboard-controls.mm`, `host/gamepad-input.mm` |
 | app bundle, probes | `tools/package/`, `tools/probe/` |
 | disc identity, game paths | `config/game.json`, `tools/game.py`, `tools/disc.py` |

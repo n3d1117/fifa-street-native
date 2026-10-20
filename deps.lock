@@ -1,4 +1,3 @@
 # name  url  pinned-sha   (see tools/deps.py)
 ps2recomp https://github.com/ran-j/PS2Recomp.git eb8688b2fd191129f103a39543002c005b33409c
 pcsx2 https://github.com/PCSX2/pcsx2.git fd9d310ccbb6b8b62c976da8886a3c8fd3a10ff3
-fukami https://github.com/danisandoval/fukami.git e8818121566cfaf3d361e38745860b0a9438e27b

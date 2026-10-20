@@ -287,16 +287,16 @@ def cmd_disc(args):
 # (plus the HEAD diff for uncommitted edits), so unrelated commits do not trigger rebuilds.
 DEP_PRODUCTS = {
     "bridge": (["build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"],
-               [("pcsx2", None), ("fukami", "tools/pcsx2-gs-bridge")]),
+               [("pcsx2", None), (None, "bridge/gs")]),
     "spu2": (["build/spu2-backend/librrv_pcsx2_spu2.a"],
-             [("fukami", "tools/pcsx2-spu2"), ("pcsx2", "pcsx2/SPU2"), ("pcsx2", "3rdparty/soundtouch")]),
+             [(None, "bridge/spu2"), ("pcsx2", "pcsx2/SPU2"), ("pcsx2", "3rdparty/soundtouch")]),
 }
 
 
 def dep_inputs_hash(sources):
     h = hashlib.sha256()
     for dep, sub in sources:
-        base = ["git", "-C", f"deps/{dep}"]
+        base = ["git", "-C", str(ROOT if dep is None else ROOT / "deps" / dep)]
         spec = [] if sub is None else ["--", sub]
         rev = f"HEAD:{sub}" if sub else "HEAD"
         h.update(subprocess.run(base + ["rev-parse", rev], capture_output=True, text=True).stdout.encode())

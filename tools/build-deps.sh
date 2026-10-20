@@ -152,9 +152,9 @@ PY
 }
 
 # ----------------------------------------------------------------- bridge
-# Metal GS bridge from deps/pcsx2 (deps/fukami supplies the bridge target).
+# Metal GS bridge from deps/pcsx2 (bridge/gs supplies the bridge target).
 build_bridge() {
-  local pcsx2="$ROOT/deps/pcsx2" bridge="$ROOT/deps/fukami/tools/pcsx2-gs-bridge"
+  local pcsx2="$ROOT/deps/pcsx2" bridge="$ROOT/bridge/gs"
   local build="$ROOT/build/metal-bridge/pcsx2"
   local deps_prefix="$ROOT/tools/metal-deps/prefix"
   [[ -d "$pcsx2/.git" && -d "$bridge" ]] || { echo 'Missing deps/; run python3 tools/deps.py sync' >&2; exit 1; }
@@ -180,8 +180,12 @@ build_bridge() {
 
 # ------------------------------------------------------------------- spu2
 build_spu2() {
-  local build="$ROOT/build/spu2-backend" pcsx2="$ROOT/deps/pcsx2" source="$ROOT/deps/fukami/tools/pcsx2-spu2"
+  local build="$ROOT/build/spu2-backend" pcsx2="$ROOT/deps/pcsx2" source="$ROOT/bridge/spu2"
   [[ -f "$pcsx2/pcsx2/SPU2/spu2sys.cpp" && -d "$source" ]] || { echo 'Missing deps/; run python3 tools/deps.py sync' >&2; exit 1; }
+  # A cache configured from another source tree (the backend moved from deps/fukami) cannot be reused.
+  if [[ -f "$build/CMakeCache.txt" ]] && ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$source" "$build/CMakeCache.txt"; then
+    rm -rf "$build"
+  fi
   {
     "$CMAKE" -S "$source" -B "$build" -G Ninja \
       -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
