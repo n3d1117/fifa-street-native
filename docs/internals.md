@@ -24,6 +24,8 @@ Removing a config stub alone cannot restore guest execution: PS2Recomp also auto
 
 `./rx run --match` sets `PS2X_BOOT_MATCH` in a scratch user dir. `host/boot-match.cpp` replaces the front end's per-frame update (`0x2ECA38`) in the function table with a wrapper that runs the original, then once the front-end resource slot (`0x47EFEC`) is filled: stores venue 3 at `GameSetup+0xA0` as `setvenuebyid` (`0x2E64C0`) does, calls `GameSetup::SetControl` (`0x12AE00`) for side 1 to pad 0, and calls `Playgame` (`0x2E5220`). Inert without the variable, in the real save directory, or if a dependent ELF word differs. Test: `boot_match`.
 
+The probe's only input is Cross on the language screen. Rarely (2 of about 47 runs) the single press had no effect and the list stayed on screen, so the hook, whose trigger needs the front end's resources, never fired. Inferred cause: the screen starts reading the pad some time after it first renders and a press in that window is lost. The `match-boot` route therefore repeats Cross while a capture taken 2 s or more after the press still shows the language list. Simulating a lost first press (dropping it in the diagnostic FIFO reader) shows the repeat recovers.
+
 ## VIF1 front end and op stream
 
 `PS2Memory::processVIF1Data` (`ps2_vif1_interpreter.cpp`) is split into a front end and a consumer. The front end parses commands and owns everything the EE can observe: VIF1 registers (including ROW, rewritten by STMOD 2/3 UNPACK), DBF/TOPS, stall and IRQ state, partial-command buffering, MSKPATH3 and the DIRECT continuation counters. It emits `Vif1Op`s in order: `Mpg`, `Unpack` (snapshot of CYCLE, MODE, MASK, ROW, COL plus payload), `Mscal`/`Mscnt` (start PC, TOP, ITOP), `Direct` (PATH2 bytes), `Path3Unmask`.

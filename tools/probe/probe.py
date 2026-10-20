@@ -59,7 +59,9 @@ ROUTES = {"match": {
     "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
 # --match: the language Cross is the only menu input; the host's PS2X_BOOT_MATCH hook starts the match once the
 # front end has loaded (docs/internals.md "Boot to match"). Intro skip and play steps are shared with `match`.
-ROUTES["match-boot"] = dict(ROUTES["match"], steps=[(4, 5, .12, "DEUTSCH")], timeout=90, sample_start=3.0, sample_every=2.0, intro_every=2.0)
+# The language screen starts reading the pad some time after it first renders, so a press that lands in that window is lost; `repeat_until_gone`
+# presses again while a capture taken 2 s or more after the press still shows the guard label.
+ROUTES["match-boot"] = dict(ROUTES["match"], steps=[(4, 5, .12, "DEUTSCH")], repeat_until_gone=True, timeout=90, sample_start=3.0, sample_every=2.0, intro_every=2.0)
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
 TOOL_FRAMEWORKS = {
@@ -606,6 +608,7 @@ def main():
     deadline = started + args.seconds
     route_deadline = deadline
     steps, step_at, release_at, fifo_fd = list(route["steps"]) if route else [], started, 0.0, None
+    repeat = None
     play_steps, play_step_at = list(route.get("play_steps", [])) if route else [], None
     if route:
         step_at = started + steps[0][0]
@@ -673,8 +676,16 @@ def main():
                     route_inputs.append({"wall_seconds": round(now - started, 3), "key_bit": key, "guard": step[3]})
                     os.write(fifo_fd, struct.pack("<I", 1 << key))
                     release_at = now + hold
+                    if route.get("repeat_until_gone"):
+                        repeat = (step[3], key, hold, now, cap.samples)
                     if steps:
                         step_at = now + steps[0][0]
+                elif (fifo_fd is not None and repeat and not steps and not release_at and cap.samples > repeat[4] and
+                      now - repeat[3] >= 2.0 and re.search(repeat[0], "\n".join(cap.labels))):
+                    route_inputs.append({"wall_seconds": round(now - started, 3), "key_bit": repeat[1], "guard": repeat[0] + " (still shown 2 s after the press)"})
+                    os.write(fifo_fd, struct.pack("<I", 1 << repeat[1]))
+                    release_at = now + repeat[2]
+                    repeat = (repeat[0], repeat[1], repeat[2], now, cap.samples)
                 elif (fifo_fd is not None and not steps and not release_at and cap.match_clock is None and
                       route["scene_marker"] in text_now and
                       re.search(r"MAR[5S]E[I1].*L", "\n".join(cap.labels)) and
