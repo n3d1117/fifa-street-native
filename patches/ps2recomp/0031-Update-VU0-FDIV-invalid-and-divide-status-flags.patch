@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 22:26:57 +0200
-Subject: [PATCH 31/81] Update VU0 FDIV invalid and divide status flags
+Subject: [PATCH 31/82] Update VU0 FDIV invalid and divide status flags
 
 The FDIV emitter regression failed because VDIV/VSQRT/VRSQRT wrote Q without updating status. Classify operands by bits, clear current I/D, and retain sticky SI/SD and FMAC flags. Cover zero/denormal divisors, negative roots, valid follow-ups, and VRSQRT(0,0). Arithmetic operands and Q results are unchanged. Reference: PCSX2 VUops.cpp FDIV operations; ps2autotests FDIV delay fixtures do not capture these exception flags. ./tz test passes 54/54; full replay and route validation follow in the batch export.
 
