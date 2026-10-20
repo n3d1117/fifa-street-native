@@ -62,6 +62,25 @@ set(PS2X_ENABLE_IOP_RPC_TRACE OFF CACHE BOOL "" FORCE)
 set(PS2X_ENABLE_RUNNER_UNITY_BUILD ON CACHE BOOL "" FORCE)
 set(PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE 32 CACHE STRING "" FORCE)
 
+if(NOT PS2X_VU1_CATALOG_DIR)
+    set(PS2X_VU1_CATALOG_DIR "${RX_ROOT}/generated/vu1-catalog" CACHE PATH
+        "Local VU1 catalog directory" FORCE)
+endif()
+if(NOT PS2X_VU1_GENERATOR)
+    set(PS2X_VU1_GENERATOR "${RX_ROOT}/tools/vu/vu1recomp.py" CACHE FILEPATH
+        "VU static generator" FORCE)
+endif()
+if(NOT PS2X_VU1GEN_DIR)
+    set(PS2X_VU1GEN_DIR "${RX_ROOT}/generated/vu1-native" CACHE PATH
+        "Native VU1 source directory" FORCE)
+endif()
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_test(NAME vu_generator_tests
+    COMMAND "${Python3_EXECUTABLE}" -B -m unittest discover
+        -s "${RX_ROOT}/tools/vu/test" -p "test_*.py")
+set_tests_properties(vu_generator_tests PROPERTIES LABELS tools)
+
 add_subdirectory("${RX_PS2RECOMP_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2recomp")
 set_property(SOURCE "${RX_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/ps2_pad.cpp"
     TARGET_DIRECTORY ps2_runtime APPEND PROPERTY INCLUDE_DIRECTORIES "${RX_ROOT}/host")

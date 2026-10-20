@@ -42,7 +42,7 @@ Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity ac
 
 ## VU
 
-VU1 and VU0 run interpreted. The interpreter is built with `-O2 -fno-fast-math -ffp-contract=off`.
+VU0 runs interpreted. VU1 selects native code by full-bank hash and entry PC when a local catalog is available; CMake invokes `tools/vu/vu1recomp.py`. Both catalog variants preserve every exit flag. Native state, data and GIF packets commit only after successful completion; unknown banks and unsupported paths use the interpreter. `PS2X_VU1_INTERPRETER=1` forces interpretation. `PS2X_VU1_DIFF=1` compares native state, data, timing and packets with interpretation; `./rx run` reports the counts and fails on a mismatch, budget stop or missing differential coverage. Differential agreement establishes interpreter agreement only. Strict floating-point flags apply to both paths.
 
 - VU0 macro FMAC computes masked Z/S/U/O and sticky status eagerly (no lazy flag liveness). FDIV updates only I/D and sticky copies, treating exponent-zero operands as zero. VI0 discards integer destinations at translation time.
 - VCLIPw compares signed float bit patterns against absolute Ft.w; an exponent-zero bound becomes `0x007fffff` (PCSX2 `_vuCLIP`); clip history keeps its low 24 bits.

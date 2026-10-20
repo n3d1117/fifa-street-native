@@ -2,7 +2,7 @@
 
 | Area | State |
 |---|---|
-| Engine | Builds on macOS arm64. `./rx test --full` passes all 54 tests |
+| Engine | Builds on macOS arm64. `./rx test --full` passes all 55 tests |
 | Game | The guarded route reaches the live England–Brazil HUD and renders active play under scripted stick input; the selected red-ringed player moves during those captures, but directional response and gameplay fps remain unverified. Bridge presents are separate from `fps_dispfb2`. Audio underflows remain severe |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
@@ -20,10 +20,9 @@
 
 ## Next
 
-1. Restore and verify native VU1 execution (`tools/vu/` at `d7b2b86`); compare steady match progress against the interpreter on the same route. Sampled stacks show VU1 interpretation dominating the data worker, with the EE waiting for it.
-2. Diagnose the pitch/portrait/flag bar pattern against PS2 rendering semantics.
-3. Resolve audio underflows and verify sync by listening.
-4. Verify directional input and memory-card saves.
+1. Derive native VU1 coverage from the disc ELF. Captured full-bank catalogs currently supply native code; ELF DMA REF upload templates contain reusable bodies at runtime-selected VU addresses. A fresh checkout falls back to interpretation without a catalog.
+2. Resolve audio underflows and verify sync by listening.
+3. Verify directional input and memory-card saves.
 
 `./rx run --route match` guards menu input with OCR and uses player Cross presses for the introductory movie and Marseille introduction. The scene gate requires two advancing HUD-clock readings; audio underflows independently fail the run.
 

@@ -36,6 +36,7 @@
 !/tools/*.sh
 !/tools/package/
 !/tools/probe/
+!/tools/vu/
 !/tools/metal-deps/
 /tools/metal-deps/*
 !/tools/metal-deps/compat/

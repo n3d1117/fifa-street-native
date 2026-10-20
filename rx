@@ -514,6 +514,12 @@ def cmd_run(args):
                       f"stubs: {stubs}"]
         if s.get("scene"):
             run.notes.append(f"scene: {s['scene']}")
+        vu1 = s.get("vu1") or {}
+        if vu1.get("diff_calls") or os.environ.get("PS2X_VU1_DIFF", "0") not in ("", "0"):
+            run.notes.append(f"vu1_diff: calls={vu1.get('diff_calls', 0)} "
+                             f"mismatch_full={vu1.get('mismatch_full', 0)} "
+                             f"mismatch_fast={vu1.get('mismatch_fast', 0)} "
+                             f"budget_stops={vu1.get('interpreter_budget_stops', 0)}")
         if s["black_frames"]:
             run.notes.append(f"black_frames: {s['black_frames']}")
         if s["save_dir_changed"]:

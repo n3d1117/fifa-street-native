@@ -94,6 +94,14 @@ def parse_log(text):
     if vu:
         out["vu_fallbacks"] = int(vu[-1][0])
         out["fps_dispfb2"] = round(float(vu[-1][1]), 1)
+    native = re.findall(r"\[vu1rec\] \w+: mscal=(\d+) native=(\d+) fallback=(\d+) \(noimage=(\d+) noentry=(\d+)\) "
+                        r"forced=(\d+) mscnt=(\d+) nativeFail=(\d+) \| diff calls=(\d+) "
+                        r"mismatch full=(\d+) fast=(\d+) interpBudget=(\d+)", text)
+    if native:
+        out["vu1"] = dict(zip(("mscal", "native_calls", "interpreter_fallbacks", "no_image", "no_entry",
+                               "forced_interpreter", "mscnt", "native_failures", "diff_calls",
+                               "mismatch_full", "mismatch_fast", "interpreter_budget_stops"),
+                              map(int, native[-1])))
     presents = re.findall(r"\[gs-present\] frames=(\d+) over=([0-9.]+)s presents/s=([0-9.]+)", text)
     if presents:
         out["gpu_presents_per_sec"] = round(float(presents[-1][2]), 1)
@@ -571,6 +579,7 @@ def main():
         "gpu_presents_per_sec": metrics.get("gpu_presents_per_sec"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
+        "vu1": metrics.get("vu1"),
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
@@ -591,7 +600,11 @@ def main():
     if scratch:
         shutil.rmtree(scratch, ignore_errors=True)
     scene_ok = not route or scene == "match_play"
-    return 0 if reached == target and scene_ok and not changed and not summary["audio_underruns"] and quit_ok is not False else 1
+    vu1 = metrics.get("vu1", {})
+    vu_ok = not any(vu1.get(key, 0) for key in ("mismatch_full", "mismatch_fast", "interpreter_budget_stops"))
+    if env.get("PS2X_VU1_DIFF", "0") not in ("", "0"):
+        vu_ok = vu_ok and vu1.get("diff_calls", 0) > 0
+    return 0 if reached == target and scene_ok and vu_ok and not changed and not summary["audio_underruns"] and quit_ok is not False else 1
 
 
 if __name__ == "__main__":
