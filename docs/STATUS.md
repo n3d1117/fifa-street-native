@@ -1,7 +1,7 @@
 ## Resume
 
 - Intent: reach and verify active match gameplay, then guard it in `./rx run --route match`.
-- Verified: `./rx run --route match` reaches `scene=match_play` after OCR confirms an advancing HUD clock; the captured clock reached 0:29. A diagnostic left-stick-right hold reaches port 0 through `scePadRead` (`0xff,0x80` while held); controlled-player movement is not established. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
+- Verified: `./rx run --route match` reaches `scene=match_play` after OCR confirms an advancing HUD clock. During a held left-stick-right input, `scePadRead` returned `0xff,0x80`; before/after gameplay frames show the clock advancing from 0:16 to 0:27 and the camera and players changing position across the court. This verifies play under scripted input; it does not isolate the selected player's response. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
 - Blocker: audio underruns remain severe. A profile sampled occasional EE waits in `DataStream::gsVsync`/`StreamRing::waitFor`, but most EE samples were guest code in `sub_003C18D0` and the data worker was usually idle; the observed wait does not explain the periodic cycle-accounting gaps.
 - Next: (1) verify controlled-player movement under scripted input; (2) determine a valid guest gameplay-frame metric (`fps_dispfb2` stays unavailable while the register is unchanged; bridge presents are reported separately); (3) localize the EE cycle-accounting gaps during active play; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
 - Gotchas: `commentary_open` means commentary data opened, not that gameplay began; `scene=match_play` requires two advancing HUD-clock readings; the full movie and match intro keep the route near nine minutes; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
@@ -11,7 +11,7 @@
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. `./rx test --full` passes all 54 tests |
-| Game | The guarded route reaches the live England–Brazil HUD and timer; the diagnostic stick value reaches `scePadRead`. Player movement and gameplay fps remain unverified; bridge presents are reported separately from `fps_dispfb2`. Audio underflows remain severe |
+| Game | The guarded route reaches the live England–Brazil HUD and renders active play under scripted stick input. The selected player's response and gameplay fps remain unverified; bridge presents are reported separately from `fps_dispfb2`. Audio underflows remain severe |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
