@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:14:06 +0200
-Subject: [PATCH 23/77] upstream #352: ps2xRecomp: bound generated
+Subject: [PATCH 23/78] upstream #352: ps2xRecomp: bound generated
  function-table initializer size to fix retail-scale compile time
 
 
