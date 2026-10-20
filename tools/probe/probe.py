@@ -44,7 +44,7 @@ CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact reco
 ROUTES = {"match": {
     "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
               (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
-    "play_steps": [(3, 20, 60.0)], "tail": 35, "timeout": 540,
+    "play_steps": [(3, 20, 12.0), (1, 19, 12.0)], "tail": 35, "timeout": 540,
     "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
