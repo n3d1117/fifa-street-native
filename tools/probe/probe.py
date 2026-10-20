@@ -12,6 +12,7 @@ Exit 0 if the process reached "running" with no crash and the real save dir is u
 """
 import argparse
 import collections
+import ctypes
 import hashlib
 import json
 import os
@@ -153,59 +154,82 @@ def child_exited(exit_watch):
     return False
 
 
-def cpu_time_seconds(value):
-    """Parse ps TIME values (MM:SS, HH:MM:SS, or days-HH:MM:SS)."""
-    match = re.fullmatch(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d{2})(?:\.(\d+))?", value)
-    if not match:
-        return None
-    days, hours, minutes, seconds, fraction = match.groups()
-    return (int(days or 0) * 86400 + int(hours or 0) * 3600 +
-            int(minutes) * 60 + int(seconds) + float("0." + fraction) if fraction else
-            int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds))
+class ProcThreadInfo(ctypes.Structure):
+    _fields_ = [("user_time", ctypes.c_uint64), ("system_time", ctypes.c_uint64),
+                ("cpu_usage", ctypes.c_int32), ("policy", ctypes.c_int32),
+                ("run_state", ctypes.c_int32), ("flags", ctypes.c_int32),
+                ("sleep_time", ctypes.c_int32), ("curpri", ctypes.c_int32),
+                ("priority", ctypes.c_int32), ("maxpriority", ctypes.c_int32),
+                ("name", ctypes.c_char * 64)]
+
+
+_PROC_PIDLISTTHREADS = 6
+_PROC_PIDTHREADINFO = 5
+_PROC_PIDTHREADID64INFO = 15
+_PROC_PIDLISTTHREADIDS = 28
+_PROC_INFO = None
+
+
+def proc_info():
+    """Load libproc lazily so non-macOS runs can still use the probe."""
+    global _PROC_INFO
+    if _PROC_INFO is None:
+        try:
+            _PROC_INFO = ctypes.CDLL("/usr/lib/libproc.dylib")
+            _PROC_INFO.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                                ctypes.c_void_p, ctypes.c_int]
+            _PROC_INFO.proc_pidinfo.restype = ctypes.c_int
+        except OSError:
+            _PROC_INFO = False
+    return _PROC_INFO or None
+
+
+def read_thread_info(libproc, pid, flavor, thread_id):
+    info = ProcThreadInfo()
+    result = libproc.proc_pidinfo(pid, flavor, thread_id, ctypes.byref(info), ctypes.sizeof(info))
+    return info if result == ctypes.sizeof(info) else None
+
+
+def list_thread_ids(libproc, pid, flavor):
+    capacity = 64
+    while capacity <= 4096:
+        ids = (ctypes.c_uint64 * capacity)()
+        size = libproc.proc_pidinfo(pid, flavor, 0, ctypes.byref(ids), ctypes.sizeof(ids))
+        if size <= 0:
+            return []
+        count = size // ctypes.sizeof(ctypes.c_uint64)
+        if count < capacity:
+            return list(ids[:count])
+        capacity *= 2
+    return list(ids[:count])
 
 
 def thread_cpu_snapshot(pid):
-    """Return cumulative per-thread CPU keyed by TID from macOS ps -M."""
-    try:
-        result = subprocess.run(["ps", "-M", "-p", str(pid)], capture_output=True,
-                                text=True, timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
+    """Return thread CPU nanoseconds and names, keyed by the kernel thread ID."""
+    libproc = proc_info()
+    if not libproc:
         return {}
-    lines = result.stdout.splitlines()
-    if not lines:
-        return {}
-    headers = re.split(r"\s+", lines[0].strip())
-    time_col = next((i for i, h in enumerate(headers) if h.upper() == "TIME"), None)
-    user_col = next((i for i, h in enumerate(headers) if h.upper() == "UTIME"), None)
-    sys_col = next((i for i, h in enumerate(headers) if h.upper() == "STIME"), None)
-    tid_col = next((i for i, h in enumerate(headers) if h.upper() in ("TID", "THRD")), None)
-    if time_col is None and (user_col is None or sys_col is None):
-        return {}
-    cpus = {}
-    for index, line in enumerate(lines[1:]):
-        fields = re.split(r"\s+", line.strip(), maxsplit=max(len(headers) - 1, 0))
-        offset = 0
-        if headers and headers[0].upper() == "USER" and fields and fields[0].isdigit():
-            offset = -1
-            if len(headers) > 2 and headers[2].upper() == "TT" and len(fields) < len(headers) - 1:
-                offset -= 1
-        row_time_col = time_col + offset if time_col is not None else None
-        row_user_col = user_col + offset if user_col is not None else None
-        row_sys_col = sys_col + offset if sys_col is not None else None
-        row_tid_col = tid_col + offset if tid_col is not None else None
-        if row_time_col is not None and len(fields) > row_time_col:
-            seconds = cpu_time_seconds(fields[row_time_col])
-        elif row_user_col is not None and row_sys_col is not None and len(fields) > max(row_user_col, row_sys_col):
-            user_seconds = cpu_time_seconds(fields[row_user_col])
-            sys_seconds = cpu_time_seconds(fields[row_sys_col])
-            seconds = user_seconds + sys_seconds if user_seconds is not None and sys_seconds is not None else None
-        else:
+    handles = list_thread_ids(libproc, pid, _PROC_PIDLISTTHREADS)
+    handle_threads = {}
+    for handle in handles:
+        info = read_thread_info(libproc, pid, _PROC_PIDTHREADINFO, handle)
+        if info is None:
             continue
-        if seconds is None:
-            continue
-        tid = fields[row_tid_col] if row_tid_col is not None and len(fields) > row_tid_col else str(index)
-        cpus[tid] = seconds
-    return cpus
+        name = info.name.split(b"\0", 1)[0].decode(errors="replace").strip()
+        handle_threads[str(handle)] = {"cpu_ns": int(info.user_time) + int(info.system_time), "name": name}
+
+    thread_ids = list_thread_ids(libproc, pid, _PROC_PIDLISTTHREADIDS)
+    if thread_ids:
+        threads = {}
+        for thread_id in thread_ids:
+            info = read_thread_info(libproc, pid, _PROC_PIDTHREADID64INFO, thread_id)
+            if info is None:
+                continue
+            name = info.name.split(b"\0", 1)[0].decode(errors="replace").strip()
+            threads[str(thread_id)] = {"cpu_ns": int(info.user_time) + int(info.system_time), "name": name}
+        if threads:
+            return threads
+    return handle_threads
 
 
 def parse_sample(path):
@@ -240,22 +264,42 @@ def parse_sample(path):
         for node in thread["nodes"]:
             own = max(0, node["count"] - node["children"])
             if own and node["symbol"]:
-                thread["self"][node["symbol"]] += own
+                thread["self"][merge_profile_symbol(node["symbol"])] += own
     hot = {}
     guest_top = []
     names = collections.Counter(thread["name"] for thread in threads)
+    waits = {"mach_msg_trap", "__workq_kernreturn", "semaphore_wait_trap",
+             "__psynch_cvwait", "__semwait_signal"}
     for thread in threads:
         name = thread["name"]
         if names[name] > 1:
             name = f"{name} (Thread_{thread['id']})"
+        if re.fullmatch(r"Thread_\d+", name):
+            worker_symbol = next((symbol for symbol in thread["self"]
+                                  if "vu1rec_" in symbol), None)
+            if worker_symbol:
+                name = f"worker ({worker_symbol})"
         thread["display_name"] = name
-        if total and thread["samples"] / total > 0.02:
+        wait_dominates = any(symbol in waits and count / max(thread["samples"], 1) >= 0.95
+                             for symbol, count in thread["self"].items())
+        if total and thread["samples"] / total > 0.02 and not wait_dominates:
             hot[name] = [[symbol, round(count * 100 / thread["samples"], 2)]
                                     for symbol, count in thread["self"].most_common(12)]
         if re.search(r"GameThread", thread["name"], re.I):
             guest_top = [[symbol, count] for symbol, count in thread["self"].most_common()
                          if "_0x" in symbol][:5]
     return threads, hot, guest_top
+
+
+def merge_profile_symbol(symbol):
+    """Remove template arguments and parameter lists while retaining the symbol name."""
+    symbol = symbol.replace("operator()", "operator__call__")
+    while True:
+        reduced = re.sub(r"<[^<>]*>|\([^()]*\)", "", symbol)
+        if reduced == symbol:
+            break
+        symbol = reduced
+    return re.sub(r"\s+", " ", symbol).strip().replace("operator__call__", "operator()")
 
 
 def collect_profile(pid, out, window, result):
@@ -284,18 +328,27 @@ def collect_profile(pid, out, window, result):
     for thread in threads:
         raw_id = thread["id"]
         try:
-            sample_by_tid[str(int(raw_id, 0))] = thread["display_name"]
+            sample_by_tid[str(int(raw_id, 0))] = thread
         except ValueError:
             if raw_id.isdigit():
-                sample_by_tid[str(int(raw_id))] = thread["display_name"]
-    names_by_order = [thread["display_name"] for thread in threads]
+                sample_by_tid[str(int(raw_id))] = thread
     cpus = []
     tids = list(start) + [tid for tid in finish if tid not in start]
-    for index, tid in enumerate(tids):
-        value = start.get(tid, 0.0)
-        delta = max(0.0, finish.get(tid, value) - value)
-        name = sample_by_tid.get(tid, names_by_order[index] if index < len(names_by_order) else f"Thread_{tid}")
-        cpus.append({"name": name, "cpu_per_s": round(delta / max(ended - started, 0.001), 4)})
+    for tid in tids:
+        before = start.get(tid, {"cpu_ns": 0, "name": ""})
+        after = finish.get(tid, before)
+        delta_ns = max(0, after["cpu_ns"] - before["cpu_ns"])
+        name = after["name"] or before["name"]
+        sample_thread = sample_by_tid.get(tid)
+        if sample_thread:
+            candidate = next((symbol for symbol, _ in sample_thread["self"].most_common()
+                              if "vu1rec_" in symbol), None)
+            if candidate:
+                name = f"{name} (worker: {candidate})" if name else f"worker ({candidate})"
+            elif sample_thread["name"] != f"Thread_{sample_thread['id']}":
+                name = name or sample_thread["name"]
+        name = name or f"tid {tid}"
+        cpus.append({"name": name, "cpu_per_s": round(delta_ns / 1e9 / max(ended - started, 0.001), 4)})
     cpus.sort(key=lambda item: item["cpu_per_s"], reverse=True)
     result.update(profile_threads=cpus, profile_hot=hot, profile_top=guest_top,
                   profile_sample=str(out / "process.sample") if (out / "process.sample").is_file() else None,
