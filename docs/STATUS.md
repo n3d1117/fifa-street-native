@@ -23,7 +23,9 @@
 1. Restore and verify native VU1 execution (`tools/vu/` at `d7b2b86`); compare steady match progress against the interpreter on the same route. Sampled stacks show VU1 interpretation dominating the data worker, with the EE waiting for it.
 2. Diagnose the pitch/portrait/flag bar pattern against PS2 rendering semantics.
 3. Resolve audio underflows and verify sync by listening.
-4. Shorten the guarded route using only player-accessible input to skip skippable introductions; verify directional input and memory-card saves.
+4. Verify directional input and memory-card saves.
+
+`./rx run --route match` guards menu input with OCR and uses player Cross presses for the introductory movie and Marseille introduction. The scene gate requires two advancing HUD-clock readings; audio underflows independently fail the run.
 
 Diagnosis tools: `./rx run --seconds N` (N >= 8) puts a runtime state block (EE threads, semaphores, sampled pcs resolved to functions, DMA/VIF registers, IOP, recent RPC) in `summary.json` `state`; `PS2X_DUMP_MEM=<hexaddr>:<words>`, `PS2X_TRACE_SYSCALLS/RPC/CD_IO/FAULTS`, SIGUSR1 for a dump on demand. Code edits to headers the generated code includes (`ps2_runtime.h`, ...) cost a 5 minute rebuild; `.cpp` edits 3-10 s.
 

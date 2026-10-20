@@ -38,13 +38,22 @@ ELF = game.ELF
 CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact recompiled function",
                  "Failed to initialize", "Failed to load ELF", "[guest-branch:missing-target]",
                  "[memory-fault]")
-# Scripted input routes: (seconds since the previous step, key bit[, hold seconds]) over the diagnostic input FIFO
-# (5 Cross, 9 Square, 2 Down, 17 Start; bits 19-22 left-stick left/right/up/down). The title screen needs the
-# language menu and all intro movies first; menu waits are measured, not guarded. match_play requires an advancing HUD clock.
+# Route steps: minimum delay, diagnostic key bit, hold, and an OCR/log guard.
+# Keys: Cross=5, Square=9, Down=2, Start=17; left stick left/right=19/20.
 ROUTES = {"match": {
-    "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
-              (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
-    "play_steps": [(3, 20, 12.0), (1, 19, 12.0)], "tail": 35, "timeout": 540,
+    "steps": [(10, 5, .12, "DEUTSCH"),
+              (16, 5, .3, "log:DATA/FEMOVIES/INTRO.MPC"),
+              (2, 17, .12, "PRESS START"),
+              (2, 5, .12, "SAVE TYPE"),
+              (2, 2, .12, "DO YOU WISH.*SAVE"), (1.5, 5, .12, "DO YOU WISH.*SAVE"),
+              (2, 2, .12, "FRIENDLY"), (1.5, 5, .12, "FRIENDLY"),
+              (2, 5, .12, "PICK SIDES"),
+              (2, 5, .12, "PICK SIDES|SELECT TEAM"), (2, 5, .12, "SELECT TEAM"),
+              (2, 5, .12, "SELECT TEAM|STARTING FOUR"), (2, 9, .12, "STARTING FOUR"),
+              (2, 5, .12, "STARTING FOUR"), (2, 9, .12, "STARTING FOUR"),
+              (2, 5, .12, "STARTING FOUR|SELECT VENUE"),
+              (2, 5, .12, "SELECT VENUE|MY RULES"), (2, 5, .12, "MY RULES")],
+    "play_steps": [(3, 20, 12.0), (1, 19, 12.0)], "tail": 35, "timeout": 240,
     "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
@@ -172,6 +181,7 @@ class Capture:
         self.gameplay_confirmed = False
         self.started = time.monotonic() if started is None else started
         self.clock_observations = []
+        self.labels = []
 
     def sample(self, pid, timeout=8):
         if not self.ok:
@@ -185,15 +195,19 @@ class Capture:
             r = subprocess.run([str(self.cap), str(pid), str(frame_dir), "1"], capture_output=True, text=True, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError):
             return
+        if self.preserve:
+            (frame_dir / "capture.txt").write_text(r.stdout)
         m = re.search(r"luma=([0-9.]+)", r.stdout) if r.returncode == 0 else None
         if m:
             self.frames += 1
             self.black += float(m[1]) < 0.02
         clock = None
+        self.labels = []
         for line in r.stdout.splitlines():
             match = re.fullmatch(r"ocr=([0-9.]+),([0-9.]+):([0-9.]+),([0-9.]+):(.*)", line)
             if not match:
                 continue
+            self.labels.append(match[5].strip().upper())
             x, y = float(match[1]), float(match[2])
             if not 0.42 <= x <= 0.58 or not 0.78 <= y <= 0.91:
                 continue
@@ -389,6 +403,8 @@ def main():
     gameplay_at = None
     profiled = None
     gameplay_input_key = None
+    route_inputs = []
+    intro_skip_at = None
     next_black = started + BLACK_SAMPLE_START
     seen_len = 0
     last_log_check = 0.0
@@ -431,14 +447,29 @@ def main():
                 if fifo_fd is not None and release_at and now >= release_at:
                     os.write(fifo_fd, struct.pack("<I", 0))
                     release_at = 0.0
-                if fifo_fd is not None and steps and now >= step_at and not release_at:
+                guard_ok = False
+                if steps:
+                    guard = steps[0][3]
+                    guard_ok = (guard[4:] in text_now if guard.startswith("log:") else
+                                bool(re.search(guard, "\n".join(cap.labels))))
+                if fifo_fd is not None and steps and now >= step_at and not release_at and guard_ok:
                     step = steps.pop(0)
                     _, key = step[:2]
-                    hold = step[2] if len(step) > 2 else 0.12
+                    hold = step[2]
+                    route_inputs.append({"wall_seconds": round(now - started, 3), "key_bit": key, "guard": step[3]})
                     os.write(fifo_fd, struct.pack("<I", 1 << key))
                     release_at = now + hold
                     if steps:
                         step_at = now + steps[0][0]
+                elif (fifo_fd is not None and not steps and not release_at and cap.match_clock is None and
+                      route["scene_marker"] in text_now and
+                      re.search(r"MAR[5S]E[I1].*L", "\n".join(cap.labels)) and
+                      (intro_skip_at is None or now >= intro_skip_at + 5)):
+                    os.write(fifo_fd, struct.pack("<I", 1 << 5))
+                    release_at = now + 1.0
+                    intro_skip_at = now
+                    route_inputs.append({"wall_seconds": round(now - started, 3), "key_bit": 5,
+                                         "guard": "match intro MARSEILLE + commentary data open"})
                 elif fifo_fd is not None and play_steps and play_step_at is not None and now >= play_step_at and not release_at:
                     step = play_steps.pop(0)
                     _, key, hold = step
@@ -545,6 +576,9 @@ def main():
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
         "profile_sample": str(out / "game-thread.sample") if (out / "game-thread.sample").is_file() else None,
         "profile_measurement": "sampled wall stacks across all threads; not per-thread CPU usage" if profiled is not None else None,
+        "route_inputs": route_inputs if route else None,
+        "route_waiting_for": steps[0][3] if route and steps else None,
+        "gameplay_wall_seconds": round(gameplay_at - started, 3) if gameplay_at is not None else None,
         "scene": scene, "commentary_open": commentary_open if route else None,
         "gameplay_confirmed": cap.gameplay_confirmed if route else None,
         "match_clock_seconds": cap.match_clock if route else None,
