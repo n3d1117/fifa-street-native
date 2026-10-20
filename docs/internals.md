@@ -70,6 +70,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_DIAGNOSTIC_INPUT_FIFO=<fifo>` | process-local scripted input |
 | `PS2X_TRACE_FAULTS=1`, `PS2X_TRACE_SPU2=1`, `PS2X_TRACE_CD_IO=1` | fault, audio-health and disc-read traces |
 | `PS2X_TRACE_AUDIO_RING=1` | once-per-second SPU2 ring depth, mix rate, pulls and under/overruns without per-event SPU2 tracing |
+| `PS2X_SPU2_RING_FRAMES=<4096..65536>` | set output-ring capacity (power of two); default 16384, set 8192 to restore the previous capacity |
 | `PS2X_TRACE_SYSCALLS=1`, `PS2X_TRACE_RPC=1` | first calls per EE syscall number; first 2000 SIF RPC events |
 | `PS2X_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture |
 | `PS2X_AUDIO_STRETCH=1` | enable adaptive audio time stretching (off by default) |

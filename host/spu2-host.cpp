@@ -364,12 +364,22 @@ bool ps2x_spu2_host_start() {
 
     // The IOP already owns this core serially. Inline mode keeps register reads
     // and event barriers from handing work between threads at every checkpoint.
-    const rrv_spu2_config config{0, 8192};
+    uint32_t outputRingFrames = 16384;
+    if (const char* value = std::getenv("PS2X_SPU2_RING_FRAMES")) {
+        char* end = nullptr;
+        const unsigned long requestedFrames = std::strtoul(value, &end, 10);
+        if (end != value && *end == '\0' && requestedFrames >= 4096ul && requestedFrames <= 65536ul &&
+            (requestedFrames & (requestedFrames - 1ul)) == 0ul) {
+            outputRingFrames = static_cast<uint32_t>(requestedFrames);
+        }
+    }
+    const rrv_spu2_config config{0, outputRingFrames};
     g_spu2 = rrv_spu2_create(&config);
     if (!g_spu2) {
         std::fprintf(stderr, "[spu2] PCSX2 SPU2 core creation failed\n");
         return false;
     }
+    std::fprintf(stderr, "[spu2] output ring capacity=%u frames\n", outputRingFrames);
 
     g_last_cycle.store(0, std::memory_order_relaxed);
     g_audio_callback_errors.store(0, std::memory_order_relaxed);
