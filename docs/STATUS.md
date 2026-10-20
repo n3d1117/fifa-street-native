@@ -6,7 +6,7 @@
 |---|---|
 | Boot | Logos, language menu, EA intro movies with audio, front end, team and stadium selection |
 | Match | Live play at full speed: HUD clock 1.0 s per wall s, native VU1 from the disc, zero interpreter fallbacks (`./rx run --match`) |
-| Audio | Zero underruns in movies and match (`./rx run --match`); some runs still show underrun bursts (measured 0 to about 8000 across six runs; cause not yet known) |
+| Audio | Movies and match usually run with zero underruns (`./rx run --match`), but some runs show bursts (0 to about 8000 across six measured runs; cause not yet known) |
 | Graphics | PCSX2 HW renderer at PCSX2 defaults (no per-game hacks); Metal shaders compiled at start from `deps/pcsx2`. Pitch, flags, headshots and venue preview render correctly on the match route |
 | Unverified | Directional input response, memory-card saves, other stadiums and modes, gameplay fps |
 | Platforms | macOS arm64 |
