@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:11:26 +0200
-Subject: [PATCH 13/73] upstream #310: Fix VU0 macro LQI/LQD/SQI/SQD/ILWR/ISWR
+Subject: [PATCH 13/74] upstream #310: Fix VU0 macro LQI/LQD/SQI/SQD/ILWR/ISWR
  operand decoding and memory target
 
 
