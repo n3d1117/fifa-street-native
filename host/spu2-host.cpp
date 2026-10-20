@@ -339,7 +339,21 @@ bool open_audio_device() {
         g_audio_subsystem_initialized = false;
         return false;
     }
-    std::fprintf(stderr, "[spu2] SDL playback started (48 kHz stereo float)\n");
+    SDL_AudioSpec streamInput{}, streamOutput{}, deviceFormat{};
+    int deviceBufferFrames = 0;
+    const SDL_AudioDeviceID device = SDL_GetAudioStreamDevice(g_audio_stream);
+    if (SDL_GetAudioStreamFormat(g_audio_stream, &streamInput, &streamOutput) &&
+        SDL_GetAudioDeviceFormat(device, &deviceFormat, &deviceBufferFrames)) {
+        std::fprintf(stderr,
+                     "[spu2] SDL playback input=%s/%d/%dHz output=%s/%d/%dHz device=%s/%d/%dHz buffer=%d ratio=%.4f\n",
+                     SDL_GetAudioFormatName(streamInput.format), streamInput.channels, streamInput.freq,
+                     SDL_GetAudioFormatName(streamOutput.format), streamOutput.channels, streamOutput.freq,
+                     SDL_GetAudioFormatName(deviceFormat.format), deviceFormat.channels, deviceFormat.freq,
+                     deviceBufferFrames, SDL_GetAudioStreamFrequencyRatio(g_audio_stream));
+    } else {
+        std::fprintf(stderr, "[spu2] SDL playback started (48 kHz stereo float); format query failed: %s\n",
+                     SDL_GetError());
+    }
     return true;
 }
 } // namespace
