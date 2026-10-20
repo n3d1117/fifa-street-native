@@ -748,29 +748,8 @@ def main():
     verbose = any(a in ("-v", "--verbose") for a in argv)
     args, _extra = p.parse_known_args([a for a in argv if a not in ("-v", "--verbose")])
     args.verbose = verbose
-    if args.cmd in EXCLUSIVE_CMDS:
-        hold_exclusive_lock(args.cmd)
     return args.fn(args)
 
-
-EXCLUSIVE_CMDS = {"setup", "deps", "disc", "build", "test", "run", "ab", "package"}
-
-
-def hold_exclusive_lock(cmd):
-    """Serialize commands that share build/game-metal or measure timing; a second caller waits."""
-    import fcntl
-    path = ROOT / "build" / ".rx.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        holder = os.pread(fd, 256, 0).decode(errors="replace").strip() or "another rx command"
-        print(f"waiting for {holder} ...", flush=True)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    os.ftruncate(fd, 0)
-    os.pwrite(fd, f"rx {cmd} (pid {os.getpid()})".encode(), 0)
-    return fd  # held until the process exits
 
 
 if __name__ == "__main__":

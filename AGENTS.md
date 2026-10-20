@@ -14,7 +14,7 @@ README.md: setup. `docs/internals.md`: mechanisms and constants. `docs/STATUS.md
 3. **Never hand-edit `generated/`.** It is rebuilt from the ELF. Fix at the right layer (below).
 4. **Claim only what you ran.** Label claims measured, inferred or guessed. Translation coverage is not gameplay evidence; a boot or first-level result is not whole-game evidence.
 5. **One item at a time: verify, commit, push, confirm the push, then the next.** Never leave a commit unpushed.
-6. **One build or GUI run at a time.** Builds share `build/game-metal`, and concurrent runs distort timing. `./rx` holds `build/.rx.lock`; a second command waits.
+6. **One build or GUI run at a time.** Builds share `build/game-metal`, and concurrent runs distort timing.
 7. **User-visible changes end with `./rx package --install`.** The user judges by playing `/Applications/FIFA Street PS2.app`. Say what they should look or listen for; counters do not replace their eyes and ears.
 8. **Keep chat updates brief**, about once a minute during long work.
 9. **Before inventing a fix,** search upstream deps' current versions and other PS2Recomp-based ports; port the mechanism, then validate it here.
