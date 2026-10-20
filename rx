@@ -284,7 +284,8 @@ def cmd_disc(args):
 
 
 # Out-of-tree dependency products: stamp inputs are git tree hashes of the relevant subpaths
-# (plus the HEAD diff for uncommitted edits), so unrelated commits do not trigger rebuilds.
+# (plus the HEAD diff and tracked input timestamps), so unrelated commits do not trigger rebuilds
+# while timestamp changes still reach the build system's dependency checks.
 DEP_PRODUCTS = {
     "bridge": (["build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"],
                [("pcsx2", None), (None, "bridge/gs")]),
@@ -296,11 +297,23 @@ DEP_PRODUCTS = {
 def dep_inputs_hash(sources):
     h = hashlib.sha256()
     for dep, sub in sources:
-        base = ["git", "-C", str(ROOT if dep is None else ROOT / "deps" / dep)]
+        root = ROOT if dep is None else ROOT / "deps" / dep
+        base = ["git", "-C", str(root)]
         spec = [] if sub is None else ["--", sub]
         rev = f"HEAD:{sub}" if sub else "HEAD"
         h.update(subprocess.run(base + ["rev-parse", rev], capture_output=True, text=True).stdout.encode())
         h.update(subprocess.run(base + ["diff", "HEAD", *spec], capture_output=True).stdout)
+        files = subprocess.run(base + ["ls-files", "-z", *spec], capture_output=True).stdout.split(b"\0")
+        for name in files:
+            if not name:
+                continue
+            path = root / os.fsdecode(name)
+            try:
+                stat = path.stat()
+            except FileNotFoundError:
+                continue
+            h.update(name)
+            h.update(f"{stat.st_mtime_ns}:{stat.st_size}".encode())
     return h.hexdigest()
 
 
