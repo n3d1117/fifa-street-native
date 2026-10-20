@@ -44,11 +44,12 @@ CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact reco
 ROUTES = {"match": {
     "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
               (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
-    "play_steps": [(260, 19, 20.0)], "tail": 25, "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
+    "play_steps": [(3, 20, 20.0)], "tail": 35, "timeout": 480,
+    "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
 TOOL_FRAMEWORKS = {
-    "capture-window": ["-framework", "Cocoa", "-framework", "CoreGraphics", "-framework", "ImageIO"],
+    "capture-window": ["-framework", "Cocoa", "-framework", "CoreGraphics", "-framework", "ImageIO", "-framework", "Vision"],
 }
 BLACK_SAMPLE_START, BLACK_SAMPLE_EVERY = 10.0, 5.0
 
@@ -150,7 +151,7 @@ def sample_game_thread(pid, path):
 
 
 class Capture:
-    """Window capture black-frame count (capture-window prints the frame's mean luma)."""
+    """Window capture, black-frame count, and advancing match-clock detection."""
 
     def __init__(self, out, preserve=False):
         self.dir = out / "frames"
@@ -162,6 +163,10 @@ class Capture:
         except (subprocess.CalledProcessError, OSError):
             self.ok = False
         self.frames = self.black = 0
+        self.match_clock = None
+        self._previous_clock = None
+        self._clock_advances = 0
+        self.gameplay_confirmed = False
 
     def sample(self, pid, timeout=8):
         if not self.ok:
@@ -178,6 +183,29 @@ class Capture:
         if m:
             self.frames += 1
             self.black += float(m[1]) < 0.02
+        clock = None
+        for line in r.stdout.splitlines():
+            match = re.fullmatch(r"ocr=([0-9.]+),([0-9.]+):([0-9.]+),([0-9.]+):(.*)", line)
+            if not match:
+                continue
+            x, y = float(match[1]), float(match[2])
+            if not 0.42 <= x <= 0.58 or not 0.78 <= y <= 0.91:
+                continue
+            label = match[5].strip().upper().replace("O", "0").replace("I", "1")
+            clock_match = re.fullmatch(r"(\d{1,2})[.:](\d{2})", label)
+            if clock_match and int(clock_match[2]) < 60:
+                clock = int(clock_match[1]) * 60 + int(clock_match[2])
+                break
+        if clock is not None:
+            self.match_clock = clock
+            if self._previous_clock is not None:
+                if clock > self._previous_clock:
+                    self._clock_advances += 1
+                elif clock < self._previous_clock:
+                    self._clock_advances = 0
+            self._previous_clock = clock
+            if self._clock_advances >= 2:
+                self.gameplay_confirmed = True
 
 
 def state_block(text):
@@ -298,9 +326,7 @@ def main():
     route = ROUTES.get(args.route)
     cap = Capture(out, preserve=bool(route))
     if route:
-        menu_delay = sum(step[0] for step in route["steps"])
-        play_delay = sum(step[0] for step in route.get("play_steps", []))
-        args.seconds = max(args.seconds, int(menu_delay + play_delay + route["tail"]))
+        args.seconds = max(args.seconds, route.get("timeout", 0))
     deadline = started + args.seconds
     steps, step_at, release_at, fifo_fd = list(route["steps"]) if route else [], started, 0.0, None
     play_steps, play_step_at = list(route.get("play_steps", [])) if route else [], None
@@ -324,7 +350,7 @@ def main():
                     break
                 seen_len = len(text_now)
             if route:
-                if play_steps and play_step_at is None and route["scene_marker"] in text_now:
+                if play_steps and play_step_at is None and cap.gameplay_confirmed:
                     play_step_at = now + play_steps[0][0]
                 if fifo_fd is None:
                     try:
@@ -356,6 +382,8 @@ def main():
                 os.kill(proc.pid, signal.SIGUSR1)  # one-block runtime state dump, see [state-begin] in run.log
             if now >= next_black:
                 cap.sample(proc.pid)
+                if route and play_steps and play_step_at is None and cap.gameplay_confirmed:
+                    play_step_at = time.monotonic() + play_steps[0][0]
                 next_black = time.monotonic() + BLACK_SAMPLE_EVERY
             time.sleep(0.04 if route else 0.2)
     finally:
@@ -426,8 +454,10 @@ def main():
     changed = save_hash(REAL_SUPPORT) != before and not explicit_real
     target = "running"
     scene = None
+    commentary_open = False
     if route:
-        scene = "match" if route["scene_marker"] in text else f"menus ({len(route['steps']) - len(steps)} of {len(route['steps'])} steps sent)"
+        commentary_open = route["scene_marker"] in text
+        scene = "match_play" if cap.gameplay_confirmed else ("commentary_open" if commentary_open else f"menus ({len(route['steps']) - len(steps)} of {len(route['steps'])} steps sent)")
         if crash or fault_stop:
             scene = "crash"
     summary = {
@@ -437,12 +467,15 @@ def main():
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
-        "scene": scene, "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
+        "scene": scene, "commentary_open": commentary_open if route else None,
+        "gameplay_confirmed": cap.gameplay_confirmed if route else None,
+        "match_clock_seconds": cap.match_clock if route else None,
+        "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if scratch:
         shutil.rmtree(scratch, ignore_errors=True)
-    scene_ok = not route or scene == "match"
+    scene_ok = not route or scene == "match_play"
     return 0 if reached == target and scene_ok and not changed and not summary["audio_underruns"] and quit_ok is not False else 1
 
 
