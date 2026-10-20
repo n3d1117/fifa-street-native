@@ -15,7 +15,7 @@ TOOLCHAIN="$ROOT/cmake/toolchain-llvm19.cmake"
 SDK="$(xcrun --show-sdk-path)"
 # Parallelism comes from the one shared host-derived formula (tools/jobs.py; RX_JOBS overrides).
 NCPU="${RX_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
-LOGS="$ROOT/logs"
+LOGS="$ROOT/build/logs"
 FORCE=" ${RX_FORCE:-} "
 mkdir -p "$LOGS"
 export RX_LLVM="$LLVM"

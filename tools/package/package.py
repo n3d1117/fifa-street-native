@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a self-contained, ad-hoc-signed macOS app bundle whose main executable is the Metal runner itself.
 
-Generates the icon, builds dist/<app_name>.app (names from config/game.json), audits it (no disc image or game ELF outside
+Generates the icon, builds build/dist/<app_name>.app (names from config/game.json), audits it (no disc image or game ELF outside
 Resources/game, no Mach-O with /Users, Downloads or tools/build paths, arm64 only) and with --install
 replaces /Applications/<app_name>.app (previous copy goes to the Trash).
 """
@@ -30,7 +30,7 @@ BRIDGE_RESOURCES_DEFAULT = BRIDGE_DEFAULT.parent / "resources"
 LLVM_LIB = Path(os.environ.get("RX_LLVM") or NATIVE / "tools/build/llvm19") / "lib"
 ICON_DEFAULT = ROOT / "build/AppIcon.icns"
 GAME_DEFAULT = ROOT / "extracted/disc"
-OUTPUT_DEFAULT = ROOT / "dist" / (APP_NAME + ".app")
+OUTPUT_DEFAULT = ROOT / "build" / "dist" / (APP_NAME + ".app")
 BRIDGE_NAME = "librrv-pcsx2-gs-bridge.dylib"
 EXECUTABLE = GAME["executable"]  # the game itself: one process, no launcher
 
@@ -238,7 +238,7 @@ def main():
     if output.exists():
         if output.parent != OUTPUT_DEFAULT.parent:
             raise RuntimeError("refusing to overwrite existing bundle: " + str(output))
-        remove_tree(output)  # dist/ holds only our own build product
+        remove_tree(output)  # build/dist/ holds only our own build product
     if args.icon == ICON_DEFAULT:
         make_icon()
     if not args.icon.is_file():

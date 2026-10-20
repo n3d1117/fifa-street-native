@@ -2,7 +2,7 @@
 """Bounded native boot run with isolated saves; writes summary.json and run.log into --out.
 
   --save DIR     seed a fresh isolated user dir from DIR/memcards
-  --user-dir D   use this user dir instead of a scratch one
+  --user-dir D   use this user dir instead of a scratch one (relative: under build/user-dirs/)
   --profile      macOS `sample` after --profile-after seconds (from confirmed gameplay on a route)
   --app BUNDLE   exercise an installed .app (the app binary is the game itself; same isolated user dir and diagnostics)
   --quit-at-end  with --app: end the run with an AppleEvent quit (like Dock/Cmd-Q) and require exit 0 within 30 s
@@ -360,7 +360,7 @@ def main():
     log_path = out / "run.log"
     scratch = None
     if args.user_dir:
-        user_dir = args.user_dir.resolve()
+        user_dir = (args.user_dir if args.user_dir.is_absolute() else ROOT / "build/user-dirs" / args.user_dir).resolve()
         user_dir.mkdir(parents=True, exist_ok=True)
     else:
         scratch = user_dir = Path(tempfile.mkdtemp(prefix="rx-run-"))
@@ -406,7 +406,7 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, _unwind)
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-    proc = subprocess.Popen(command, cwd=ROOT, env=env, stdout=logf, stderr=subprocess.STDOUT,
+    proc = subprocess.Popen(command, cwd=user_dir, env=env, stdout=logf, stderr=subprocess.STDOUT,
                             preexec_fn=os.setpgrp)
     exit_watch = select.kqueue()
     exit_watch.control([select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
