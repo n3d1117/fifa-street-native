@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:13:51 +0200
-Subject: [PATCH 20/84] upstream #322: fix(recomp): give the MMI HI/LO family
+Subject: [PATCH 20/85] upstream #322: fix(recomp): give the MMI HI/LO family
  both pipelines' registers
 
 
