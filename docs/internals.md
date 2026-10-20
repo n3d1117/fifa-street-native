@@ -18,6 +18,10 @@ PS2Recomp has no mid-function override. Config `[[hooks]]` (address, `before`/`a
 
 Removing a config stub alone cannot restore guest execution: PS2Recomp also auto-binds names in `ps2_call_list.h`, so both lists must change together.
 
+## Boot to match (diagnostic)
+
+`./rx run --match` sets `PS2X_BOOT_MATCH` in a scratch user dir. `host/boot-match.cpp` replaces the front end's per-frame update (`0x2ECA38`) in the function table with a wrapper that runs the original, then once the front-end resource slot (`0x47EFEC`) is filled: stores venue 3 at `GameSetup+0xA0` as `setvenuebyid` (`0x2E64C0`) does, calls `GameSetup::SetControl` (`0x12AE00`) for side 1 to pad 0, and calls `Playgame` (`0x2E5220`). Inert without the variable, in the real save directory, or if a dependent ELF word differs. Test: `boot_match`.
+
 ## VIF1 front end and op stream
 
 `PS2Memory::processVIF1Data` (`ps2_vif1_interpreter.cpp`) is split into a front end and a consumer. The front end parses commands and owns everything the EE can observe: VIF1 registers (including ROW, rewritten by STMOD 2/3 UNPACK), DBF/TOPS, stall and IRQ state, partial-command buffering, MSKPATH3 and the DIRECT continuation counters. It emits `Vif1Op`s in order: `Mpg`, `Unpack` (snapshot of CYCLE, MODE, MASK, ROW, COL plus payload), `Mscal`/`Mscnt` (start PC, TOP, ITOP), `Direct` (PATH2 bytes), `Path3Unmask`.
