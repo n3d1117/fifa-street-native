@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:32:19 +0200
-Subject: [PATCH 57/76] Runtime: HLE buffers live in a runtime arena heap below
+Subject: [PATCH 57/77] Runtime: HLE buffers live in a runtime arena heap below
  the ELF, not the game's heap; state dump adds registers, DMA/VIF state and
  PS2X_DUMP_MEM
 

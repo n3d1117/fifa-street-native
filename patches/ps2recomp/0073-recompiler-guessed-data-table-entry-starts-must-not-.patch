@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 02:47:41 +0200
-Subject: [PATCH 73/76] recompiler: guessed data-table entry starts must not
+Subject: [PATCH 73/77] recompiler: guessed data-table entry starts must not
  sit in a delay slot or mid-function; shared-tail pointers become resume
  labels (split sub_00280038 dropped the jr delay slot addiu sp, so ra was read
  from the pmf slot, 0x2e0000); GCC2 {adj,ptr,id} vtable records
