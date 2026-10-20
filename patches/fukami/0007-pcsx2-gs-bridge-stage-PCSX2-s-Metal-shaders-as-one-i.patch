@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 21:04:20 +0200
-Subject: [PATCH 7/7] pcsx2-gs-bridge: stage PCSX2's Metal shaders as one
+Subject: [PATCH 7/8] pcsx2-gs-bridge: stage PCSX2's Metal shaders as one
  inlined source instead of release metallibs
 
 GSMTLDeviceInfo compiles the main library from resources/pcsx2-metal-shaders.metal

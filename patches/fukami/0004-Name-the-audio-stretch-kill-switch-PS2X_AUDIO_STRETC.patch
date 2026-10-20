@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 17:07:35 +0200
-Subject: [PATCH 4/7] Name the audio-stretch kill-switch PS2X_AUDIO_STRETCH
+Subject: [PATCH 4/8] Name the audio-stretch kill-switch PS2X_AUDIO_STRETCH
 
 
 diff --git a/tools/pcsx2-spu2/CMakeLists.txt b/tools/pcsx2-spu2/CMakeLists.txt

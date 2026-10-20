@@ -1,0 +1,172 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 21:51:32 +0200
+Subject: [PATCH 8/8] pcsx2-gs-bridge: drop the Ridge Racer V hardware profile;
+ HW options stay at PCSX2 defaults
+
+The bridge forced TextureInsideRt=InsideTargets, CPUSpriteRenderBW=1 (level 1),
+RewriteLargeST and GPU palette conversion for every game. They were chosen from
+RR5's PCSX2 GameIndex entry and RR5 captures; PCSX2 renders FIFA Street correctly
+with none of them. Deletes the profile and its RRV_PCSX2_GS_METAL_TEXTURE_INSIDE_RT,
+RRV_PCSX2_GS_CPU_SPRITE_BW and RRV_PCSX2_GS_PALTEX overrides.
+
+diff --git a/tools/pcsx2-gs-bridge/bridge.cpp b/tools/pcsx2-gs-bridge/bridge.cpp
+index 4763ad295b8ec195498b2e3716220eb9842aff37..c6df5de27df12b16b108a94e09a7767b7764a29b 100644
+--- a/tools/pcsx2-gs-bridge/bridge.cpp
++++ b/tools/pcsx2-gs-bridge/bridge.cpp
+@@ -71,8 +71,8 @@ extern "C" int rrv_pcsx2_gs_bridge_validate_linux_surface(
+ #endif
+ 
+ // The GPU renderer the bridge presents through on this platform: Metal on
+-// macOS, Vulkan elsewhere (Linux/Steam Deck, Gate 5). Direct presentation,
+-// the RR5 hardware profile and RENDERER_AUTO all resolve to it.
++// macOS, Vulkan elsewhere (Linux/Steam Deck, Gate 5). Direct presentation
++// and RENDERER_AUTO resolve to it.
+ #if defined(__APPLE__)
+ constexpr GSRendererType kPlatformGpuRenderer = GSRendererType::Metal;
+ constexpr const char* kPlatformGpuBackendName = "Metal";
+@@ -319,136 +319,6 @@ private:
+     std::optional<FPControlRegisterBackup> m_backup;
+ };
+ 
+-// PCSX2's GameIndex gives Ridge Racer V (SLUS-20002) textureInsideRT=1 to
+-// repair its post-processing feedback passes. The bridge never boots a disc,
+-// so it has no serial/CRC through which PCSX2 could select that profile. The
+-// remaining values below each have an independent, capture-backed reason:
+-// CPU sprite rendering fixes the car material feedback path, while the
+-// large-ST rewrite is limited to the reflection-map draws which need it.
+-// Keep this as a deliberately small, named hardware profile until each
+-// additional GameIndex setting has its own capture-backed justification.
+-constexpr const char* kMetalTextureInsideRtEnv = "RRV_PCSX2_GS_METAL_TEXTURE_INSIDE_RT";
+-constexpr const char* kMetalCpuSpriteBwEnv = "RRV_PCSX2_GS_CPU_SPRITE_BW";
+-// RR5 Metal profile: PCSX2 GPU palette conversion (paltex) is on. 8-bit
+-// textures stay indexed and the CLUT lookup runs in the shader, so the hash
+-// cache no longer keys on the CLUT. Gate-4 G4-6 KEEP (owner visual acceptance
+-// VIS-004, 2026-09-25): window R +28.6%, traces/digests identical, image
+-// differs from the CPU-expanded path in sampling detail. RRV_PCSX2_GS_PALTEX=0
+-// is the rollback to PCSX2's default (off); =1 is accepted and changes nothing.
+-constexpr const char* kMetalPaltexEnv = "RRV_PCSX2_GS_PALTEX";
+-
+-const char* TextureInsideRtModeName(GSTextureInRtMode mode)
+-{
+-    switch (mode)
+-    {
+-        case GSTextureInRtMode::Disabled:
+-            return "Disabled";
+-        case GSTextureInRtMode::InsideTargets:
+-            return "InsideTargets";
+-        case GSTextureInRtMode::MergeTargets:
+-            return "MergeTargets";
+-        default:
+-            return "Unknown";
+-    }
+-}
+-
+-bool ParseMetalTextureInsideRtOverride(GSTextureInRtMode& mode)
+-{
+-    const char* value = std::getenv(kMetalTextureInsideRtEnv);
+-    if (!value || value[0] == '\0')
+-        return false;
+-
+-    if (value[0] >= '0' && value[0] <= '2' && value[1] == '\0')
+-    {
+-        mode = static_cast<GSTextureInRtMode>(value[0] - '0');
+-        return true;
+-    }
+-
+-    std::fprintf(stderr,
+-                 "[pcsx2-gs-bridge] ignoring invalid %s=%s (expected 0=Disabled, "
+-                 "1=InsideTargets, or 2=MergeTargets)\n",
+-                 kMetalTextureInsideRtEnv, value);
+-    return false;
+-}
+-
+-bool ParseMetalPaltexOverride(bool& paltex)
+-{
+-    const char* value = std::getenv(kMetalPaltexEnv);
+-    if (!value || value[0] == '\0')
+-        return false;
+-    if ((value[0] == '0' || value[0] == '1') && value[1] == '\0')
+-    {
+-        paltex = value[0] == '1';
+-        return true;
+-    }
+-    std::fprintf(stderr, "[pcsx2-gs-bridge] ignoring invalid %s=%s (expected 0 or 1)\n",
+-                 kMetalPaltexEnv, value);
+-    return false;
+-}
+-
+-bool ParseMetalCpuSpriteBwOverride(unsigned& bw)
+-{
+-    const char* value = std::getenv(kMetalCpuSpriteBwEnv);
+-    if (!value || value[0] == '\0')
+-        return false;
+-    if ((value[0] == '0' || value[0] == '1') && value[1] == '\0')
+-    {
+-        bw = static_cast<unsigned>(value[0] - '0');
+-        return true;
+-    }
+-    std::fprintf(stderr, "[pcsx2-gs-bridge] ignoring invalid %s=%s (expected 0 or 1)\n",
+-                 kMetalCpuSpriteBwEnv, value);
+-    return false;
+-}
+-
+-// The RR5 hardware profile. Every setting here is a PCSX2 HW-renderer option
+-// (GSRendererHW / GSTextureCache), not a Metal one, so the Vulkan renderer on
+-// Linux gets the same profile; the env names keep their historical METAL
+-// spelling so launchers and captures stay comparable across platforms.
+-void ApplyRrvMetalHardwareProfile(GSRendererType renderer, Pcsx2Config::GSOptions& options)
+-{
+-#if defined(__APPLE__)
+-    // GSopen(Auto) resolves to Metal on macOS (GSUtil::GetPreferredRenderer).
+-    // Keep the software renderer's defaults untouched.
+-    if (renderer != GSRendererType::Metal && renderer != GSRendererType::Auto)
+-        return;
+-#else
+-    // Off macOS the bridge resolves AUTO to Vulkan itself (ResolveRenderer),
+-    // so GSopen never sees Auto here; OpenGL is not a supported product path.
+-    if (renderer != GSRendererType::VK)
+-        return;
+-#endif
+-
+-    GSTextureInRtMode texture_inside_rt = GSTextureInRtMode::InsideTargets;
+-    const bool overridden = ParseMetalTextureInsideRtOverride(texture_inside_rt);
+-    unsigned cpu_sprite_bw = 1;
+-    const bool cpu_sprite_overridden = ParseMetalCpuSpriteBwOverride(cpu_sprite_bw);
+-    options.UserHacks_TextureInsideRt = texture_inside_rt;
+-    options.UserHacks_CPUSpriteRenderBW = cpu_sprite_bw;
+-    options.UserHacks_CPUSpriteRenderLevel = 1;
+-    options.UserHacks_RewriteLargeST = true;
+-    bool paltex = true;
+-    const bool paltex_overridden = ParseMetalPaltexOverride(paltex);
+-    options.GPUPaletteConversion = paltex;
+-    std::fprintf(stderr,
+-                 "[pcsx2-gs-bridge] RR5 %s profile: TextureInsideRt=%u (%s)%s "
+-                 "CPUSpriteRenderBW=%u%s CPUSpriteRenderLevel=%u RewriteLargeST=%u "
+-                 "GPUPaletteConversion=%u%s\n",
+-#if defined(__APPLE__)
+-                 "Metal",
+-#else
+-                 "Vulkan",
+-#endif
+-                 static_cast<unsigned>(texture_inside_rt), TextureInsideRtModeName(texture_inside_rt),
+-                 overridden ? " [env override]" : "",
+-                 static_cast<unsigned>(options.UserHacks_CPUSpriteRenderBW),
+-                 cpu_sprite_overridden ? " [diagnostic override]" : "",
+-                 static_cast<unsigned>(options.UserHacks_CPUSpriteRenderLevel),
+-                 static_cast<unsigned>(options.UserHacks_RewriteLargeST),
+-                 static_cast<unsigned>(options.GPUPaletteConversion),
+-                 paltex_overridden ? " [env override]" : "");
+-}
+-
+ bool ResolveRendererFromEnvironment(GSRendererType& renderer, const char*& name,
+                                     uint32_t& kind, const char*& display_name,
+                                     std::string& error)
+@@ -972,7 +842,6 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
+     options.UpscaleMultiplier = 1.0f;
+     options.VsyncEnable = false;
+     options.AutoFlushSW = true;
+-    ApplyRrvMetalHardwareProfile(renderer, options);
+     const bool full_frame = requested_mode == RRV_PCSX2_GS_RENDER_MODE_FULL_FRAME;
+     if (full_frame)
+     {
