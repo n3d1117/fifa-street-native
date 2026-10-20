@@ -100,6 +100,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Fast-math or FP contraction: breaks PS2 arithmetic.
 - Treating the `sub_003C18D0` spin as a lost DMA IRQ: `sub_003C4ED0` clears object+0x82C on VBlank after the VIF1 END tag and configured field count; the language-menu rejection was the pad packet ID.
 - FPCR.FZ around native VU calls: inexact (`FLT_MIN + FLT_MIN * 0.5` gives `0x00800000`, the PS2 result is `0x00C00000`).
+- Sampling `SDL_GetAudioStreamQueued` at the health interval: callback-driven playback drains the stream immediately, so it does not report device or OS queue depth.
 
 ## Function discovery and SDK binding (stripped ELF)
 
