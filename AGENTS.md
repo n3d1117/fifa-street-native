@@ -33,6 +33,7 @@ Driver: `./rx`. Every command is quiet: PASS/FAIL, time, a log path (`build/logs
 | `./rx test [--full]` | quick ctest tier, no disc; `--full` adds slow-labelled tests |
 | `./rx check [--tracked]` | hygiene checks |
 | `./rx run [--seconds N] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]` | bounded boot run with isolated saves and a summary |
+| `./rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match] [--seconds N] [--profile]` | alternating control/candidate probes with median, range and control noise |
 | `./rx where <0xADDR\|name>`, `./rx where --unimplemented` | generated file, config entry or HLE handler; unimplemented stubs |
 | `./rx package [--install]` | app bundle `FIFA Street PS2.app` |
 

@@ -10,6 +10,8 @@
   rx check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
   rx run [--seconds N] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
                            bounded boot run, isolated saves, summary block (tools/probe/probe.py)
+  rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match|--seconds N] [--profile]
+                           alternating control/candidate runs with a median and noise table
   rx package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
   rx where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
   rx where --unimplemented audit configured direct TODO handlers
@@ -23,6 +25,7 @@ import json
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -551,6 +554,129 @@ def cmd_run(args):
     return run_command("run", args, body)
 
 
+def cmd_ab(args):
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    out = ROOT / "build/runs" / f"ab-{stamp}"
+
+    def parse_env(values, label):
+        result = {}
+        for value in values:
+            key, sep, val = value.partition("=")
+            if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise Failed(f"invalid {label} environment assignment {value!r}; expected ENV=VAL")
+            result[key] = val
+        return result
+
+    def body(run):
+        if args.pairs < 1:
+            raise Failed("--pairs must be at least 1")
+        alive = subprocess.run(["pgrep", "-f", str(ROOT / "build/game-metal") + "/.*/ps2EntryRunner"],
+                               capture_output=True, text=True).stdout.split()
+        if alive:
+            raise Missing(f"a ps2EntryRunner from this checkout is already running (pid {', '.join(alive)}); "
+                          "one run at a time -> kill it")
+        require(ELF, "./rx disc <iso>")
+        require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./rx build")
+        control_env = parse_env(args.control, "control")
+        candidate_env = parse_env(args.candidate, "candidate")
+        run.shown_log, run.context = out / "ab.log", False
+        wait_for_quiet_machine(run)
+        out.mkdir(parents=True, exist_ok=True)
+        summaries = {"control": [], "candidate": []}
+        bad_runs = []
+        order = []
+        for pair in range(args.pairs):
+            legs = ([("control", control_env), ("candidate", candidate_env)] if pair % 2 == 0
+                    else [("candidate", candidate_env), ("control", control_env)])
+            for leg, overrides in legs:
+                index = len(order) + 1
+                order.append(leg)
+                run_dir = out / f"run-{index:02d}-{leg}"
+                cmd = [sys.executable, "tools/probe/probe.py", "--out", run_dir]
+                if args.seconds:
+                    cmd += ["--seconds", str(args.seconds)]
+                if args.profile:
+                    cmd.append("--profile")
+                cmd.append("--match")
+                env = os.environ.copy()
+                env.update(overrides)
+                rc = run.sh(cmd, env=env)
+                summary_path = run_dir / "summary.json"
+                if not summary_path.is_file():
+                    bad_runs.append(f"{leg} run {index}: no summary (probe exit {rc})")
+                    continue
+                summary = json.loads(summary_path.read_text())
+                summaries[leg].append(summary)
+                ok = summary.get("reached") == summary.get("target") and not summary.get("crash")
+                if not ok:
+                    bad_runs.append(f"{leg} run {index}: reached {summary.get('reached')} / {summary.get('target')}, "
+                                    f"crash={bool(summary.get('crash'))}")
+
+        if bad_runs:
+            run.failed.extend(bad_runs)
+        def metrics(summary):
+            duration = max(float(summary.get("seconds") or 0), 0.001)
+            result = {
+                "fps_game": summary.get("fps_game"),
+                "cpu_total_per_s": (float(summary.get("cpu_user_s") or 0) + float(summary.get("cpu_sys_s") or 0)) / duration,
+                "audio_underruns": summary.get("audio_underruns"),
+                "crash": int(bool(summary.get("crash"))),
+                "reached": int(summary.get("reached") == summary.get("target")),
+            }
+            if args.profile:
+                threads = summary.get("profile_threads") or []
+                game_thread = next((t.get("cpu_per_s") for t in threads if re.search("GameThread", t.get("name", ""), re.I)), None)
+                workers = [t.get("cpu_per_s") for t in threads if re.search(r"worker", t.get("name", ""), re.I)]
+                result["GameThread cpu_per_s"] = game_thread
+                result["worker cpu_per_s"] = sum(float(v) for v in workers) if workers else None
+            return result
+
+        values = {side: [metrics(s) for s in runs] for side, runs in summaries.items()}
+        names = ["fps_game", "cpu_total_per_s"]
+        if args.profile:
+            names += ["GameThread cpu_per_s", "worker cpu_per_s"]
+        names += ["audio_underruns", "crash", "reached"]
+        report = {"order": order, "pairs": args.pairs, "control_env": control_env,
+                  "candidate_env": candidate_env, "options": {"seconds": args.seconds, "match": True, "profile": args.profile},
+                  "summaries": summaries, "metrics": {}}
+        rows = []
+        for name in names:
+            cvals = [m[name] for m in values["control"] if m.get(name) is not None]
+            kvals = [m[name] for m in values["candidate"] if m.get(name) is not None]
+            if not cvals or not kvals:
+                report["metrics"][name] = {"control": cvals, "candidate": kvals, "delta_pct": None, "noise_pct": None}
+                rows.append((name, "n/a", "n/a", "n/a", "n/a", "unavailable"))
+                continue
+            cmedian, kmedian = statistics.median(cvals), statistics.median(kvals)
+            cmin, cmax = min(cvals), max(cvals)
+            spread = cmax - cmin
+            numeric = name not in ("crash", "reached")
+            delta = ((kmedian - cmedian) / abs(cmedian) * 100) if numeric and cmedian else (0.0 if numeric and kmedian == cmedian else None)
+            noise = (spread / abs(cmedian) * 100) if numeric and cmedian else (0.0 if numeric and spread == 0 else None)
+            within = abs(kmedian - cmedian) <= spread
+            verdict = "within noise" if within else "changed"
+            report["metrics"][name] = {"control": cvals, "candidate": kvals, "control_median": cmedian,
+                                       "candidate_median": kmedian, "control_spread": spread,
+                                       "delta_pct": delta, "noise_pct": noise, "verdict": verdict}
+            def show(v):
+                return f"{v:.3f}" if isinstance(v, (int, float)) else str(v)
+            rng_c, rng_k = f"{show(cmedian)} ({show(cmin)}..{show(cmax)})", f"{show(kmedian)} ({show(min(kvals))}..{show(max(kvals))})"
+            rows.append((name, rng_c, rng_k, f"{delta:+.1f}%" if delta is not None else "n/a",
+                         f"{noise:.1f}%" if noise is not None else "n/a", verdict))
+        report_path = ROOT / "build/runs" / f"ab-{stamp}.json"
+        report_path.write_text(json.dumps(report, indent=2) + "\n")
+        headers = ("metric", "control median (min..max)", "candidate median (min..max)", "delta %", "noise %", "verdict")
+        widths = [max(len(headers[i]), *(len(row[i]) for row in rows)) for i in range(len(headers))]
+        run.notes.append(" | ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
+        run.notes.append("-+-".join("-" * width for width in widths))
+        run.notes.extend(" | ".join(row[i].ljust(widths[i]) for i in range(len(row))) for row in rows)
+        run.notes.append(f"combined JSON: {report_path.relative_to(ROOT)}")
+        if bad_runs:
+            raise Failed("one or more runs failed to reach target or crashed: " + "; ".join(bad_runs))
+        return f"{len(order)} runs, {args.pairs} pairs"
+    return run_command("ab", args, body)
+
+
 def cmd_package(args):
     def body(run):
         if not args.install:
@@ -601,6 +727,14 @@ def main():
     r.add_argument("--quit-cycles", type=int, metavar="N",
                    help="with --app: N launch -> AppleEvent quit cycles; fails on non-zero exit or new crash report")
     r.set_defaults(fn=cmd_run)
+    a = sp.add_parser("ab", help="alternating control/candidate probe runs")
+    a.add_argument("--control", action="append", required=True, metavar="ENV=VAL")
+    a.add_argument("--candidate", action="append", default=[], metavar="ENV=VAL")
+    a.add_argument("--pairs", type=int, default=2)
+    a.add_argument("--seconds", type=int)
+    a.add_argument("--profile", action="store_true")
+    a.add_argument("--match", action="store_true", default=True)
+    a.set_defaults(fn=cmd_ab)
     k = sp.add_parser("package")
     k.add_argument("--install", action="store_true")
     k.set_defaults(fn=cmd_package)
@@ -619,7 +753,7 @@ def main():
     return args.fn(args)
 
 
-EXCLUSIVE_CMDS = {"setup", "deps", "disc", "build", "test", "run", "package"}
+EXCLUSIVE_CMDS = {"setup", "deps", "disc", "build", "test", "run", "ab", "package"}
 
 
 def hold_exclusive_lock(cmd):
