@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:14:46 +0200
-Subject: [PATCH 54/82] Runtime: SIGUSR1 / PS2X_DUMP_STATE_AT prints EE
+Subject: [PATCH 54/84] Runtime: SIGUSR1 / PS2X_DUMP_STATE_AT prints EE
  threads, semaphores, event flags, a one-second guest pc sample, IOP state and
  recent SIF RPC events in one [state-begin] block
 

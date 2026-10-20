@@ -36,7 +36,7 @@ Driver: `./rx`. Every command is quiet: PASS/FAIL, time, a log path (`build/logs
 | `./rx where <0xADDR\|name>`, `./rx where --unimplemented` | generated file, config entry or HLE handler; unimplemented stubs |
 | `./rx package [--install]` | app bundle `FIFA Street PS2.app` |
 
-Judge a run by its summary: `reached`, `seconds`, `fps_dispfb2`, `cpu_user_s`, `cpu_sys_s`, `audio_underruns`, `crash`, `stubs`. CPU seconds are the game child process only. Open the log only when the summary is wrong.
+Judge a run by its summary: `reached`, `seconds`, `fps_game`, `cpu_user_s`, `cpu_sys_s`, `audio_underruns`, `crash`, `stubs`. CPU seconds are the game child process only. Open the log only when the summary is wrong.
 
 **Verification scope.**
 

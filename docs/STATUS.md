@@ -6,9 +6,10 @@
 |---|---|
 | Boot | Logos, language menu, EA intro movies with audio, front end, team and stadium selection |
 | Match | Live play at full speed: HUD clock 1.0 s per wall s, native VU1 from the disc, zero interpreter fallbacks (`./rx run --match`) |
+| Frame rate | Measured: 50 game frames/s steady during live play on the match route (`./rx run --match`, `fps_game`, series in `summary.json` `fps_game_series`; one new image per vsync, never DISPFB changes). Menus and loads run lower |
 | Audio | Movies and match usually run with zero underruns (`./rx run --match`), but some runs show bursts (0 to about 8000 across six measured runs; cause not yet known) |
 | Graphics | PCSX2 HW renderer at PCSX2 defaults (no per-game hacks); Metal shaders compiled at start from `deps/pcsx2`. Pitch, flags, headshots and venue preview render correctly on the match route |
-| Unverified | Directional input response, memory-card saves, other stadiums and modes, gameplay fps |
+| Unverified | Directional input response, memory-card saves, other stadiums and modes |
 | Platforms | macOS arm64 |
 
 Loops: `./rx run --match` (live match, about 28 s), `./rx run --route match` (menus, about 2 min). Runs of 8 s or more put a runtime state dump in `summary.json` `state`.

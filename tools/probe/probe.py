@@ -95,10 +95,13 @@ def save_hash(support):
 def parse_log(text):
     """Derive every metric from lines the runtime already logs. Missing -> absent key."""
     out = {}
-    vu = re.findall(r"\[vu1rec\] \w+: .*?fallback=(\d+) .*?\(DISPFB2 ([0-9.]+)\)", text)
+    vu = re.findall(r"\[vu1rec\] \w+: .*?fallback=(\d+) ", text)
     if vu:
-        out["vu_fallbacks"] = int(vu[-1][0])
-        out["fps_dispfb2"] = round(float(vu[-1][1]), 1)
+        out["vu_fallbacks"] = int(vu[-1])
+    game = re.findall(r"\[gs-game\] frames=\d+ over=[0-9.]+s game_fps=([0-9.]+)", text)
+    if game:
+        out["fps_game_series"] = [float(g) for g in game]  # one value per 5 s window
+        out["fps_game"] = max(out["fps_game_series"])  # best window: menus and loads are lower
     native = re.findall(r"\[vu1rec\] \w+: mscal=(\d+) native=(\d+) fallback=(\d+) \(noprogram=(\d+)\) "
                         r"forced=(\d+) mscnt=(\d+) nativeFail=(\d+) \| diff calls=(\d+) "
                         r"mismatch=(\d+) interpBudget=(\d+)", text)
@@ -784,7 +787,8 @@ def main():
             scene = "crash"
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
-        "fps_dispfb2": metrics.get("fps_dispfb2"),
+        "fps_game": metrics.get("fps_game"),
+        "fps_game_series": metrics.get("fps_game_series"),
         "gpu_presents_per_sec": metrics.get("gpu_presents_per_sec"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
