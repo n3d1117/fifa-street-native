@@ -3,7 +3,7 @@
 
   --save DIR     seed a fresh isolated user dir from DIR/memcards
   --user-dir D   use this user dir instead of a scratch one
-  --profile      macOS `sample` of the GameThread after --profile-after seconds
+  --profile      macOS `sample` after --profile-after seconds (from confirmed gameplay on a route)
   --app BUNDLE   exercise an installed .app (the app binary is the game itself; same isolated user dir and diagnostics)
   --quit-at-end  with --app: end the run with an AppleEvent quit (like Dock/Cmd-Q) and require exit 0 within 30 s
 Stops on the first fault marker unless --keep-running-on-failure. `reached` only says which milestone was observed:
@@ -40,7 +40,7 @@ CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact reco
                  "[memory-fault]")
 # Scripted input routes: (seconds since the previous step, key bit[, hold seconds]) over the diagnostic input FIFO
 # (5 Cross, 9 Square, 2 Down, 17 Start; bits 19-22 left-stick left/right/up/down). The title screen needs the
-# language menu and all intro movies first; menu waits are measured, not guarded. scene 'match' means commentary opened.
+# language menu and all intro movies first; menu waits are measured, not guarded. match_play requires an advancing HUD clock.
 ROUTES = {"match": {
     "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
               (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
@@ -84,7 +84,7 @@ def parse_log(text):
     vu = re.findall(r"\[vu1rec\] \w+: .*?fallback=(\d+) .*?\(DISPFB2 ([0-9.]+)\)", text)
     if vu:
         out["vu_fallbacks"] = int(vu[-1][0])
-        out["fps_dispfb2"] = round(float(vu[-1][1]), 1) if float(vu[-1][1]) > 0 else None
+        out["fps_dispfb2"] = round(float(vu[-1][1]), 1)
     presents = re.findall(r"\[gs-present\] frames=(\d+) over=([0-9.]+)s presents/s=([0-9.]+)", text)
     if presents:
         out["gpu_presents_per_sec"] = round(float(presents[-1][2]), 1)
@@ -156,7 +156,7 @@ def sample_game_thread(pid, path):
 class Capture:
     """Window capture, black-frame count, and advancing match-clock detection."""
 
-    def __init__(self, out, preserve=False):
+    def __init__(self, out, preserve=False, started=None):
         self.dir = out / "frames"
         self.preserve = preserve
         self.samples = 0
@@ -170,10 +170,13 @@ class Capture:
         self._previous_clock = None
         self._clock_advances = 0
         self.gameplay_confirmed = False
+        self.started = time.monotonic() if started is None else started
+        self.clock_observations = []
 
     def sample(self, pid, timeout=8):
         if not self.ok:
             return
+        requested_at = time.monotonic()
         frame_dir = self.dir
         if self.preserve:
             frame_dir = self.dir / f"sample-{self.samples:03d}"
@@ -201,6 +204,8 @@ class Capture:
                 break
         if clock is not None:
             self.match_clock = clock
+            self.clock_observations.append({"wall_seconds": round(requested_at - self.started, 3),
+                                            "hud_clock_seconds": clock})
             if self._previous_clock is not None:
                 if clock > self._previous_clock:
                     self._clock_advances += 1
@@ -209,6 +214,48 @@ class Capture:
             self._previous_clock = clock
             if self._clock_advances >= 2:
                 self.gameplay_confirmed = True
+
+    def clock_progress(self):
+        observations = self.clock_observations
+        result = {"observations": observations, "hud_clock_seconds_delta": None,
+                  "wall_seconds_delta": None, "hud_clock_seconds_per_wall_second": None,
+                  "timing": "capture request times; HUD clock rate, intended game speed unverified"}
+        if len(observations) >= 2:
+            wall_delta = observations[-1]["wall_seconds"] - observations[0]["wall_seconds"]
+            clock_delta = observations[-1]["hud_clock_seconds"] - observations[0]["hud_clock_seconds"]
+            result.update(hud_clock_seconds_delta=clock_delta, wall_seconds_delta=round(wall_delta, 3))
+            if wall_delta > 0 and clock_delta >= 0:
+                result["hud_clock_seconds_per_wall_second"] = round(clock_delta / wall_delta, 4)
+        return result
+
+
+def guest_progress(text, requests):
+    """Associate requested state dumps with their counters, using signal times as approximate wall times."""
+    blocks = re.findall(r"\[state-begin\]\n(.*?)\[state-end\]", text, re.S)
+    snapshots = []
+    for request in requests:
+        index = request["block_index"]
+        if index >= len(blocks):
+            continue
+        counters = re.search(r"^ee cycle=(\d+).*? vsync_tick=(\d+)$", blocks[index], re.M)
+        if counters:
+            snapshots.append({"requested_wall_seconds": request["wall_seconds"],
+                              "ee_cycle": int(counters[1]), "vblank_tick": int(counters[2])})
+    result = {"timing": "SIGUSR1 request-time approximation; runtime snapshots follow about one second of PC sampling",
+              "snapshots": snapshots, "wall_seconds_delta": None, "vblank_ticks_delta": None,
+              "ee_cycles_delta": None, "vblank_ticks_per_wall_second": None,
+              "ee_cycles_per_wall_second": None}
+    if len(snapshots) >= 2:
+        first, last = snapshots[0], snapshots[-1]
+        wall_delta = last["requested_wall_seconds"] - first["requested_wall_seconds"]
+        vblank_delta = last["vblank_tick"] - first["vblank_tick"]
+        cycle_delta = last["ee_cycle"] - first["ee_cycle"]
+        result.update(wall_seconds_delta=round(wall_delta, 3), vblank_ticks_delta=vblank_delta,
+                      ee_cycles_delta=cycle_delta)
+        if wall_delta > 0 and vblank_delta >= 0 and cycle_delta >= 0:
+            result.update(vblank_ticks_per_wall_second=round(vblank_delta / wall_delta, 3),
+                          ee_cycles_per_wall_second=round(cycle_delta / wall_delta, 1))
+    return result
 
 
 def state_block(text):
@@ -327,24 +374,39 @@ def main():
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
                                       fflags=select.KQ_NOTE_EXIT)], 0, 0)
     route = ROUTES.get(args.route)
-    cap = Capture(out, preserve=bool(route))
+    cap = Capture(out, preserve=bool(route), started=started)
     if route:
         args.seconds = max(args.seconds, route.get("timeout", 0))
     deadline = started + args.seconds
+    route_deadline = deadline
     steps, step_at, release_at, fifo_fd = list(route["steps"]) if route else [], started, 0.0, None
     play_steps, play_step_at = list(route.get("play_steps", [])) if route else [], None
     if route:
         step_at = started + steps[0][0]
     killed_by_us = fault_stop = False
     state_asked = False
+    state_requests = []
+    gameplay_at = None
     profiled = None
     gameplay_input_key = None
     next_black = started + BLACK_SAMPLE_START
     seen_len = 0
     last_log_check = 0.0
     text_now = ""
+    def request_state():
+        requested_at = time.monotonic()
+        current_text = log_path.read_text(errors="replace")
+        if state_requests and current_text.count("[state-end]") <= state_requests[-1]["block_index"]:
+            return False
+        state_requests.append({"wall_seconds": round(requested_at - started, 3),
+                               "block_index": current_text.count("[state-begin]")})
+        os.kill(proc.pid, signal.SIGUSR1)
+        return True
+
     try:
-        while time.monotonic() < deadline and not child_exited(exit_watch):
+        while (time.monotonic() < deadline or
+               (route and gameplay_at is not None and (play_steps or release_at) and
+                time.monotonic() < route_deadline)) and not child_exited(exit_watch):
             now = time.monotonic()
             if now - last_log_check >= 0.2:
                 last_log_check = now
@@ -354,6 +416,11 @@ def main():
                     break
                 seen_len = len(text_now)
             if route:
+                if gameplay_at is None and cap.gameplay_confirmed:
+                    gameplay_at = now
+                    deadline = min(route_deadline, gameplay_at + route["tail"])
+                    state_asked = False
+                    request_state()
                 if play_steps and play_step_at is None and cap.gameplay_confirmed:
                     play_step_at = now + play_steps[0][0]
                 if fifo_fd is None:
@@ -378,13 +445,15 @@ def main():
                     os.write(fifo_fd, struct.pack("<I", 1 << key))
                     gameplay_input_key = key
                     release_at = now + hold
+                    deadline = min(route_deadline, max(deadline, release_at + 0.2))
                     if play_steps:
                         play_step_at = now + play_steps[0][0]
-            if args.profile and profiled is None and now - started >= args.profile_after:
+            profile_at = gameplay_at if route else started
+            if (args.profile and profiled is None and profile_at is not None and
+                    now - profile_at >= args.profile_after):
                 profiled = sample_game_thread(proc.pid, out / "game-thread.sample") or []
             if not state_asked and args.seconds >= 8 and now >= deadline - 3.5:
-                state_asked = True
-                os.kill(proc.pid, signal.SIGUSR1)  # one-block runtime state dump, see [state-begin] in run.log
+                state_asked = request_state()
             if now >= next_black:
                 cap.sample(proc.pid)
                 if route and play_steps and play_step_at is None and cap.gameplay_confirmed:
@@ -474,9 +543,13 @@ def main():
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
+        "profile_sample": str(out / "game-thread.sample") if (out / "game-thread.sample").is_file() else None,
+        "profile_measurement": "sampled wall stacks across all threads; not per-thread CPU usage" if profiled is not None else None,
         "scene": scene, "commentary_open": commentary_open if route else None,
         "gameplay_confirmed": cap.gameplay_confirmed if route else None,
         "match_clock_seconds": cap.match_clock if route else None,
+        "match_clock_progress": cap.clock_progress() if route else None,
+        "guest_progress": guest_progress(text, state_requests) if route else None,
         "gameplay_input_key_bit": gameplay_input_key,
         "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }

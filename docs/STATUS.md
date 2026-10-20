@@ -1,11 +1,3 @@
-## Resume
-
-- Intent: reach and verify active match gameplay, then guard it in `./rx run --route match`.
-- Verified: `./rx run --route match` reaches `scene=match_play` after OCR confirms an advancing HUD clock. During a held left-stick-right input, `scePadRead` returned `0xff,0x80`; later right/left holds returned `0xff,0x80` and `0x00,0x80`. Captures show the red-ringed player moving across the court as the HUD clock advances. Camera tracking and live play prevent isolating the player's response to each direction. A traced same-route A/B found substantially more missing output frames with `PS2X_AUDIO_STRETCH=1` than with the default-off stretcher; all output underruns are counted.
-- Blocker: audio/video sync remains unverified by listening. With a 16,384-frame output ring, the traced active-match window had no underflows or overruns; at 8,192 frames, both recurred. The larger ring held more queued audio, so verify latency by ear. `PS2X_SPU2_RING_FRAMES=8192` restores the prior buffer size. Stretcher-on worsens missing frames. SDL reports 48 kHz float stereo input/output, ratio 1.0 and a 1,024-frame device buffer; active-match profiles show guest VIF/INTC work and only brief `DataStream::gsVsync`/`StreamRing::waitFor` samples, not the previously reported long EE gap.
-- Next: (1) verify installed audio playback and sync by listening, then investigate any remaining loss; (2) identify a guest gameplay-frame metric (`fps_dispfb2` stays unavailable while the register is unchanged; bridge presents are reported separately); (3) isolate the selected player's response to opposing stick input; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
-- Gotchas: `commentary_open` means commentary data opened, not that gameplay began; `scene=match_play` requires two advancing HUD-clock readings; the full movie and match intro keep the route near nine minutes; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
-
 ## Current
 
 | Area | State |
@@ -28,7 +20,10 @@
 
 ## Next
 
-See the Resume block for the current blocker and ordered work.
+1. Restore and verify native VU1 execution (`tools/vu/` at `d7b2b86`); compare steady match progress against the interpreter on the same route. Sampled stacks show VU1 interpretation dominating the data worker, with the EE waiting for it.
+2. Diagnose the pitch/portrait/flag bar pattern against PS2 rendering semantics.
+3. Resolve audio underflows and verify sync by listening.
+4. Shorten the guarded route using only player-accessible input to skip skippable introductions; verify directional input and memory-card saves.
 
 Diagnosis tools: `./rx run --seconds N` (N >= 8) puts a runtime state block (EE threads, semaphores, sampled pcs resolved to functions, DMA/VIF registers, IOP, recent RPC) in `summary.json` `state`; `PS2X_DUMP_MEM=<hexaddr>:<words>`, `PS2X_TRACE_SYSCALLS/RPC/CD_IO/FAULTS`, SIGUSR1 for a dump on demand. Code edits to headers the generated code includes (`ps2_runtime.h`, ...) cost a 5 minute rebuild; `.cpp` edits 3-10 s.
 
