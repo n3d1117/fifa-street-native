@@ -152,8 +152,10 @@ def sample_game_thread(pid, path):
 class Capture:
     """Window capture black-frame count (capture-window prints the frame's mean luma)."""
 
-    def __init__(self, out):
+    def __init__(self, out, preserve=False):
         self.dir = out / "frames"
+        self.preserve = preserve
+        self.samples = 0
         self.ok = True
         try:
             self.cap = tool("capture-window")
@@ -164,8 +166,12 @@ class Capture:
     def sample(self, pid, timeout=8):
         if not self.ok:
             return
+        frame_dir = self.dir
+        if self.preserve:
+            frame_dir = self.dir / f"sample-{self.samples:03d}"
+        self.samples += 1
         try:
-            r = subprocess.run([str(self.cap), str(pid), str(self.dir), "1"], capture_output=True, text=True, timeout=timeout)
+            r = subprocess.run([str(self.cap), str(pid), str(frame_dir), "1"], capture_output=True, text=True, timeout=timeout)
         except (subprocess.TimeoutExpired, OSError):
             return
         m = re.search(r"luma=([0-9.]+)", r.stdout) if r.returncode == 0 else None
@@ -289,8 +295,8 @@ def main():
     exit_watch.control([select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
                                       fflags=select.KQ_NOTE_EXIT)], 0, 0)
-    cap = Capture(out)
     route = ROUTES.get(args.route)
+    cap = Capture(out, preserve=bool(route))
     if route:
         args.seconds = max(args.seconds, int(sum(d for d, _ in route["steps"]) + route["tail"]))
     deadline = started + args.seconds
