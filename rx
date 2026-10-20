@@ -494,6 +494,8 @@ def cmd_run(args):
                 cmd += [flag, value]
         if args.profile:
             cmd.append("--profile")
+        if args.route:
+            cmd += ["--route", args.route]
         rc = run.sh(cmd)
         if rc == 2:
             raise Missing(run.last_message())
@@ -509,6 +511,8 @@ def cmd_run(args):
                       f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
                       "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
                       f"stubs: {stubs}"]
+        if s.get("scene"):
+            run.notes.append(f"scene: {s['scene']}")
         if s["black_frames"]:
             run.notes.append(f"black_frames: {s['black_frames']}")
         if s["save_dir_changed"]:
@@ -567,6 +571,7 @@ def main():
     r.add_argument("--user-dir")
     r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")
     r.add_argument("--profile", action="store_true")
+    r.add_argument("--route", choices=["match"], help="scripted input from the language menu to a quick match; fails unless the match scene opens")
     r.add_argument("--app")
     r.add_argument("--quit-cycles", type=int, metavar="N",
                    help="with --app: N launch -> AppleEvent quit cycles; fails on non-zero exit or new crash report")

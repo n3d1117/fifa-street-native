@@ -18,6 +18,7 @@ import os
 import re
 import select
 import shutil
+import struct
 import signal
 import subprocess
 import sys
@@ -37,6 +38,14 @@ ELF = game.ELF
 CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact recompiled function",
                  "Failed to initialize", "Failed to load ELF", "[guest-branch:missing-target]",
                  "[memory-fault]")
+# Scripted input routes: (seconds since the previous step, key bit) over the diagnostic input FIFO (key bit 5 Cross,
+# 9 Square, 2 Down, 17 Start). The title screen needs the language menu and all intro movies first; waits are
+# measured, not guarded. scene 'match' means the match audio stream (commentary data) was opened.
+ROUTES = {"match": {
+    "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
+              (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
+    "tail": 60, "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
+
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
 TOOL_FRAMEWORKS = {
     "capture-window": ["-framework", "Cocoa", "-framework", "CoreGraphics", "-framework", "ImageIO"],
@@ -211,6 +220,7 @@ def main():
     ap.add_argument("--profile", action="store_true")
     ap.add_argument("--profile-after", type=float, default=10)
     ap.add_argument("--keep-running-on-failure", action="store_true")
+    ap.add_argument("--route", choices=sorted(ROUTES), help="scripted input: language menu -> front end -> quick match")
     args = ap.parse_args()
     if args.quit_at_end and not args.app:
         ap.error("--quit-at-end needs --app")
@@ -245,6 +255,11 @@ def main():
     env = os.environ.copy()
     env.setdefault("PS2X_TRACE_FAULTS", "1")
     env.setdefault("PS2X_TRACE_SPU2", "1")
+    fifo_path = out / "input.fifo"
+    if args.route:
+        os.mkfifo(fifo_path)
+        env["PS2X_DIAGNOSTIC_INPUT_FIFO"] = str(fifo_path)
+        env.setdefault("PS2X_TRACE_CD_IO", "1")
     if args.app:
         app = args.app.resolve(strict=True)
         command = [str(app / "Contents/MacOS" / game.GAME["executable"]), "--user-dir", str(user_dir)]
@@ -275,20 +290,44 @@ def main():
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
                                       fflags=select.KQ_NOTE_EXIT)], 0, 0)
     cap = Capture(out)
+    route = ROUTES.get(args.route)
+    if route:
+        args.seconds = max(args.seconds, int(sum(d for d, _ in route["steps"]) + route["tail"]))
     deadline = started + args.seconds
+    steps, step_at, release_at, fifo_fd = list(route["steps"]) if route else [], started, 0.0, None
+    if route:
+        step_at = started + steps[0][0]
     killed_by_us = fault_stop = False
     state_asked = False
     profiled = None
     next_black = started + BLACK_SAMPLE_START
     seen_len = 0
+    last_log_check = 0.0
     try:
         while time.monotonic() < deadline and not child_exited(exit_watch):
             now = time.monotonic()
-            text_now = log_path.read_text(errors="replace")
-            if not args.keep_running_on_failure and any(m in text_now[seen_len:] for m in FAULT_MARKERS):
-                fault_stop = True
-                break
-            seen_len = len(text_now)
+            if now - last_log_check >= 0.2:
+                last_log_check = now
+                text_now = log_path.read_text(errors="replace")
+                if not args.keep_running_on_failure and any(m in text_now[seen_len:] for m in FAULT_MARKERS):
+                    fault_stop = True
+                    break
+                seen_len = len(text_now)
+            if route:
+                if fifo_fd is None:
+                    try:
+                        fifo_fd = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
+                    except OSError:
+                        pass
+                if fifo_fd is not None and release_at and now >= release_at:
+                    os.write(fifo_fd, struct.pack("<I", 0))
+                    release_at = 0.0
+                if fifo_fd is not None and steps and now >= step_at and not release_at:
+                    _, key = steps.pop(0)
+                    os.write(fifo_fd, struct.pack("<I", 1 << key))
+                    release_at = now + 0.12
+                    if steps:
+                        step_at = now + steps[0][0]
             if args.profile and profiled is None and now - started >= args.profile_after:
                 profiled = sample_game_thread(proc.pid, out / "game-thread.sample") or []
             if not state_asked and args.seconds >= 8 and now >= deadline - 3.5:
@@ -297,7 +336,7 @@ def main():
             if now >= next_black:
                 cap.sample(proc.pid)
                 next_black = time.monotonic() + BLACK_SAMPLE_EVERY
-            time.sleep(0.2)
+            time.sleep(0.04 if route else 0.2)
     finally:
         quit_ok = None
         if args.quit_at_end and not child_exited(exit_watch):
@@ -365,6 +404,11 @@ def main():
         reached = "running"
     changed = save_hash(REAL_SUPPORT) != before and not explicit_real
     target = "running"
+    scene = None
+    if route:
+        scene = "match" if route["scene_marker"] in text else f"menus ({len(route['steps']) - len(steps)} of {len(route['steps'])} steps sent)"
+        if crash or fault_stop:
+            scene = "crash"
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
         "fps_dispfb2": metrics.get("fps_dispfb2"), "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
@@ -372,12 +416,13 @@ def main():
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
         "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
-        "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
+        "scene": scene, "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if scratch:
         shutil.rmtree(scratch, ignore_errors=True)
-    return 0 if reached == target and not changed and not summary["audio_underruns"] and quit_ok is not False else 1
+    scene_ok = not route or scene == "match"
+    return 0 if reached == target and scene_ok and not changed and not summary["audio_underruns"] and quit_ok is not False else 1
 
 
 if __name__ == "__main__":
