@@ -402,9 +402,9 @@ bool ps2x_spu2_host_start() {
     hooks.advance = advance;
     hooks.nextEvent = next_event;
     hooks.maxIdleStep = kMaxIdleCycles;
+    hooks.realTime = open_audio_device();
     ps2x::iop::iopSetHostSpu2(hooks);
 
-    (void)open_audio_device(); // Missing audio hardware must not stop IOP emulation.
     std::fprintf(stderr, "[spu2] PCSX2 2.8.2 SPU2 core installed; output ring is 48 kHz stereo float\n");
     return true;
 }

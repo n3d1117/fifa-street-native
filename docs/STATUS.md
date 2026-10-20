@@ -2,8 +2,8 @@
 
 | Area | State |
 |---|---|
-| Engine | Builds on macOS arm64. `./rx test --full` passes all 55 tests |
-| Game | The guarded route reaches the live England–Brazil HUD and renders active play under scripted stick input; the selected red-ringed player moves during those captures, but directional response and gameplay fps remain unverified. Bridge presents are separate from `fps_dispfb2`. Audio underflows remain severe |
+| Engine | Builds on macOS arm64. `./rx test --full` passes |
+| Game | The guarded route reaches the live England–Brazil HUD and renders active play under scripted stick input; the selected red-ringed player moves during those captures, but directional response and gameplay fps remain unverified. Bridge presents are separate from `fps_dispfb2`. `./rx run --match` reports zero audio underruns; the original EA logo and introduction render with nonzero audio. Audio/video sync still needs a listening check in the installed app |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -21,7 +21,7 @@
 ## Next
 
 1. Native VU1: the programs path covers every MSCAL/MSCNT on the match route (measured: zero interpreter fallbacks, differential agreement over all calls; HUD clock about 1.0 s per wall s). Not yet checked: routes beyond a first quick match (other stadiums, modes). VU1 is about half of wall time with the full-flag variant; a flag-liveness pass over whole programs could cut it (`./rx run --route match`, `PS2X_VU1_STATS`).
-2. Resolve audio underflows and verify sync by listening.
+2. Verify movie and match audio/video sync by listening in the installed app.
 3. Verify directional input and memory-card saves.
 
 `./rx run --route match` guards menu input with OCR and uses player Cross presses for the introductory movie and Marseille introduction. The scene gate requires two advancing HUD-clock readings; audio underflows independently fail the run.
@@ -33,7 +33,7 @@ Known risk: GIF FIFO and EE cycle-rate accuracy need comparison against PCSX2.
 ## Open questions
 
 - Gameplay frame rate on this title (not known; do not assume 25 or 50).
-- Whether MPC movies decode through the existing MPEG/IPU HLE as raw MPEG-2 elementary streams, and the `.MUS` format.
+- Exact MPC decode path and the `.MUS` format.
 
 ## iOS / tvOS plan
 
