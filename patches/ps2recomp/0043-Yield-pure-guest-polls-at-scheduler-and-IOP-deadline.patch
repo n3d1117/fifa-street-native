@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 15:54:54 +0200
-Subject: [PATCH 43/75] Yield pure guest polls at scheduler and IOP deadlines
+Subject: [PATCH 43/76] Yield pure guest polls at scheduler and IOP deadlines
 
 Expose the IOP scheduler's existing idle bound in EE cycles, including SPU2
 service/event deadlines, fractional cycle carry and synchronous RPC credit.

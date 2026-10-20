@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 06:37:45 +0200
+Subject: [PATCH 76/76] Pad: trace analog bytes on change
+
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index 1913d8d55deb07f3d834f723be4b8bbaac967498..9d47733dc5dfd3b6974c5fc41ee6d20fb5ba257a 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -657,13 +657,15 @@ namespace ps2_stubs
+                 const char *value = std::getenv("PS2X_TRACE_PAD");
+                 return value && value[0] == '1';
+             }();
+-            static uint32_t reads = 0u, lastButtons = 0xFFFFFFFFu;
++            static uint32_t reads = 0u, lastButtons = 0xFFFFFFFFu, lastSticks = 0xFFFFFFFFu;
+             const uint32_t buttons = (static_cast<uint32_t>(data[2]) << 8) | data[3];
++            const uint32_t sticks = (static_cast<uint32_t>(data[6]) << 8) | data[7];
+             ++reads;
+-            if (tracePad && (reads <= 4u || buttons != lastButtons))
+-                std::fprintf(stderr, "[pad] read #%u port=%d slot=%d id=0x%02x buttons=0x%04x pc=0x%x\n", reads, port, slot,
+-                             data[1], buttons, ctx->pc);
++            if (tracePad && (reads <= 4u || buttons != lastButtons || sticks != lastSticks))
++                std::fprintf(stderr, "[pad] read #%u port=%d slot=%d id=0x%02x buttons=0x%04x sticks=(0x%02x,0x%02x) pc=0x%x\n",
++                             reads, port, slot, data[1], buttons, data[6], data[7], ctx->pc);
+             lastButtons = buttons;
++            lastSticks = sticks;
+         }
+ 
+         PS2_IF_AGRESSIVE_LOGS({
