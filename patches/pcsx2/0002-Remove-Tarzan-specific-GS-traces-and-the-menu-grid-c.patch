@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 17:07:24 +0200
-Subject: [PATCH 3/7] Remove Tarzan-specific GS traces and the menu-grid
+Subject: [PATCH 2/6] Remove Tarzan-specific GS traces and the menu-grid
  coverage hack
 
 The UI half-pixel coverage correction matched one game's menu quads; a faithful
@@ -9,17 +9,16 @@ port keeps upstream rasterization. The scanout and UI-draw traces were
 one-off evidence for that game.
 
 diff --git a/pcsx2/GS/Renderers/Common/GSRenderer.cpp b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
-index 2fd3f26c08ed71c8b381b410461d37ae5c4a5309..1d770409636d2c8cfd0c414a18baa949ebfb7b84 100644
+index 86dacd652961c59e21b084a94f6046849f95332c..1d770409636d2c8cfd0c414a18baa949ebfb7b84 100644
 --- a/pcsx2/GS/Renderers/Common/GSRenderer.cpp
 +++ b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
-@@ -631,18 +631,6 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
+@@ -631,17 +631,6 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
  	}
  
  	const bool blank_frame = !Merge(field);
 -	// Opt-in evidence for native-port menu flashes. Snapshot APIs retain the
 -	// previous merged texture when Merge fails, so screenshots alone hide this.
--	static const bool trace_scanout = std::getenv("TARZAN_TRACE_SCANOUT") != nullptr;
--	if (trace_scanout && g_perfmon.GetFrame() > 1500)
+-	if (std::getenv("TARZAN_TRACE_SCANOUT") && g_perfmon.GetFrame() > 1500)
 -	{
 -		static unsigned trace_count = 0;
 -		if (trace_count++ < 10000)
@@ -32,7 +31,7 @@ index 2fd3f26c08ed71c8b381b410461d37ae5c4a5309..1d770409636d2c8cfd0c414a18baa949
  	m_last_draw_n = s_n;
  	m_last_transfer_n = s_transfer_n;
 diff --git a/pcsx2/GS/Renderers/HW/GSRendererHW.cpp b/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
-index 926c901a2f5442d2b0cc3668dcf67fb12410f4b6..c4f540b90e7b7b1d1535a4c911c83dbb9a0aac48 100644
+index 7b0e8f8994c30ce2f902d1d7a817325cc546c7c5..c4f540b90e7b7b1d1535a4c911c83dbb9a0aac48 100644
 --- a/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
 +++ b/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
 @@ -11,9 +11,6 @@
@@ -45,13 +44,12 @@ index 926c901a2f5442d2b0cc3668dcf67fb12410f4b6..c4f540b90e7b7b1d1535a4c911c83dbb
  
  using PS_ATST  = GSShader::PS_ATST;
  using PS_AFAIL = GSShader::PS_AFAIL;
-@@ -155,34 +152,10 @@ GSTexture* GSRendererHW::GetOutput(int i, float& scale, int& y_offset)
+@@ -155,33 +152,10 @@ GSTexture* GSRendererHW::GetOutput(int i, float& scale, int& y_offset)
  
  	GSPCRTCRegs::PCRTCDisplay& curFramebuffer = PCRTCDisplays.PCRTCDisplays[index];
  	const GSVector2i framebufferSize(PCRTCDisplays.GetFramebufferSize(i));
 -	static unsigned int scanout_trace_count = 0;
--	static const bool trace_scanout_enabled = std::getenv("TARZAN_TRACE_SCANOUT") != nullptr;
--	const bool trace_scanout = trace_scanout_enabled && g_perfmon.GetFrame() > 1500 &&
+-	const bool trace_scanout = std::getenv("TARZAN_TRACE_SCANOUT") && g_perfmon.GetFrame() > 1500 &&
 -		scanout_trace_count < 10000;
 -	const auto trace_output = [&](const char* reason, u32 fbp)
 -	{
@@ -80,7 +78,7 @@ index 926c901a2f5442d2b0cc3668dcf67fb12410f4b6..c4f540b90e7b7b1d1535a4c911c83dbb
  
  	PCRTCDisplays.RemoveFramebufferOffset(i);
  	// TRACE(_T("[%d] GetOutput %d %05x (%d)\n"), (int)m_perfmon.GetFrame(), i, (int)TEX0.TBP0, (int)TEX0.PSM);
-@@ -194,9 +167,7 @@ GSTexture* GSRendererHW::GetOutput(int i, float& scale, int& y_offset)
+@@ -193,9 +167,7 @@ GSTexture* GSRendererHW::GetOutput(int i, float& scale, int& y_offset)
  	TEX0.TBW = curFramebuffer.FBW;
  	TEX0.PSM = curFramebuffer.PSM;
  
@@ -91,7 +89,7 @@ index 926c901a2f5442d2b0cc3668dcf67fb12410f4b6..c4f540b90e7b7b1d1535a4c911c83dbb
  	{
  		const u32 bp_adj = (TEX0.TBP0 < rt->m_TEX0.TBP0 && rt->UnwrappedEndBlock() > GS_MAX_BLOCKS) ? (TEX0.TBP0 + GS_MAX_BLOCKS) : TEX0.TBP0;
  		rt->Update();
-@@ -2823,66 +2794,6 @@ void GSRendererHW::Draw()
+@@ -2822,66 +2794,6 @@ void GSRendererHW::Draw()
  	m_cached_ctx.TEST = context->TEST;
  	m_cached_ctx.FRAME = context->FRAME;
  	m_cached_ctx.ZBUF = context->ZBUF;

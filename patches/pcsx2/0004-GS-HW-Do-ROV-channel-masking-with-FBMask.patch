@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: TJnotJT <tjnotjt.github@gmail.com>
 Date: Wed, 5 Aug 2026 09:55:47 -0400
-Subject: [PATCH 5/7] GS:HW: Do ROV channel masking with FBMask.
+Subject: [PATCH 4/6] GS:HW: Do ROV channel masking with FBMask.
 
 (cherry picked from commit 77cfac7dbe9ccd02139c3cd7ff44f3c6d1511bb6)
 
