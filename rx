@@ -226,6 +226,22 @@ def generate_inputs_hash():
             continue
         h.update(p.name.encode())
         sha256(p, h)
+    # The compiler binary can stay byte-identical when a working-tree generator edit is
+    # pending or a build target was skipped. Include that source diff so build cannot report
+    # generated output current before the new emitter has run.
+    recomp_root = ROOT / "deps/ps2recomp"
+    revision = subprocess.run(
+        ["git", "-C", str(recomp_root), "rev-parse", "HEAD"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    diff = subprocess.run(
+        ["git", "-C", str(recomp_root), "diff", "HEAD", "--", "ps2xRecomp"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    h.update(revision)
+    h.update(diff)
     return h.hexdigest()
 
 
@@ -336,7 +352,7 @@ def rebuild_stale_deps(run):
 
 
 # Every generated unit includes these: touching one recompiles all of generated/.
-GENERATED_INCLUDED_HEADERS = {"ps2_runtime.h", "ps2_runtime_macros.h", "ps2_syscalls.h", "ps2_stubs.h", "ps2_log.h"}
+GENERATED_INCLUDED_HEADERS = {"ps2_guest_abi.h", "ps2_guest_macros.h", "ps2_recompiled_functions.h", "ps2_recompiled_stubs.h", "ps2_log.h"}
 
 
 def cmd_build(args):
@@ -403,7 +419,7 @@ def cmd_test(args):
     return run_command("test", args, body)
 
 
-FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_runtime\w*\.h|ps2_syscalls\.h|ps2_stubs\.h|ps2_recompiled_\w*\.h)")
+FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_guest_(?:abi|macros)\.h|ps2_runtime\w*\.h|ps2_syscalls\.h|ps2_stubs\.h|ps2_recompiled_\w*\.h)")
 
 
 def lint(run):
@@ -423,6 +439,7 @@ def cmd_check(args):
     def body(run):
         mode = "--tracked" if args.tracked else "--staged"
         run.must([sys.executable, "tools/check-repo-hygiene.py", mode], "hygiene")
+        run.must([sys.executable, "tools/check-generated-includes.py"], "generated include boundary")
         if not args.tracked:
             staged = subprocess.run(["git", "diff", "--cached", "--name-only", "--", "patches"],
                                     capture_output=True, text=True).stdout.split()

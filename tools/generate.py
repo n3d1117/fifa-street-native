@@ -263,7 +263,6 @@ def main() -> int:
                            if n not in existing or p.read_bytes() != existing[n].read_bytes()]
                 report["changed_files"] = sorted(changed)
                 report["changed_count"] = len(changed)
-                report["stale_existing_files_retained"] = sorted(set(existing) - set(staged))
                 # Prepare every replacement beside its target, then rename them all.
                 prepared = []
                 for name in changed:
@@ -276,6 +275,11 @@ def main() -> int:
                     prepared.append((Path(temp_path), target))
                 for temp_path, target in prepared:
                     os.replace(temp_path, target)
+                stale_removed = sorted(set(existing) - set(staged))
+                report["stale_existing_files_removed"] = stale_removed if not args.out else []
+                if not args.out:
+                    for name in stale_removed:
+                        (canonical_output / name).unlink()
                 if not args.out:
                     write_json(INVENTORY, inventory)
                 report["status"] = "success"

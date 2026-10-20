@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 22:28:01 +0200
-Subject: [PATCH 32/85] Update FCR31 invalid and divide flags for SQRT and
+Subject: [PATCH 32/86] Update FCR31 invalid and divide flags for SQRT and
  RSQRT
 
 The root emitter regression failed because SQRT.S and RSQRT.S never updated FCR31. Set I/SI for negative nonzero Ft, D/SD for zero RSQRT Ft, and clear current I/D on each root operation while retaining sticky and unrelated bits. Classify before writing Fd so aliasing Ft is safe. Keep existing arithmetic operands and signed-zero results. Reference: PCSX2 FPU.cpp SQRT_S/RSQRT_S and ps2autotests ee_fpu/fcr.expected sqrt(-1) = FCR31 01020041. ./tz test passes 54/54; full replay and route validation follow in the batch export.

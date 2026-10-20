@@ -12,6 +12,10 @@ Mechanisms, invariants and constants that the code relies on. Commands are in `A
 - `EeScheduler::idlePoll` yields a guest poll loop to the earliest event (EE timer or IOP/SPU2 idle deadline); pending SPU2 IRQs invalidate the IOP bound and wall-clock sampling accounts slept time. Its one caller is the vblank poll below.
 - Game frames, host presents and vsyncs are different metrics. FIFA Street never changes DISPFB, so DISPFB change rate is useless. `fps_game` in the `./rx run` summary is the rate of GS FRAME_1/2 writes that retarget a context onto the displayed (DISPFB) buffer (`m_game_frames` in `deps/pcsx2` GSState, logged as `[gs-game]` every 5 s); `gpu_presents_per_sec` is the vsync rate. The probe reports bridge presents, HUD-clock observations and approximate state-dump VBlank/EE progress separately. Route profiling starts after gameplay confirmation; a successful route finishes after its gameplay observation tail. Menu inputs wait for OCR scene labels; movie skip waits for `INTRO.MPC` to open, and match-intro Cross requires the Marseille title plus commentary data.
 
+## Generated guest ABI
+
+Generated translation units include only `ps2_guest_abi.h`, `ps2_guest_macros.h`, and the generated function/stub declarations (plus debug logging when enabled). Runtime-only headers remain behind the out-of-line ABI entry points; edits to them do not rebuild generated unity units. Fast RAM access, address classification and guest arithmetic remain inline with the same semantics.
+
 ## Instruction hooks
 
 PS2Recomp has no mid-function override. Config `[[hooks]]` (address, `before`/`after`, optional `redirect`) make the recompiler emit a call through `g_ps2InstructionHooks[]`. Handlers are registered by the host and installed only if every guest instruction word they depend on matches the retail ELF. `generated/` stays pure recompiler output. One hook is in use: the vblank poll below.
