@@ -2,8 +2,8 @@
 
 - Intent: reach and verify active match gameplay, then guard it in `./rx run --route match`.
 - Verified: `./rx run --route match` reaches `scene=match_play` after OCR confirms an advancing HUD clock. During a held left-stick-right input, `scePadRead` returned `0xff,0x80`; later right/left holds returned `0xff,0x80` and `0x00,0x80`. Captures show the red-ringed player moving across the court as the HUD clock advances. Camera tracking and live play prevent isolating the player's response to each direction. A traced same-route A/B found substantially more missing output frames with `PS2X_AUDIO_STRETCH=1` than with the default-off stretcher; all output underruns are counted.
-- Blocker: audio underruns remain severe. A profile sampled occasional EE waits in `DataStream::gsVsync`/`StreamRing::waitFor`, but most EE samples were guest code in `sub_003C18D0` and the data worker was usually idle; the observed wait does not explain the periodic cycle-accounting gaps.
-- Next: (1) verify controlled-player movement under scripted input; (2) determine a valid guest gameplay-frame metric (`fps_dispfb2` stays unavailable while the register is unchanged; bridge presents are reported separately); (3) localize the EE cycle-accounting gaps during active play; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
+- Blocker: match audio still has severe output underruns. Stretcher-on worsens missing frames in the traced same-route comparison. Active-match profiles, including one with SPU/CD/fault tracing disabled, are dominated by guest VIF/INTC work and show only brief `DataStream::gsVsync`/`StreamRing::waitFor` samples; the reported long EE cycle-accounting gaps were not reproduced.
+- Next: (1) measure the output-ring producer/consumer timing during untraced match play and explain the remaining audio loss; (2) identify a guest gameplay-frame metric (`fps_dispfb2` stays unavailable while the register is unchanged; bridge presents are reported separately); (3) isolate the selected player's response to opposing stick input; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
 - Gotchas: `commentary_open` means commentary data opened, not that gameplay began; `scene=match_play` requires two advancing HUD-clock readings; the full movie and match intro keep the route near nine minutes; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
 
 ## Current
@@ -11,7 +11,7 @@
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. `./rx test --full` passes all 54 tests |
-| Game | The guarded route reaches the live England–Brazil HUD and renders active play under scripted stick input. The selected player's response and gameplay fps remain unverified; bridge presents are reported separately from `fps_dispfb2`. Audio underflows remain severe |
+| Game | The guarded route reaches the live England–Brazil HUD and renders active play under scripted stick input; the selected red-ringed player moves during those captures, but directional response and gameplay fps remain unverified. Bridge presents are separate from `fps_dispfb2`. Audio underflows remain severe |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
