@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 07:33:09 +0200
-Subject: [PATCH 39/72] Exclude raylib from the Metal runtime backend
+Subject: [PATCH 39/73] Exclude raylib from the Metal runtime backend
 
 Select the Metal backend before configuring runtime dependencies. Skip raylib and the desktop debug UI, exclude legacy presentation and sample-audio calls, and use native keyboard action IDs directly. Preserve the non-Metal backend.
 
