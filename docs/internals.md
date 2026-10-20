@@ -32,6 +32,10 @@ Removing a config stub alone cannot restore guest execution: PS2Recomp also auto
 
 `DataStream` (`ps2_data_stream.{h,cpp}`) is the one interface to the GS bridge: `gifSubmit`, `gsReset`, `gsWriteCsr`, `gsVsync`, `gsReadLocal`. GS CSR and SIGLBLID are a pure function of the packets processed, so `gifSubmit` only marks them stale; `observeGs()` reads them back at drain points: any EE access to a GS privileged register, CSR writes, and the VBlank snapshot. `PS2X_GS_VERIFY=1` reads back after every packet and aborts if the lazy value differs. The bridge is owned by the thread that created it (thread-local `s_gs` in `host/metal-host.mm`).
 
+PCSX2's Metal shaders are compiled at bridge start from `deps/pcsx2` (`GSMTLDeviceInfo.mm`, `newLibraryWithSource`, Metal 2.3, fast math as PCSX2's own metallib build): the bridge build inlines every `.metal` file into `resources/pcsx2-metal-shaders.metal`. No Xcode `metal` compiler is needed, and shader patches in the stack take effect.
+
+FIFA Street decompresses many 8-bit textures (pitch, flags, headshots, venue previews) on the GS: a low-resolution PSMCT32 base is stretched 2x or 4x with nearest sprites, a PSMT8/PSMT4 detail layer is added through a CLUT with `Cd + Cs` under FBMSK `0xfc000000`/`0xfe000000`, and the 32-bit target is then sampled as PSMT8. Every byte of the target is a texel index, so any per-channel error in the HW renderer, alpha included, shows as a regular grid of 8-texel dashes. `RRV_PCSX2_GS_DRAWDUMP`, `_TEX=1`, `_FRAMES=start,count` dump PCSX2's per-draw context, source textures and targets.
+
 ## Data-side worker
 
 `DataStream` has two modes. Inline runs every op on the calling thread. Worker (default) copies each op into a 16 MiB SPSC ring (`StreamRing`, `include/runtime/ps2_stream_ring.h`), executed in order by a worker thread that owns VU1 code and data, the VU1 dispatcher, the `GifArbiter` and the GS bridge. Kill-switch: `PS2X_VU1_WORKER=0` selects inline; `sync` drains after every kick (the no-overlap proof mode).
@@ -106,6 +110,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Fast-math or FP contraction: breaks PS2 arithmetic.
 - Treating the `sub_003C18D0` spin as a lost DMA IRQ: `sub_003C4ED0` clears object+0x82C on VBlank after the VIF1 END tag and configured field count; the language-menu rejection was the pad packet ID.
 - FPCR.FZ around native VU calls: inexact (`FLT_MIN + FLT_MIN * 0.5` gives `0x00800000`, the PS2 result is `0x00C00000`).
+- Texture dashes as EE-side corruption (MMI ops, DMA, uploads, refpack): uploads and GS local memory match the disc byte for byte; the error was PCSX2 v2.8.2's Metal FBMask truncating RT alpha.
 - Sampling `SDL_GetAudioStreamQueued` at the health interval: callback-driven playback drains the stream immediately, so it does not report device or OS queue depth.
 - EE alarm host-deadline waits as the cause of startup audio gaps: tracing observed no long waits in `processDueDeadlines` during those gaps.
 
