@@ -20,7 +20,7 @@
 
 ## Next
 
-1. Derive native VU1 coverage from the disc ELF. Captured full-bank catalogs currently supply native code; ELF DMA REF upload templates contain reusable bodies at runtime-selected VU addresses. A fresh checkout falls back to interpretation without a catalog.
+1. Native VU1 coverage. The catalog supplies native code only for captured banks; the rest interprets (about 10.8 Mcyc/s, match HUD clock about 0.26 s per wall s with the interpreter alone; `PS2X_VU1_INTERPRETER=1`). Disc-only coverage needs the EE code that assembles and patches VU1 microcode (see `docs/internals.md` VU).
 2. Resolve audio underflows and verify sync by listening.
 3. Verify directional input and memory-card saves.
 
