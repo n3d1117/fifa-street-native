@@ -259,7 +259,8 @@ class Node:
 class Generator:
     def __init__(self, code: bytes, entries: List[int], name: str,
                  dynamic_targets: Optional[Dict[int, List[int]]] = None,
-                 unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None):
+                 unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None,
+                 reloc_slots: Optional[int] = None):
         if unit not in ('vu0', 'vu1'):
             raise GenError(f"unknown VU unit {unit!r}")
         self.unit = unit
@@ -273,6 +274,10 @@ class Generator:
         if any(len(c) != self.code_size for c in self.pool_codes):
             raise GenError(f"guarded {unit.upper()} code pool contains an image with the wrong size")
         self.guarded = pool_codes is not None
+        # Relocatable program: node PCs are program-relative, the runtime supplies the
+        # micro-memory base, and any PC at or beyond the program's last word is rejected.
+        self.reloc = reloc_slots is not None
+        self.reloc_limit = (reloc_slots or 0) * 8
         self.pool_pairs: Dict[int, List[Pair]] = {}
         if self.guarded:
             for pc in range(0, self.code_size, 8):
@@ -431,6 +436,9 @@ class Generator:
             return
         p = self.pair(n.pc)
         n.pair = p
+        if self.reloc and n.pc >= self.reloc_limit:
+            n.rejected = True
+            return
         self._step_pair(n, p)
 
     def _step_pair(self, n: Node, p: Pair):
@@ -720,7 +728,7 @@ def compute_norm(g: Generator):
         cur = list(nin[nid])
         if n.phase == 'pre' and n.dyn_stall is not None:
             out = cur
-        elif g.guarded and (n.pair is None or n.rejected):
+        elif (g.guarded or g.reloc) and (n.pair is None or n.rejected):
             out = cur
         else:
             out = list(cur)
@@ -1046,7 +1054,12 @@ class Emitter:
         w("    uint32_t brt = 0;")
         w("    uint32_t " + ", ".join(f"fm{s} = 0, fs{s} = 0, fx{s} = 0, fc{s} = 0" for s in range(8)) + ";")
         w("    (void)qdi; (void)vibk; (void)brc; (void)brt; (void)ppend0; (void)ppend1; (void)wclip;")
-        w("    switch (entryPc)")
+        if g.reloc:
+            w("    const uint32_t base = ctx.relocBase;")
+            w("    (void)base;")
+            w("    switch ((entryPc - base) & 0x3fffu)")
+        else:
+            w("    switch (entryPc)")
         w("    {")
         for e, nid in sorted(g.entry_nodes.items()):
             w(f"    case 0x{e:04x}u: goto {self.label(nid)};")
@@ -1075,7 +1088,7 @@ class Emitter:
         # Guarded dispatch discards failed state/data/GIF transactionally. Joining
         # thousands of failure edges to unused register writeback creates huge
         # PHIs and pathological compile times, with no observable benefit.
-        w("    return;" if g.guarded else "    goto EXIT;")
+        w("    return;" if (g.guarded or g.reloc) else "    goto EXIT;")
         w("}")
 
     def emit_node(self, n: Node):
@@ -1141,7 +1154,7 @@ class Emitter:
             w(f"    if (brc) goto {self.label(t[1])};")
             w(f"    goto {self.label(t[2])};")
         elif t[0] == 'dyn':
-            w("    switch (brt)")
+            w("    switch ((brt - base) & 0x3fffu)" if self.g.reloc else "    switch (brt)")
             w("    {")
             for lab, nid in t[1]:
                 w(f"    case 0x{lab:04x}u: goto {self.label(nid)};")
@@ -1156,7 +1169,10 @@ class Emitter:
                 w("        const uint64_t kickEnd = vu1rec_kick_drain(ctx);")
                 w("        if (kickEnd > cyc) cyc = kickEnd;")
                 w("    }")
-            w(f"    st.pc = 0x{(n.pc + 8) & self.g.pc_mask:04x}u;")
+            if self.g.reloc:
+                w(f"    st.pc = base + 0x{(n.pc + 8) & self.g.pc_mask:04x}u;")
+            else:
+                w(f"    st.pc = 0x{(n.pc + 8) & self.g.pc_mask:04x}u;")
             w(f"    ctx.backupReg = {n.save_backup}u;")
             w(f"    ctx.backupValue = {'vibk' if n.save_backup else '0'};")
             w("    goto EXIT;")
@@ -1392,6 +1408,11 @@ class Emitter:
             self.w(f"    vibk = {self.vi(r)};")
         self.w(f"    {self.vi(r)} = (int16_t)({expr});")
 
+    def link_expr(self, n: Node) -> str:
+        if self.g.reloc:
+            return f"(base >> 3) + {(n.pc + 16) // 8}"
+        return f"{(n.pc + 16) // 8}"
+
     def branch_vi(self, n: Node, r: int) -> str:
         if r == 0:
             return "0"
@@ -1502,12 +1523,12 @@ class Emitter:
             return
         if ln in ('B', 'BAL'):
             if ln == 'BAL':
-                self.set_vi(viT, f"{(n.pc + 16) // 8}", False)
+                self.set_vi(viT, self.link_expr(n), False)
             return
         if ln in ('JR', 'JALR'):
             w(f"    brt = ((uint32_t)(uint16_t){self.branch_vi(n, viS)} * 8u) & {self.mask_literal(self.g.pc_mask)};")
             if ln == 'JALR':
-                self.set_vi(viT, f"{(n.pc + 16) // 8}", False)
+                self.set_vi(viT, self.link_expr(n), False)
             return
         conds = {'IBEQ': "==", 'IBNE': "!="}
         if ln in conds:
@@ -1648,10 +1669,11 @@ def end_continuations(g: Generator) -> List[int]:
 
 def analyze_image(code: bytes, entries: List[int], name: str,
                   dynamic_targets: Optional[Dict[int, List[int]]] = None,
-                  unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None) -> dict:
+                  unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None,
+                  reloc_slots: Optional[int] = None) -> dict:
     """Liveness-only analysis of one image: what each program entry (and each MSCNT
     continuation point) may read from the flag state left by the previous program."""
-    g = Generator(code, entries, name, dynamic_targets, unit, pool_codes)
+    g = Generator(code, entries, name, dynamic_targets, unit, pool_codes, reloc_slots)
     g.build()
     if not g.entry_nodes:
         raise GenError("no entry could be generated")
@@ -1660,7 +1682,7 @@ def analyze_image(code: bytes, entries: List[int], name: str,
     conts = [c for c in info['conts'] if c not in g.entry_nodes]
     if conts and unit == 'vu1':
         try:
-            gc = Generator(code, sorted(set(entries) | set(conts)), name, dynamic_targets, unit, pool_codes)
+            gc = Generator(code, sorted(set(entries) | set(conts)), name, dynamic_targets, unit, pool_codes, reloc_slots)
             gc.build()
             missing = [c for c in conts if c not in gc.entry_nodes]
             if missing:
@@ -1712,8 +1734,8 @@ def compute_live_exit(images_info: List[Optional[dict]]) -> Tuple[set, list]:
 def generate_image(code: bytes, entries: List[int], name: str, live_exit: Optional[set] = None,
                    dynamic_targets: Optional[Dict[int, List[int]]] = None,
                    unit: str = 'vu1', pool_codes: Optional[List[bytes]] = None,
-                   register: bool = True) -> Tuple[str, dict]:
-    info = analyze_image(code, entries, name, dynamic_targets, unit, pool_codes)
+                   register: bool = True, reloc_slots: Optional[int] = None) -> Tuple[str, dict]:
+    info = analyze_image(code, entries, name, dynamic_targets, unit, pool_codes, reloc_slots)
     g = info['cont_g'] if info['cont_g'] is not None else info['g']
     compute_norm(g)
     # Which flags are read anywhere in the (reachable) image?
@@ -1728,10 +1750,12 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     out = [VU0_HEADER if g.unit == 'vu0' else HEADER]
     if g.guarded:
         out.insert(0, '#include <cstring>\n')
+    if g.reloc:
+        register = False
     stats = {'nodes': len(g.nodes), 'pairs': len({n.pc for n in g.nodes}),
              'readers': sorted(readers), 'entries': sorted(g.entry_nodes),
              'failed': g.failed_entries, 'dt_pcs': sorted(g.dt_pcs), 'live_exit': sorted(fast_live)}
-    variants = (('full', full_live),) if g.guarded else (('fast', fast_live), ('full', full_live))
+    variants = (('full', full_live),) if (g.guarded or g.reloc) else (('fast', fast_live), ('full', full_live))
     for variant, live in variants:
         compute_flag_liveness(g, live)
         em = Emitter(g, variant, live)
@@ -1800,6 +1824,32 @@ def generate_guarded_pool(pool_codes: List[bytes], entries: List[int], dynamic_t
                          'pairs': sum(s['pairs'] for _, _, s in programs)}
 
 
+def generate_reloc_program(name: str, words: bytes) -> Tuple[str, dict]:
+    """Position-independent native code for one uploaded microprogram.
+
+    The runtime proves that the program's exact words sit at some micro-memory base
+    (a whole-program match), so the generated code carries no per-pair guards. Node PCs
+    are program-relative; BAL/JALR links, JR targets and the end-of-program PC add or
+    remove the base (`ctx.relocBase`). Execution that leaves the program fails closed.
+    """
+    if len(words) % 8 or not 0 < len(words) // 8 <= VU1_CODE_SIZE // 8:
+        raise GenError(f"{name}: bad program size {len(words)}")
+    slots = len(words) // 8
+    code = words + bytes(VU1_CODE_SIZE - len(words))
+    entries = [0] + [e for e in jump_table_entries(code) if e < len(words)]
+    src, stats = generate_image(code, sorted(set(entries)), name, set(FLAG_REGS), {}, 'vu1',
+                                register=False, reloc_slots=slots)
+    ent = ", ".join(f"0x{e:04x}u" for e in sorted(stats['entries']))
+    lit = ", ".join(f"0x{struct.unpack_from('<Q', words, i)[0]:016x}ull" for i in range(0, len(words), 8))
+    src = src.replace("} // namespace\n", "")
+    src += f"const uint64_t kWords[] = {{{lit}}};\n"
+    src += f"const uint32_t kEntries[] = {{{ent}}};\n"
+    src += (f"const Vu1RecProgramRegistrar kRegistrar(\"{name}\", {slots}u, 0x{fnv1a64(words):016x}ull, kWords, kEntries,\n"
+            f"    sizeof(kEntries) / sizeof(kEntries[0]), &vu1rec_{name}_full, {'true' if stats['dt_pcs'] else 'false'});\n")
+    src += "} // namespace\n"
+    return src, stats
+
+
 def read_catalog(cat: str) -> Dict[str, List[int]]:
     entries: Dict[str, List[int]] = defaultdict(list)
     with open(os.path.join(cat, "index.txt")) as f:
@@ -1855,10 +1905,44 @@ def parse_vu1_entry(value: str) -> int:
     return pc
 
 
+def generate_programs(program_dir: str, out_dir: str) -> int:
+    written = []
+    failed = 0
+    with open(os.path.join(program_dir, "index.txt")) as f:
+        rows = [line.split() for line in f if line.strip()]
+    for name, slots, digest in rows:
+        words = open(os.path.join(program_dir, f"{name}.vup"), "rb").read()
+        if len(words) != int(slots) * 8 or f"{fnv1a64(words):016x}" != digest:
+            print(f"[vu1recomp] {name}: program file does not match its index entry", file=sys.stderr)
+            failed += 1
+            continue
+        try:
+            src, stats = generate_reloc_program(name, words)
+        except GenError as ex:
+            print(f"[vu1recomp] {name}: FAILED: {ex}", file=sys.stderr)
+            failed += 1
+            continue
+        dst = os.path.join(out_dir, f"vu1prog_{name}.cpp")
+        if not os.path.exists(dst) or open(dst).read() != src:
+            with open(dst, "w") as out:
+                out.write(src)
+        written.append(dst)
+        print(f"[vu1recomp] program {name}: slots={slots} entries={['0x%04x' % e for e in stats['entries']]} "
+              f"nodes={stats['nodes']} pairs={stats['pairs']}"
+              + (f" failed={stats['failed']}" if stats['failed'] else ""))
+    for fn in os.listdir(out_dir):
+        path = os.path.join(out_dir, fn)
+        if fn.startswith("vu1prog_") and fn.endswith(".cpp") and path not in written:
+            os.remove(path)
+    return 1 if failed else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--unit", choices=('vu0', 'vu1'), default='vu1', help="VU unit (default: vu1)")
-    ap.add_argument("--catalog", required=True, help="catalog dir (index.txt + <hash>.<unit>)")
+    ap.add_argument("--catalog", help="catalog dir (index.txt + <hash>.<unit>)")
+    ap.add_argument("--programs", help="program dir from extract-programs.py: emit position-independent "
+                    "vu1prog_<name>.cpp per microprogram (VU1 only; replaces the catalog for these)")
     ap.add_argument("--out", required=True, help="output directory for generated C++")
     ap.add_argument("--guarded", action="store_true",
                     help="emit one fail-closed VU1 implementation selected by exact executed instruction pairs")
@@ -1876,6 +1960,12 @@ def main():
     if (args.entry or args.indirect_entry) and not args.guarded:
         ap.error("--entry and --indirect-entry are currently supported only with --guarded")
     os.makedirs(args.out, exist_ok=True)
+    if args.programs:
+        if args.unit != 'vu1' or args.guarded or args.catalog:
+            ap.error("--programs is VU1-only and excludes --catalog/--guarded")
+        return generate_programs(args.programs, args.out)
+    if not args.catalog:
+        ap.error("--catalog or --programs is required")
     cat = read_catalog(args.catalog)
     target_path = args.jr_targets or os.path.join(args.catalog, "jr_targets.txt")
     dynamic_targets = read_dynamic_targets(target_path)

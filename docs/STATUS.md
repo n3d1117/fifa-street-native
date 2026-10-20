@@ -20,7 +20,7 @@
 
 ## Next
 
-1. Native VU1 coverage. The catalog supplies native code only for captured banks; the rest interprets (about 10.8 Mcyc/s, match HUD clock about 0.26 s per wall s with the interpreter alone; `PS2X_VU1_INTERPRETER=1`). Disc-only coverage needs the EE code that assembles and patches VU1 microcode (see `docs/internals.md` VU).
+1. Native VU1: the programs path covers every MSCAL/MSCNT on the match route (measured: zero interpreter fallbacks, differential agreement over all calls; HUD clock about 1.0 s per wall s). Not yet checked: routes beyond a first quick match (other stadiums, modes). VU1 is about half of wall time with the full-flag variant; a flag-liveness pass over whole programs could cut it (`./rx run --route match`, `PS2X_VU1_STATS`).
 2. Resolve audio underflows and verify sync by listening.
 3. Verify directional input and memory-card saves.
 

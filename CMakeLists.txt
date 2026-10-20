@@ -70,6 +70,11 @@ if(NOT PS2X_VU1_GENERATOR)
     set(PS2X_VU1_GENERATOR "${RX_ROOT}/tools/vu/vu1recomp.py" CACHE FILEPATH
         "VU static generator" FORCE)
 endif()
+set(PS2X_VU1_PROGRAM_EXTRACTOR "${RX_ROOT}/tools/vu/extract-programs.py" CACHE FILEPATH
+    "VU1 program extractor" FORCE)
+set(PS2X_VU1_PROGRAM_DIR "${RX_ROOT}/generated/vu1-programs" CACHE PATH
+    "Extracted VU1 microprograms" FORCE)
+set(PS2X_DISC_DIR "${RX_ROOT}/extracted/disc" CACHE PATH "Extracted disc root" FORCE)
 if(NOT PS2X_VU1GEN_DIR)
     set(PS2X_VU1GEN_DIR "${RX_ROOT}/generated/vu1-native" CACHE PATH
         "Native VU1 source directory" FORCE)
