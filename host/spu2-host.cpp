@@ -39,6 +39,7 @@ std::atomic<uint64_t> g_last_cycle{0};
 std::atomic<uint64_t> g_audio_callback_errors{0};
 std::atomic<uint64_t> g_audio_requested_frames{0};
 std::atomic<uint64_t> g_audio_real_frames{0};
+std::atomic<uint64_t> g_audio_real_total_frames{0};
 std::atomic<uint64_t> g_audio_energy_scaled{0};
 std::atomic<uint64_t> g_audio_sample_count{0};
 std::atomic<uint64_t> g_audio_clipped_samples{0};
@@ -51,6 +52,14 @@ uint64_t monotonic_ns();
 bool audio_trace_enabled() {
     static const bool enabled = [] {
         const char* value = std::getenv("PS2X_TRACE_SPU2");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+bool audio_ring_trace_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PS2X_TRACE_AUDIO_RING");
         return value && value[0] == '1' && value[1] == '\0';
     }();
     return enabled;
@@ -93,7 +102,8 @@ void record_audio_samples(const float* samples, size_t frames) {
 }
 
 void report_audio_health(uint64_t iop_cycle) {
-    if (!audio_trace_enabled() || !g_spu2)
+    const bool traceAudio = audio_trace_enabled();
+    if ((!traceAudio && !audio_ring_trace_enabled()) || !g_spu2)
         return;
     static uint64_t previousWallNs = 0;
     static uint64_t previousIopCycle = 0;
@@ -135,23 +145,39 @@ void report_audio_health(uint64_t iop_cycle) {
     const uint32_t peak = g_audio_peak_scaled.exchange(0u, std::memory_order_relaxed);
     const uint32_t queuedHighWater = g_audio_queued_high_water.exchange(0u, std::memory_order_relaxed);
     const uint64_t errors = g_audio_callback_errors.exchange(0u, std::memory_order_relaxed);
+    const uint64_t realTotal = g_audio_real_total_frames.load(std::memory_order_relaxed);
+    const uint64_t ringFrames = stats.frames_enqueued >= realTotal ? stats.frames_enqueued - realTotal : 0u;
     const double seconds = static_cast<double>(elapsedNs) / 1.0e9;
     const double rms = sampleCount != 0u
         ? std::sqrt(static_cast<double>(energy) / static_cast<double>(sampleCount)) / 10000.0
         : 0.0;
-    std::fprintf(stderr,
-                 "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
-                 "pull=%llu/%llu rms=%.4f peak=%.4f clipped=%llu nonfinite=%llu queuedMaxB=%u errors=%llu\n",
-                 static_cast<double>(elapsedCycles) / seconds / 1.0e6,
-                 static_cast<double>(mixedFrames) / seconds / 1000.0,
-                 static_cast<unsigned long long>(underruns),
-                 static_cast<unsigned long long>(overruns),
-                 static_cast<unsigned long long>(real),
-                 static_cast<unsigned long long>(requested), rms,
-                 static_cast<double>(peak) / 10000.0,
-                 static_cast<unsigned long long>(clipped),
-                 static_cast<unsigned long long>(nonfinite), queuedHighWater,
-                 static_cast<unsigned long long>(errors));
+    if (traceAudio) {
+        std::fprintf(stderr,
+                     "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
+                     "pull=%llu/%llu ringFrames=%llu rms=%.4f peak=%.4f clipped=%llu nonfinite=%llu queuedMaxB=%u errors=%llu\n",
+                     static_cast<double>(elapsedCycles) / seconds / 1.0e6,
+                     static_cast<double>(mixedFrames) / seconds / 1000.0,
+                     static_cast<unsigned long long>(underruns),
+                     static_cast<unsigned long long>(overruns),
+                     static_cast<unsigned long long>(real),
+                     static_cast<unsigned long long>(requested),
+                     static_cast<unsigned long long>(ringFrames), rms,
+                     static_cast<double>(peak) / 10000.0,
+                     static_cast<unsigned long long>(clipped),
+                     static_cast<unsigned long long>(nonfinite), queuedHighWater,
+                     static_cast<unsigned long long>(errors));
+    } else {
+        std::fprintf(stderr,
+                     "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
+                     "pull=%llu/%llu ringFrames=%llu\n",
+                     static_cast<double>(elapsedCycles) / seconds / 1.0e6,
+                     static_cast<double>(mixedFrames) / seconds / 1000.0,
+                     static_cast<unsigned long long>(underruns),
+                     static_cast<unsigned long long>(overruns),
+                     static_cast<unsigned long long>(real),
+                     static_cast<unsigned long long>(requested),
+                     static_cast<unsigned long long>(ringFrames));
+    }
 
     previousWallNs = now;
     previousIopCycle = iop_cycle;
@@ -170,9 +196,13 @@ void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amoun
     while (remaining_frames != 0) {
         const size_t frames = std::min(remaining_frames, kAudioChunkFrames);
         const size_t realFrames = rrv_spu2_pull_output(g_spu2, samples.data(), frames);
-        if (audio_trace_enabled()) {
+        const bool traceAudio = audio_trace_enabled();
+        if (traceAudio || audio_ring_trace_enabled()) {
             g_audio_requested_frames.fetch_add(frames, std::memory_order_relaxed);
             g_audio_real_frames.fetch_add(realFrames, std::memory_order_relaxed);
+            g_audio_real_total_frames.fetch_add(realFrames, std::memory_order_relaxed);
+        }
+        if (traceAudio) {
             record_audio_samples(samples.data(), frames);
             const int queued = SDL_GetAudioStreamQueued(stream);
             if (queued > 0) {
@@ -331,6 +361,7 @@ bool ps2x_spu2_host_start() {
     g_audio_callback_errors.store(0, std::memory_order_relaxed);
     g_audio_requested_frames.store(0, std::memory_order_relaxed);
     g_audio_real_frames.store(0, std::memory_order_relaxed);
+    g_audio_real_total_frames.store(0, std::memory_order_relaxed);
     g_audio_energy_scaled.store(0, std::memory_order_relaxed);
     g_audio_sample_count.store(0, std::memory_order_relaxed);
     g_audio_clipped_samples.store(0, std::memory_order_relaxed);
