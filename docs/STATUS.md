@@ -1,10 +1,10 @@
 ## Resume
 
 - Intent: reach and verify active match gameplay, then guard it in `./rx run --route match`.
-- Verified: `./rx run --route match` reaches `scene=match_play` after OCR confirms an advancing HUD clock; the captured clock reached 0:21. A diagnostic left-stick-right hold was sent during timed play, but controlled-player movement is not established. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
+- Verified: `./rx run --route match` reaches `scene=match_play` after OCR confirms an advancing HUD clock; the captured clock reached 0:28. A diagnostic left-stick-right hold was sent for 60 host seconds during timed play, but controlled-player movement is not established. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
 - Blocker: audio underruns remain severe. A profile sampled occasional EE waits in `DataStream::gsVsync`/`StreamRing::waitFor`, but most EE samples were guest code in `sub_003C18D0` and the data worker was usually idle; the observed wait does not explain the periodic cycle-accounting gaps.
 - Next: (1) verify controlled-player movement under scripted input; (2) measure gameplay fps over a steady window without tracing; (3) localize the EE cycle-accounting gaps during active play; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
-- Gotchas: `commentary_open` means commentary data opened, not that gameplay began; `scene=match_play` requires two advancing HUD-clock readings; the full movie and match intro keep the route near eight minutes; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
+- Gotchas: `commentary_open` means commentary data opened, not that gameplay began; `scene=match_play` requires two advancing HUD-clock readings; the full movie and match intro keep the route near nine minutes; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
 
 ## Current
 

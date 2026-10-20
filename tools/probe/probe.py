@@ -44,7 +44,7 @@ CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact reco
 ROUTES = {"match": {
     "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
               (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
-    "play_steps": [(3, 20, 20.0)], "tail": 35, "timeout": 480,
+    "play_steps": [(3, 20, 60.0)], "tail": 35, "timeout": 540,
     "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
@@ -335,6 +335,7 @@ def main():
     killed_by_us = fault_stop = False
     state_asked = False
     profiled = None
+    gameplay_input_key = None
     next_black = started + BLACK_SAMPLE_START
     seen_len = 0
     last_log_check = 0.0
@@ -372,6 +373,7 @@ def main():
                     step = play_steps.pop(0)
                     _, key, hold = step
                     os.write(fifo_fd, struct.pack("<I", 1 << key))
+                    gameplay_input_key = key
                     release_at = now + hold
                     if play_steps:
                         play_step_at = now + play_steps[0][0]
@@ -470,6 +472,7 @@ def main():
         "scene": scene, "commentary_open": commentary_open if route else None,
         "gameplay_confirmed": cap.gameplay_confirmed if route else None,
         "match_clock_seconds": cap.match_clock if route else None,
+        "gameplay_input_key_bit": gameplay_input_key,
         "state": state, "killed": killed, "notes": notes, "crash_report": report, "log": str(log_path), "user_dir": str(user_dir), "quit_clean": quit_ok,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
