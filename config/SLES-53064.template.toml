@@ -194,3 +194,8 @@ stubs = [
   "sceSifRebootIop@0x0044AE38",
   "InitAlarm@0x0044B6F8",
 ]
+
+# sub_003C18D0 vblank poll back-edge, before the `bnel`: host/poll-idle.cpp sleeps here (PS2X_POLL_IDLE=0 spins).
+[[hooks]]
+address = "0x3C1994"
+when = "before"

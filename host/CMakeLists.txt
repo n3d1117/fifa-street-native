@@ -174,3 +174,12 @@ target_compile_options(bootMatchTest PRIVATE -UNDEBUG)
 target_link_options(bootMatchTest PRIVATE -stdlib=libc++)
 set_source_files_properties("${RX_ROOT}/tests/boot-match-test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_test(NAME boot_match COMMAND bootMatchTest)
+
+add_executable(pollIdleTest
+    "${RX_ROOT}/tests/poll-idle-test.cpp")
+target_include_directories(pollIdleTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(pollIdleTest PRIVATE cxx_std_20)
+target_compile_options(pollIdleTest PRIVATE -UNDEBUG)
+target_link_options(pollIdleTest PRIVATE -stdlib=libc++)
+set_source_files_properties("${RX_ROOT}/tests/poll-idle-test.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+add_test(NAME poll_idle COMMAND pollIdleTest)

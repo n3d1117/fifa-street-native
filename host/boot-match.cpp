@@ -7,6 +7,7 @@
 // Inert without the variable, in the real save directory, or if any dependent guest
 // instruction word differs from the retail ELF.
 #include "boot-match.hpp"
+#include "elf-words.hpp"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 
@@ -33,28 +34,6 @@ uint32_t g_ticks = 0;
 const auto g_armedAt = std::chrono::steady_clock::now();
 long sinceArmedMs() {
     return static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_armedAt).count());
-}
-
-bool elfWord(const std::vector<uint8_t> &elf, uint32_t address, uint32_t &out) {
-    if (elf.size() < 0x34) return false;
-    uint32_t phoff;
-    uint16_t phnum;
-    std::memcpy(&phoff, &elf[0x1c], 4);
-    std::memcpy(&phnum, &elf[0x2c], 2);
-    for (uint16_t i = 0; i < phnum; ++i) {
-        const size_t at = phoff + 32u * i;
-        if (at + 32 > elf.size()) return false;
-        uint32_t type, off, vaddr, filesz;
-        std::memcpy(&type, &elf[at], 4);
-        std::memcpy(&off, &elf[at + 4], 4);
-        std::memcpy(&vaddr, &elf[at + 8], 4);
-        std::memcpy(&filesz, &elf[at + 16], 4);
-        if (type == 1 && address >= vaddr && address + 4 <= vaddr + filesz && off + (address - vaddr) + 4 <= elf.size()) {
-            std::memcpy(&out, &elf[off + (address - vaddr)], 4);
-            return true;
-        }
-    }
-    return false;
 }
 
 void callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t entry,
@@ -101,7 +80,7 @@ bool ps2x_boot_match_install(PS2Runtime &runtime, const std::filesystem::path &e
     std::ifstream file(elfPath, std::ios::binary);
     const std::vector<uint8_t> elf((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     std::string why;
-    if (!host::bootmatch::verify([&](uint32_t a, uint32_t &v) { return elfWord(elf, a, v); }, &why)) {
+    if (!host::bootmatch::verify([&](uint32_t a, uint32_t &v) { return host::elfWord(elf, a, v); }, &why)) {
         std::fprintf(stderr, "[boot-match] refused: %s\n", why.c_str());
         return false;
     }
