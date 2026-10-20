@@ -23,6 +23,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -152,25 +153,153 @@ def child_exited(exit_watch):
     return False
 
 
-def sample_game_thread(pid, path):
-    exe = shutil.which("sample")
-    if not exe:
+def cpu_time_seconds(value):
+    """Parse ps TIME values (MM:SS, HH:MM:SS, or days-HH:MM:SS)."""
+    match = re.fullmatch(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d{2})(?:\.(\d+))?", value)
+    if not match:
         return None
+    days, hours, minutes, seconds, fraction = match.groups()
+    return (int(days or 0) * 86400 + int(hours or 0) * 3600 +
+            int(minutes) * 60 + int(seconds) + float("0." + fraction) if fraction else
+            int(days or 0) * 86400 + int(hours or 0) * 3600 + int(minutes) * 60 + int(seconds))
+
+
+def thread_cpu_snapshot(pid):
+    """Return cumulative per-thread CPU keyed by TID from macOS ps -M."""
     try:
-        subprocess.run([exe, str(pid), "2", "-file", str(path)], capture_output=True, timeout=8)
-    except subprocess.TimeoutExpired:
-        return None
-    counts, inside = collections.Counter(), False
-    for line in Path(path).read_text(errors="replace").splitlines() if Path(path).exists() else []:
-        if re.search(r"Thread_\d+:\s*GameThread", line):
-            inside = True
+        result = subprocess.run(["ps", "-M", "-p", str(pid)], capture_output=True,
+                                text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    lines = result.stdout.splitlines()
+    if not lines:
+        return {}
+    headers = re.split(r"\s+", lines[0].strip())
+    time_col = next((i for i, h in enumerate(headers) if h.upper() == "TIME"), None)
+    user_col = next((i for i, h in enumerate(headers) if h.upper() == "UTIME"), None)
+    sys_col = next((i for i, h in enumerate(headers) if h.upper() == "STIME"), None)
+    tid_col = next((i for i, h in enumerate(headers) if h.upper() in ("TID", "THRD")), None)
+    if time_col is None and (user_col is None or sys_col is None):
+        return {}
+    cpus = {}
+    for index, line in enumerate(lines[1:]):
+        fields = re.split(r"\s+", line.strip(), maxsplit=max(len(headers) - 1, 0))
+        offset = 0
+        if headers and headers[0].upper() == "USER" and fields and fields[0].isdigit():
+            offset = -1
+            if len(headers) > 2 and headers[2].upper() == "TT" and len(fields) < len(headers) - 1:
+                offset -= 1
+        row_time_col = time_col + offset if time_col is not None else None
+        row_user_col = user_col + offset if user_col is not None else None
+        row_sys_col = sys_col + offset if sys_col is not None else None
+        row_tid_col = tid_col + offset if tid_col is not None else None
+        if row_time_col is not None and len(fields) > row_time_col:
+            seconds = cpu_time_seconds(fields[row_time_col])
+        elif row_user_col is not None and row_sys_col is not None and len(fields) > max(row_user_col, row_sys_col):
+            user_seconds = cpu_time_seconds(fields[row_user_col])
+            sys_seconds = cpu_time_seconds(fields[row_sys_col])
+            seconds = user_seconds + sys_seconds if user_seconds is not None and sys_seconds is not None else None
+        else:
             continue
-        if inside and re.search(r"Thread_\d+:", line):
-            break
-        m = re.search(r"\+\s*(\d+)\s+(.+?)\s+\(in ps2EntryRunner\)", line) if inside and "_0x" in line else None
-        if m:
-            counts[m[2].strip()] += int(m[1])
-    return [[n, c] for n, c in counts.most_common(5)]
+        if seconds is None:
+            continue
+        tid = fields[row_tid_col] if row_tid_col is not None and len(fields) > row_tid_col else str(index)
+        cpus[tid] = seconds
+    return cpus
+
+
+def parse_sample(path):
+    """Parse sample's per-thread call tree into self counts and thread labels."""
+    threads, current, stack = [], None, []
+    for line in Path(path).read_text(errors="replace").splitlines() if Path(path).is_file() else []:
+        heading = re.match(r"^\s*(\d+)\s+Thread_([^\s:]+):?(?:\s+(.*?))?\s*$", line)
+        if heading:
+            thread_id = heading[2]
+            current = {"id": thread_id, "name": (heading[3] or "").strip() or f"Thread_{thread_id}",
+                       "nodes": [], "self": collections.Counter(), "samples": int(heading[1])}
+            threads.append(current)
+            stack = []
+            continue
+        if current is None:
+            continue
+        node = re.match(r"^\s*\+[\s!:+|]*(\d+)\s+(.+)$", line)
+        if not node:
+            continue
+        indent, count, label = node.start(1), int(node[1]), node[2].strip()
+        symbol = re.sub(r"\s+\(in .+$", "", label).strip()
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        entry = {"count": count, "symbol": symbol, "children": 0}
+        if stack:
+            stack[-1][1]["children"] += count
+        current["nodes"].append(entry)
+        stack.append((indent, entry))
+        current["samples"] = max(current["samples"], count)
+    total = sum(thread["samples"] for thread in threads)
+    for thread in threads:
+        for node in thread["nodes"]:
+            own = max(0, node["count"] - node["children"])
+            if own and node["symbol"]:
+                thread["self"][node["symbol"]] += own
+    hot = {}
+    guest_top = []
+    names = collections.Counter(thread["name"] for thread in threads)
+    for thread in threads:
+        name = thread["name"]
+        if names[name] > 1:
+            name = f"{name} (Thread_{thread['id']})"
+        thread["display_name"] = name
+        if total and thread["samples"] / total > 0.02:
+            hot[name] = [[symbol, round(count * 100 / thread["samples"], 2)]
+                                    for symbol, count in thread["self"].most_common(12)]
+        if re.search(r"GameThread", thread["name"], re.I):
+            guest_top = [[symbol, count] for symbol, count in thread["self"].most_common()
+                         if "_0x" in symbol][:5]
+    return threads, hot, guest_top
+
+
+def collect_profile(pid, out, window, result):
+    """Sample the whole process while measuring per-thread CPU over one wall window."""
+    exe = shutil.which("sample")
+    start = thread_cpu_snapshot(pid)
+    started = time.monotonic()
+    sampler = None
+    if exe:
+        try:
+            sampler = subprocess.Popen([exe, str(pid), str(int(window)), "-file", str(out / "process.sample")],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            pass
+    time.sleep(window)
+    ended = time.monotonic()
+    finish = thread_cpu_snapshot(pid)
+    if sampler:
+        try:
+            sampler.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            sampler.terminate()
+            sampler.wait()
+    threads, hot, guest_top = parse_sample(out / "process.sample")
+    sample_by_tid = {}
+    for thread in threads:
+        raw_id = thread["id"]
+        try:
+            sample_by_tid[str(int(raw_id, 0))] = thread["display_name"]
+        except ValueError:
+            if raw_id.isdigit():
+                sample_by_tid[str(int(raw_id))] = thread["display_name"]
+    names_by_order = [thread["display_name"] for thread in threads]
+    cpus = []
+    tids = list(start) + [tid for tid in finish if tid not in start]
+    for index, tid in enumerate(tids):
+        value = start.get(tid, 0.0)
+        delta = max(0.0, finish.get(tid, value) - value)
+        name = sample_by_tid.get(tid, names_by_order[index] if index < len(names_by_order) else f"Thread_{tid}")
+        cpus.append({"name": name, "cpu_per_s": round(delta / max(ended - started, 0.001), 4)})
+    cpus.sort(key=lambda item: item["cpu_per_s"], reverse=True)
+    result.update(profile_threads=cpus, profile_hot=hot, profile_top=guest_top,
+                  profile_sample=str(out / "process.sample") if (out / "process.sample").is_file() else None,
+                  profile_measurement="per-thread CPU deltas and whole-process sample over the same wall window")
 
 
 class Capture:
@@ -427,6 +556,8 @@ def main():
     state_requests = []
     gameplay_at = None
     profiled = None
+    profile_thread = None
+    profile_result = {}
     gameplay_input_key = None
     route_inputs = []
     intro_skip_at = None
@@ -507,7 +638,13 @@ def main():
             profile_at = gameplay_at if route else started
             if (args.profile and profiled is None and profile_at is not None and
                     now - profile_at >= args.profile_after):
-                profiled = sample_game_thread(proc.pid, out / "game-thread.sample") or []
+                profiled = True
+                deadline = max(deadline, now + 17.0)
+                if route:
+                    route_deadline = max(route_deadline, deadline)
+                profile_thread = threading.Thread(target=collect_profile,
+                                                  args=(proc.pid, out, 15.0, profile_result), daemon=True)
+                profile_thread.start()
             if not state_asked and args.seconds >= 8 and now >= deadline - 3.5:
                 state_asked = request_state()
             if now >= next_black:
@@ -517,6 +654,8 @@ def main():
                 next_black = time.monotonic() + (route or {}).get("sample_every", BLACK_SAMPLE_EVERY)
             time.sleep(0.04 if route else 0.2)
     finally:
+        if profile_thread:
+            profile_thread.join()
         quit_ok = None
         if args.quit_at_end and not child_exited(exit_watch):
             subprocess.run(["osascript", "-e", f'tell application id "{game.GAME["bundle_id"]}" to quit'],
@@ -599,9 +738,12 @@ def main():
         "vu1": metrics.get("vu1"),
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,
-        "save_dir_changed": changed, "exit_code": proc.returncode, "profile_top": profiled,
-        "profile_sample": str(out / "game-thread.sample") if (out / "game-thread.sample").is_file() else None,
-        "profile_measurement": "sampled wall stacks across all threads; not per-thread CPU usage" if profiled is not None else None,
+        "save_dir_changed": changed, "exit_code": proc.returncode,
+        "profile_top": profile_result.get("profile_top"),
+        "profile_threads": profile_result.get("profile_threads", []),
+        "profile_hot": profile_result.get("profile_hot", {}),
+        "profile_sample": profile_result.get("profile_sample"),
+        "profile_measurement": profile_result.get("profile_measurement"),
         "route_inputs": route_inputs if route else None,
         "route_waiting_for": steps[0][3] if route and steps else None,
         "gameplay_wall_seconds": round(gameplay_at - started, 3) if gameplay_at is not None else None,
