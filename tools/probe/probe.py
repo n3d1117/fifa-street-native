@@ -331,10 +331,12 @@ def collect_profile(pid, out, window, result):
     for thread in threads:
         raw_id = thread["id"]
         try:
-            sample_by_tid[str(int(raw_id, 0))] = thread
+            tid = str(int(raw_id, 0))
         except ValueError:
-            if raw_id.isdigit():
-                sample_by_tid[str(int(raw_id))] = thread
+            continue
+        # sample lists a thread again under each dispatch queue it briefly ran; keep its main section.
+        if tid not in sample_by_tid or thread["samples"] > sample_by_tid[tid]["samples"]:
+            sample_by_tid[tid] = thread
     cpus = []
     tids = list(start) + [tid for tid in finish if tid not in start]
     for tid in tids:
@@ -347,7 +349,7 @@ def collect_profile(pid, out, window, result):
             candidate = next((symbol for symbol, _ in sample_thread["self"].most_common()
                               if "vu1rec_" in symbol), None)
             if candidate:
-                name = f"{name} (worker: {candidate})" if name else f"worker ({candidate})"
+                name = f"worker ({candidate})"
             elif sample_thread["name"] != f"Thread_{sample_thread['id']}":
                 name = name or sample_thread["name"]
         name = name or f"tid {tid}"
