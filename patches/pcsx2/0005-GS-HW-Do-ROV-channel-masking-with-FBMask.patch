@@ -1,0 +1,167 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: TJnotJT <tjnotjt.github@gmail.com>
+Date: Wed, 5 Aug 2026 09:55:47 -0400
+Subject: [PATCH 5/5] GS:HW: Do ROV channel masking with FBMask.
+
+(cherry picked from commit 77cfac7dbe9ccd02139c3cd7ff44f3c6d1511bb6)
+
+diff --git a/bin/resources/shaders/dx11/tfx.fx b/bin/resources/shaders/dx11/tfx.fx
+index 528ef12c5329801aeab2d27a6bd1913c8c576af4..84b57c1d07b8b17c9d6a0bce39997d06ecfdf908 100644
+--- a/bin/resources/shaders/dx11/tfx.fx
++++ b/bin/resources/shaders/dx11/tfx.fx
+@@ -1097,8 +1097,11 @@ void ps_fbmask(inout float4 C, float2 pos_xy)
+ {
+ 	if (PS_FBMASK)
+ 	{
+-		float multi = PS_COLCLIP_HW ? 65535.0f : 255.0f;
+-		float4 RT = trunc(RtLoad(int2(pos_xy)) * multi + 0.1f);
++		float multi_rgb = PS_COLCLIP_HW ? 65535.0f : 255.0f;
++		float multi_a = PS_RTA_CORRECTION ? 128.0f : 255.0f;
++		float4 RT = RtLoad(int2(pos_xy));
++		RT.rgb = trunc(RT.rgb * multi_rgb + 0.1f);
++		RT.a = round(RT.a * multi_a);
+ 		C = (float4)(((uint4)C & ~FbMask) | ((uint4)RT & FbMask));
+ 	}
+ }
+@@ -1594,7 +1597,6 @@ if (bad)
+ 		output.c1 = o_col1;
+ 	#endif
+ #elif PS_RETURN_COLOR_ROV
+-	o_col0 = (FbMask == 0xFFu) ? RtLoad(input.p.xy) : o_col0; // channel masking
+ 	if (!rov_discard_color)
+ 		RtWrite(input.p.xy, o_col0);
+ #endif
+diff --git a/bin/resources/shaders/opengl/tfx_fs.glsl b/bin/resources/shaders/opengl/tfx_fs.glsl
+index 0339e9f796cc4b9217e640a021134013bef5bf8e..0beee2706053987cf5783bae1d02947a532bb795 100644
+--- a/bin/resources/shaders/opengl/tfx_fs.glsl
++++ b/bin/resources/shaders/opengl/tfx_fs.glsl
+@@ -932,11 +932,11 @@ void ps_fbmask(inout vec4 C)
+ {
+ 	// FIXME do I need special case for 16 bits
+ #if PS_FBMASK
+-	#if PS_COLCLIP_HW == 1
+-		vec4 RT = trunc(sample_from_rt() * 65535.0f);
+-	#else
+-		vec4 RT = trunc(sample_from_rt() * 255.0f + 0.1f);
+-	#endif
++		float multi_rgb = PS_COLCLIP_HW != 0 ? 65535.0f : 255.0f;
++		float multi_a = PS_RTA_CORRECTION != 0 ? 128.0f : 255.0f;
++		vec4 RT = sample_from_rt();
++		RT.rgb = trunc(RT.rgb * multi_rgb + 0.1f);
++		RT.a = round(RT.a * multi_a);
+ 	C = vec4((uvec4(C) & ~FbMask) | (uvec4(RT) & FbMask));
+ #endif
+ }
+diff --git a/bin/resources/shaders/vulkan/tfx.glsl b/bin/resources/shaders/vulkan/tfx.glsl
+index 7e4909faaf630e4e9097f4aa17caf8bfc8430c23..6c81f8570d56f711b060dbe37a487fa3532cc6e8 100644
+--- a/bin/resources/shaders/vulkan/tfx.glsl
++++ b/bin/resources/shaders/vulkan/tfx.glsl
+@@ -1448,11 +1448,11 @@ vec4 ps_color()
+ void ps_fbmask(inout vec4 C)
+ {
+ 	#if PS_FBMASK
+-		#if PS_COLCLIP_HW == 1
+-			vec4 RT = trunc(sample_from_rt() * 65535.0f);
+-		#else
+-			vec4 RT = trunc(sample_from_rt() * 255.0f + 0.1f);
+-		#endif
++		float multi_rgb = PS_COLCLIP_HW != 0 ? 65535.0f : 255.0f;
++		float multi_a = PS_RTA_CORRECTION != 0 ? 128.0f : 255.0f;
++		vec4 RT = sample_from_rt();
++		RT.rgb = trunc(RT.rgb * multi_rgb + 0.1f);
++		RT.a = round(RT.a * multi_a);
+ 		C = vec4((uvec4(C) & ~FbMask) | (uvec4(RT) & FbMask));
+ 	#endif
+ }
+@@ -1966,8 +1966,6 @@ void main()
+ 	
+ 	// Writing back color (result already written to o_col0 for non-ROV)
+ 	#if PS_RETURN_COLOR_ROV
+-		o_col0 = mix(o_col0, sample_from_rt(), equal(FbMask, uvec4(0xFFu))); // channel masking
+-
+ 		if (!rov_discard_color)
+ 			imageStore(RtImageRov, ivec2(gl_FragCoord.xy), o_col0);
+ 	#endif
+diff --git a/pcsx2/GS/Renderers/HW/GSRendererHW.cpp b/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
+index c4f540b90e7b7b1d1535a4c911c83dbb9a0aac48..cd9749b0b1f2eb61864cc72d011c4a7fdfdda133 100644
+--- a/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
++++ b/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
+@@ -7726,26 +7726,17 @@ void GSRendererHW::ConfigureROV(bool color_rov, bool depth_rov)
+ 	if (color_rov)
+ 	{
+ 		// FbMask setup
+-		if (m_conf.colormask.wrgba != 0)
++		if (m_conf.colormask.wrgba != 0 && m_conf.colormask.wrgba != 0xF)
+ 		{
++			if (!m_conf.ps.fbmask)
++				m_conf.cb_ps.FbMask = GSVector4i::zero();
+ 			const GSVector4i fbmask = GSVector4i(m_conf.colormask.wr ? 0 : 0xFF, m_conf.colormask.wg ? 0 : 0xFF,
+ 			                                     m_conf.colormask.wb ? 0 : 0xFF, m_conf.colormask.wa ? 0 : 0xFF);
+-			if (!m_conf.ps.fbmask)
+-			{
+-				// Don't enable FB mask emulation, just use the mask for ROV.
+-				m_conf.cb_ps.FbMask = fbmask;
+-			}
+-			else
+-			{
+-				m_conf.cb_ps.FbMask |= fbmask;
+-			}
++			m_conf.ps.fbmask = true;
++			m_conf.cb_ps.FbMask |= fbmask;
+ 			GL_INS("ROV: FbMask={R=%x, G=%x, B=%x, A=%x}",
+ 				m_conf.cb_ps.FbMask.r, m_conf.cb_ps.FbMask.g, m_conf.cb_ps.FbMask.b, m_conf.cb_ps.FbMask.a);
+ 		}
+-		else
+-		{
+-			m_conf.ps.no_color = true;
+-		}
+ 
+ 		// Blend setup
+ 		if (m_conf.IsBlending())
+diff --git a/pcsx2/GS/Renderers/Metal/tfx.metal b/pcsx2/GS/Renderers/Metal/tfx.metal
+index 95c772cb34a8eb634573812e0be4e8992e0842ac..d9a60d0eca92ad6f48d623552fa5d8b432c6690d 100644
+--- a/pcsx2/GS/Renderers/Metal/tfx.metal
++++ b/pcsx2/GS/Renderers/Metal/tfx.metal
+@@ -1304,8 +1304,12 @@ struct PSMain
+ 	{
+ 		if (PS_FBMASK)
+ 		{
+-			float multi = PS_COLCLIP_HW ? 65535.0 : 255.5;
+-			C = float4((uint4(int4(C)) & (cb.fbmask ^ 0xff)) | (uint4(current_color * float4(multi, multi, multi, 255)) & cb.fbmask));
++			float multi_rgb = PS_COLCLIP_HW ? 65535.0 : 255.5;
++			float multi_a = PS_RTA_CORRECTION ? 128.0 : 255.0;
++			float4 RT = current_color;
++			RT.rgb = RT.rgb * multi_rgb;
++			RT.a = round(RT.a * multi_a);
++			C = float4((uint4(int4(C)) & (cb.fbmask ^ 0xff)) | (uint4(RT) & cb.fbmask));
+ 		}
+ 	}
+ 
+@@ -1769,7 +1773,7 @@ fragment MainPSOut ps_main(
+ 			main.current_depth = ds_tex.read(coord).x;
+ 	}
+ 
+-	if (NEEDS_RT || (PS_ROV_COLOR && any(cb.fbmask == 0xff)))
++	if (NEEDS_RT)
+ 	{
+ 		if (PS_ROV_COLOR)
+ 		{
+@@ -1797,8 +1801,6 @@ fragment MainPSOut ps_main(
+ 		ds_rov.write(out.depth, coord);
+ 	if (PS_ROV_COLOR && !main.color_discarded)
+ 	{
+-		if (!PS_FBMASK)
+-			out.c0 = select(out.c0, main.current_color, cb.fbmask == 0xff);
+ 		if (ROV_NEEDS_R32)
+ 			rt_u32.write(pack_float_to_unorm4x8(out.c0), coord);
+ 		else
+diff --git a/pcsx2/ShaderCacheVersion.h b/pcsx2/ShaderCacheVersion.h
+index c08b953adb3756b389ef7562b43d4243b69071a2..d72f77753951d6f345641de4ec0f0e7a6246da5e 100644
+--- a/pcsx2/ShaderCacheVersion.h
++++ b/pcsx2/ShaderCacheVersion.h
+@@ -3,4 +3,4 @@
+ 
+ /// Version number for GS and other shaders. Increment whenever any of the contents of the
+ /// shaders change, to invalidate the cache.
+-static constexpr u32 SHADER_CACHE_VERSION = 109; // Last changed in PR 14795
++static constexpr u32 SHADER_CACHE_VERSION = 110; // Last changed by the cherry-pick of upstream PR 14743
