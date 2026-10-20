@@ -507,6 +507,7 @@ def cmd_run(args):
         crash = s["crash"]
         stubs = ", ".join(f"{n} x{c}" for n, c in s["stubs"]) or "none"
         run.notes += [f"reached: {s['reached']}", f"seconds: {s['seconds']:g}", f"fps_dispfb2: {fmt(s['fps_dispfb2'])}",
+                      f"gpu_presents_per_sec: {fmt(s.get('gpu_presents_per_sec'))}",
                       f"cpu_user_s: {fmt(s['cpu_user_s'])}", f"cpu_sys_s: {fmt(s['cpu_sys_s'])}",
                       f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
                       "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),

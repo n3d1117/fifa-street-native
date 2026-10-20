@@ -85,6 +85,9 @@ def parse_log(text):
     if vu:
         out["vu_fallbacks"] = int(vu[-1][0])
         out["fps_dispfb2"] = round(float(vu[-1][1]), 1) if float(vu[-1][1]) > 0 else None
+    presents = re.findall(r"\[gs-present\] frames=(\d+) over=([0-9.]+)s presents/s=([0-9.]+)", text)
+    if presents:
+        out["gpu_presents_per_sec"] = round(float(presents[-1][2]), 1)
     under = re.findall(r"\[spu2-health\].*?underrun=(\d+)", text)
     if under:
         out["audio_underruns"] = sum(int(n) for n in under)
@@ -464,7 +467,9 @@ def main():
             scene = "crash"
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
-        "fps_dispfb2": metrics.get("fps_dispfb2"), "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
+        "fps_dispfb2": metrics.get("fps_dispfb2"),
+        "gpu_presents_per_sec": metrics.get("gpu_presents_per_sec"),
+        "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
         "black_frames": f"{cap.black}/{cap.frames}" if cap.frames else None,

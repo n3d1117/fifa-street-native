@@ -4,6 +4,7 @@
 #include <cmath>
 #include <charconv>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -181,6 +182,20 @@ void MetalGsAdapter::vsync(const std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_R
     char error[1024]{};
     check(rrv_pcsx2_gs_bridge_vsync(handle_, regs.data(), field_index, parity, error, sizeof(error)),
           "vsync", error);
+    {
+        static auto lastReport = std::chrono::steady_clock::now();
+        static uint64_t lastPresented = 0;
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double>(now - lastReport).count();
+        if (elapsed >= 5.0) {
+            const auto current = stats().presented_frames;
+            const uint64_t delta = current - lastPresented;
+            std::fprintf(stderr, "[gs-present] frames=%llu over=%.1fs presents/s=%.2f\n",
+                         static_cast<unsigned long long>(delta), elapsed, delta / elapsed);
+            lastReport = now;
+            lastPresented = current;
+        }
+    }
     capture_vsync_regs = regs;
     capture_after_vsync(field_index);
 }
