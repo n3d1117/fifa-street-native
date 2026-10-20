@@ -1,3 +1,11 @@
+## Resume
+
+- Intent: gameplay. `./rx run --route match` reaches the Marseille match intro (scene: match = commentary stream opened); not yet verified that play runs (kickoff, moving players).
+- Verified: 0x2e0000 root cause fixed (false function splits from data-table guesses); route reaches match; menus show regular-dot texture artifacts (portraits, flags, pitch) to compare with PCSX2.
+- Blocker: audio underruns in the match (about 10k frames/s, route FAILs). Measured: the EE thread does not account cycles for 200-350 ms about once a second during the match (`advanceIopEeCycles` gaps), so IOP/SPU2 mixes in bursts (ring overrun plus underrun). Hypothesis: a blocking wait on the VU1/GS worker (VU1 interpreter is 70% of worker time, all `noimage` fallbacks) or CD/stream work on the EE thread; find it with `./rx run --profile` timed into the match (probe `--profile-after 190`).
+- Next: (1) find the periodic EE stall, advance IOP during it or remove it; (2) route: kickoff and held direction plus pass, detect play, capture a frame; (3) measure gameplay fps (`fps_dispfb2`, 20 s steady, no tracing) and record it; (4) dot pattern vs PCSX2; (5) startup underruns now count only after the first audible sample.
+- Gotchas: input hold 0.12 s (menu auto-repeat doubles longer presses); route timings are fixed delays (about 215 s total); `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
+
 ## Current
 
 | Area | State |
