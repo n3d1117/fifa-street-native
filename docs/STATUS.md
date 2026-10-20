@@ -1,17 +1,17 @@
 ## Resume
 
-- Intent: gameplay. `./rx run --route match` reaches the Marseille match intro (scene: match = commentary stream opened); not yet verified that play runs (kickoff, moving players).
-- Verified: 0x2e0000 root cause fixed (false function splits from data-table guesses); route reaches match; menus show regular-dot texture artifacts (portraits, flags, pitch) to compare with PCSX2.
-- Blocker: audio underruns in the match (about 10k frames/s, route FAILs). Measured: the EE thread does not account cycles for 200-350 ms about once a second during the match (`advanceIopEeCycles` gaps), so IOP/SPU2 mixes in bursts (ring overrun plus underrun). Hypothesis: a blocking wait on the VU1/GS worker (VU1 interpreter is 70% of worker time, all `noimage` fallbacks) or CD/stream work on the EE thread; find it with `./rx run --profile` timed into the match (probe `--profile-after 190`).
-- Next: (1) find the periodic EE stall, advance IOP during it or remove it; (2) route: kickoff and held direction plus pass, detect play, capture a frame; (3) measure gameplay fps (`fps_dispfb2`, 20 s steady, no tracing) and record it; (4) dot pattern vs PCSX2; (5) startup underruns now count only after the first audible sample.
-- Gotchas: input hold 0.12 s (menu auto-repeat doubles longer presses); route timings are fixed delays (about 215 s total); `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
+- Intent: reach and verify active match gameplay, then guard it in `./rx run --route match`.
+- Verified: the `0x2e0000` false function split is fixed; the route reaches the Marseille court and opens commentary data. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
+- Blocker: audio underruns remain severe. A profile sampled occasional EE waits in `DataStream::gsVsync`/`StreamRing::waitFor`, but most EE samples were guest code in `sub_003C18D0` and the data worker was usually idle; the observed wait does not explain the periodic cycle-accounting gaps.
+- Next: (1) reproduce and localize the cycle-accounting gaps during active play; (2) verify kickoff and player movement under scripted input, save a play frame, and guard the route on gameplay state; (3) measure gameplay fps over a steady window without tracing; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
+- Gotchas: `scene=match` means commentary data opened, not that gameplay began; route timing is fixed and takes about 3.5 minutes; FIFO presses last 0.12 s; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
 
 ## Current
 
 | Area | State |
 |---|---|
-| Engine | Builds on macOS arm64. Quick tests pass without a disc (see `./rx test`) |
-| Game | Recompiles and links (see `./rx build` for translation counts). Boots to the language menu; scripted Cross is accepted; EA SPORTS BIG and FIFA Street intro movies play with sound (SPU2 rms non-zero), then the legal screen, front-end menus and a loading screen. A crash follows (below). Match gameplay not verified |
+| Engine | Builds on macOS arm64. `./rx test --full` passes all 54 tests |
+| Game | `./rx run --route match` reaches the Marseille court and opens commentary data; the captured frame shows the court and players. Kickoff, player control and active gameplay are not verified. Audio underflows remain severe |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 
@@ -28,17 +28,11 @@
 
 ## Next
 
-1. **Crash after front-end music starts.** After `PRIME.MUS`/`RAM6.MUS` reads the main thread returns to guest pc `0x2e0000` (mid-function in `sub_002DE7F8`, not a function entry; `sub_00275EC8` loop calls a vtable entry through `jalr $a1`, then `jr $ra` lands there). Find the stack or vtable value that is wrong; suspects: sound-bank routines run by the EE interpreter, HLE return values.
-2. **Audio start-up underruns.** The first second reports a burst of underruns (host ring primed late); steady state is clean.
-3. **Movie striping.** Earlier frames showed line combing; the last runs did not. Re-check against PCSX2 deinterlace.
-4. **Menus and match.** Reach the main menu, start a match, then add `./rx run --route match` with scene checks.
-5. **Whole-game faithful pass** against PCSX2 behavior.
-6. **Performance.** Profile first. Native VU is a later step.
-7. **iOS/tvOS.** See the plan below.
+See the Resume block for the current blocker and ordered work.
 
 Diagnosis tools: `./rx run --seconds N` (N >= 8) puts a runtime state block (EE threads, semaphores, sampled pcs resolved to functions, DMA/VIF registers, IOP, recent RPC) in `summary.json` `state`; `PS2X_DUMP_MEM=<hexaddr>:<words>`, `PS2X_TRACE_SYSCALLS/RPC/CD_IO/FAULTS`, SIGUSR1 for a dump on demand. Code edits to headers the generated code includes (`ps2_runtime.h`, ...) cost a 5 minute rebuild; `.cpp` edits 3-10 s.
 
-Known risk: PCSX2 needs GIF FIFO and EE cycle-rate accuracy for FIFA Street 2; watch both.
+Known risk: GIF FIFO and EE cycle-rate accuracy need comparison against PCSX2.
 
 ## Open questions
 

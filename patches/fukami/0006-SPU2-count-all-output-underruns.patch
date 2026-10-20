@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 04:54:26 +0200
+Subject: [PATCH 6/6] SPU2: count all output underruns
+
+
+diff --git a/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp b/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
+index 5f009ddecf8f055e16c1d2573012bb815445fea6..ae5653b2566a920d559a3144e6f13f243916dc99 100644
+--- a/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
++++ b/tools/pcsx2-spu2/rrv_pcsx2_spu2.cpp
+@@ -453,7 +453,6 @@ struct rrv_spu2
+ 	// without consuming or counting underruns, so playback begins with a cushion
+ 	// against the producer's per-frame burstiness instead of a permanently empty ring.
+ 	bool output_primed{false};
+-	bool output_heard{false}; // consumer-thread only: a non-zero sample has been delivered
+ 	rrv_audio_stretcher audio_stretcher;
+ 	std::array<float, 64 * 2> stretch_input{};
+ 	size_t stretch_input_frames{};
+@@ -886,17 +885,10 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
+ 		dst[2 * i + 1] = s->ring[j + 1];
+ 	}
+ 	s->ring_tail.store(tail + avail, std::memory_order_release);
+-	if (!s->output_heard)
+-	{
+-		for (size_t i = 0; i < avail * 2 && !s->output_heard; i++)
+-			s->output_heard = dst[i] != 0.0f;
+-	}
+ 	if (avail < frames)
+ 	{
+ 		std::memset(dst + 2 * avail, 0, (frames - avail) * 2 * sizeof(float));
+-		// A gap before the first audible sample is silence either way (boot, while the IOP catches up).
+-		if (s->output_heard)
+-			s->underruns.fetch_add(frames - avail, std::memory_order_relaxed);
++		s->underruns.fetch_add(frames - avail, std::memory_order_relaxed);
+ 	}
+ 	return avail;
+ }

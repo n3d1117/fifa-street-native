@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 03:52:03 +0200
-Subject: [PATCH 5/5] spu2: time stretching off by default (bursty producer
+Subject: [PATCH 5/6] spu2: time stretching off by default (bursty producer
  made it drop frames); underruns counted only after the first audible sample
 
 
