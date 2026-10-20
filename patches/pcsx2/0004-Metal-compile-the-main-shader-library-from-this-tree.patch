@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 21:04:20 +0200
+Subject: [PATCH 4/4] Metal: compile the main shader library from this tree's
+ sources at runtime
+
+The bridge previously loaded PCSX2 v2.8.2 release metallibs, so shader changes in
+this tree never ran. The bridge build stages every .metal file inlined into one
+source (pcsx2-metal-shaders.metal); it is compiled with the options PCSX2's CMake
+uses for the macOS 11 library (Metal 2.3, fast math).
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSMTLDeviceInfo.mm b/pcsx2/GS/Renderers/Metal/GSMTLDeviceInfo.mm
+index 39edfaea10feb11cd1a27c175008db1f479bd5a4..367998f028160aa92b1c50799cb0a4b21959a613 100644
+--- a/pcsx2/GS/Renderers/Metal/GSMTLDeviceInfo.mm
++++ b/pcsx2/GS/Renderers/Metal/GSMTLDeviceInfo.mm
+@@ -8,36 +8,33 @@
+ 
+ #ifdef __APPLE__
+ 
+-static id<MTLLibrary> loadMainLibrary(id<MTLDevice> dev, NSString* name)
+-{
+-	// RRV's canonical package reader has established EmuFolders::Resources
+-	// from the verified bridge image. Do not consult the process bundle here:
+-	// that would make another package authoritative after relocation.
+-	std::string ssname = std::string([name UTF8String]) + ".metallib";
+-	std::string sspath = Path::Combine(EmuFolders::Resources, ssname);
+-	NSString* path = [[NSString alloc] initWithBytes:sspath.data() length:sspath.length() encoding:NSUTF8StringEncoding];
+-	id<MTLLibrary> library = [dev newLibraryWithFile:path error:nullptr];
+-	if (library)
+-	{
+-		std::fprintf(stderr, "RRV: selected packaged Metal library %s\n", sspath.c_str());
+-		std::fflush(stderr);
+-	}
+-	return library;
+-}
+-
+ static MRCOwned<id<MTLLibrary>> loadMainLibrary(id<MTLDevice> dev)
+ {
++	// RRV builds the shader library from this tree's own sources: the bridge build
++	// inlines every .metal file into one source, compiled here by the OS Metal
++	// compiler with the options PCSX2's CMake passes to `xcrun metal` for the
++	// macOS 11 library (-std=macos-metal2.3 -ffast-math). RRV's canonical package
++	// reader has established EmuFolders::Resources from the verified bridge image.
+ 	if (@available(macOS 11.0, iOS 14.0, *))
+-		if (id<MTLLibrary> lib = loadMainLibrary(dev, @"Metal23"))
+-			return MRCTransfer(lib);
+-	if (@available(macOS 10.15, iOS 13.0, *))
+-		if (id<MTLLibrary> lib = loadMainLibrary(dev, @"Metal22"))
+-			return MRCTransfer(lib);
+-	if (@available(macOS 10.14, iOS 12.0, *))
+-		if (id<MTLLibrary> lib = loadMainLibrary(dev, @"Metal21"))
++	{
++		const std::string sspath = Path::Combine(EmuFolders::Resources, "pcsx2-metal-shaders.metal");
++		NSError* err = nullptr;
++		NSString* source = [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:sspath.c_str()]
++		                                             encoding:NSUTF8StringEncoding
++		                                                error:&err];
++		if (!source)
++		{
++			std::fprintf(stderr, "RRV: cannot read Metal shader source %s\n", sspath.c_str());
++			return {};
++		}
++		MRCOwned<MTLCompileOptions*> options = MRCTransfer([MTLCompileOptions new]);
++		[options setLanguageVersion:MTLLanguageVersion2_3];
++		[options setFastMathEnabled:YES];
++		if (id<MTLLibrary> lib = [dev newLibraryWithSource:source options:options error:&err])
+ 			return MRCTransfer(lib);
+-	if (id<MTLLibrary> lib = loadMainLibrary(dev, @"default"))
+-		return MRCTransfer(lib);
++		std::fprintf(stderr, "RRV: Metal shader source %s failed to compile: %s\n", sspath.c_str(),
++			err ? [[err localizedDescription] UTF8String] : "unknown error");
++	}
+ 	return {};
+ }
+ 

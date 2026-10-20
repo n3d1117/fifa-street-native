@@ -283,8 +283,8 @@ def main():
         imports = run(["nm", "-u", runner], capture=True).stdout
         if "rrv_pcsx2_gs_bridge_create" not in imports:
             raise RuntimeError("runner does not import the PCSX2 GS bridge create API")
-        if not (bridge_resources / "default.metallib").is_file():
-            raise RuntimeError("bridge resources are incomplete (missing default.metallib)")
+        if not (bridge_resources / "pcsx2-metal-shaders.metal").is_file():
+            raise RuntimeError("bridge resources are incomplete (missing pcsx2-metal-shaders.metal)")
         for name in ("libc++.1.0.dylib", "libc++abi.1.0.dylib"):
             if not (LLVM_LIB / name).is_file():
                 raise RuntimeError("matching LLVM 19 C++ runtime is missing: " + str(LLVM_LIB / name))
@@ -297,11 +297,6 @@ def main():
         copy_fresh(LLVM_LIB / "libc++.1.0.dylib", runtime / "libc++.1.dylib")
         copy_fresh(LLVM_LIB / "libc++abi.1.0.dylib", runtime / "libc++abi.1.dylib")
         shutil.copytree(bridge_resources, frameworks / "PCSX2GSBridge/resources")
-        # Metal libraries are signed code objects on macOS even though they
-        # are data files rather than Mach-O images. Sign them before signing
-        # the containing bridge/app so deep strict verification can seal them.
-        for metallib in sorted((frameworks / "PCSX2GSBridge/resources").rglob("*.metallib")):
-            run(["codesign", "--force", "--sign", "-", metallib])
         if any(path.is_symlink() for path in game_dir.rglob("*")):
             raise RuntimeError("game extraction contains a symlink; refusing unsafe bundle copy")
         shutil.copytree(game_dir, resources / "game", copy_function=shutil.copy2)

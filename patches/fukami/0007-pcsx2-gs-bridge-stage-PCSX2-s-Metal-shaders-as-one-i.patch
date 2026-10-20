@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 21:04:20 +0200
+Subject: [PATCH 7/7] pcsx2-gs-bridge: stage PCSX2's Metal shaders as one
+ inlined source instead of release metallibs
+
+GSMTLDeviceInfo compiles the main library from resources/pcsx2-metal-shaders.metal
+at bridge start; inline_metal_sources.py expands quoted includes (with a depfile)
+because newLibraryWithSource takes one source string. Stale release metallibs are
+removed from the staged resources.
+
+diff --git a/tools/pcsx2-gs-bridge/CMakeLists.txt b/tools/pcsx2-gs-bridge/CMakeLists.txt
+index 933e90a640fbdbbf8b417c4b212b377964ed0077..702eacc232993f21c9dc719bc8a2e16515964203 100644
+--- a/tools/pcsx2-gs-bridge/CMakeLists.txt
++++ b/tools/pcsx2-gs-bridge/CMakeLists.txt
+@@ -58,17 +58,30 @@ add_custom_command(TARGET rrv-pcsx2-gs-bridge POST_BUILD
+ )
+ 
+ if(APPLE)
+-    foreach(metal_library IN ITEMS default.metallib Metal22.metallib Metal23.metallib)
+-        if(NOT EXISTS "${RRV_PCSX2_GS_METAL_RESOURCE_DIR}/${metal_library}")
+-            message(FATAL_ERROR
+-                "Missing ${metal_library}; set RRV_PCSX2_GS_METAL_RESOURCE_DIR "
+-                "to the Contents/Resources directory of the pinned PCSX2.app build")
+-        endif()
+-        add_custom_command(TARGET rrv-pcsx2-gs-bridge POST_BUILD
+-            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+-                    "${RRV_PCSX2_GS_METAL_RESOURCE_DIR}/${metal_library}"
+-                    "$<TARGET_FILE_DIR:rrv-pcsx2-gs-bridge>/resources/${metal_library}"
+-            VERBATIM
+-        )
+-    endforeach()
++    # PCSX2's Metal shaders are compiled at bridge start from this source tree
++    # (GSMTLDeviceInfo.mm); stage them as one inlined source beside the bridge.
++    find_package(Python3 REQUIRED COMPONENTS Interpreter)
++    get_property(rrv_metal_shaders GLOBAL PROPERTY PCSX2_METAL_SHADERS)
++    get_property(rrv_pcsx2_source_dir GLOBAL PROPERTY PCSX2_SOURCE_DIR)
++    list(TRANSFORM rrv_metal_shaders PREPEND "${rrv_pcsx2_source_dir}/")
++    set(rrv_metal_source "${CMAKE_CURRENT_BINARY_DIR}/pcsx2-metal-shaders.metal")
++    add_custom_command(OUTPUT "${rrv_metal_source}"
++        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/inline_metal_sources.py"
++                "${rrv_metal_source}" "${rrv_metal_source}.d" ${rrv_metal_shaders}
++        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/inline_metal_sources.py" ${rrv_metal_shaders}
++        DEPFILE "${rrv_metal_source}.d"
++        VERBATIM
++    )
++    add_custom_target(rrv-pcsx2-metal-source DEPENDS "${rrv_metal_source}")
++    add_dependencies(rrv-pcsx2-gs-bridge rrv-pcsx2-metal-source)
++    add_custom_command(TARGET rrv-pcsx2-gs-bridge POST_BUILD
++        COMMAND "${CMAKE_COMMAND}" -E rm -f
++                "$<TARGET_FILE_DIR:rrv-pcsx2-gs-bridge>/resources/default.metallib"
++                "$<TARGET_FILE_DIR:rrv-pcsx2-gs-bridge>/resources/Metal22.metallib"
++                "$<TARGET_FILE_DIR:rrv-pcsx2-gs-bridge>/resources/Metal23.metallib"
++        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
++                "${rrv_metal_source}"
++                "$<TARGET_FILE_DIR:rrv-pcsx2-gs-bridge>/resources/pcsx2-metal-shaders.metal"
++        VERBATIM
++    )
+ endif()
+diff --git a/tools/pcsx2-gs-bridge/inline_metal_sources.py b/tools/pcsx2-gs-bridge/inline_metal_sources.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..fdd7cc2287766186fe43b716134f3120e7dc006e
+--- /dev/null
++++ b/tools/pcsx2-gs-bridge/inline_metal_sources.py
+@@ -0,0 +1,49 @@
++#!/usr/bin/env python3
++"""Inline PCSX2's Metal shader sources into one translation unit.
++
++MTLDevice newLibraryWithSource: compiles a single source string and cannot
++resolve quoted #include files, so every quoted include is expanded in place
++(honouring #pragma once) and the shaders are concatenated in PCSX2's CMake
++order. System includes such as <metal_stdlib> are left for the compiler.
++
++usage: inline_metal_sources.py OUTPUT DEPFILE SHADER...
++"""
++import pathlib
++import re
++import sys
++
++INCLUDE = re.compile(r'\s*#\s*include\s+"([^"]+)"')
++
++
++def main() -> int:
++    output, depfile, *shaders = sys.argv[1:]
++    if not shaders:
++        raise SystemExit(__doc__)
++    once: set[pathlib.Path] = set()
++    inputs: list[pathlib.Path] = []
++
++    def expand(path: pathlib.Path) -> str:
++        path = path.resolve()
++        inputs.append(path)
++        lines = []
++        for line in path.read_text(encoding="utf-8").splitlines():
++            if line.strip() == "#pragma once":
++                if path in once:
++                    return ""
++                once.add(path)
++                continue
++            match = INCLUDE.match(line)
++            lines.append(expand(path.parent / match.group(1)) if match else line)
++        return "\n".join(lines)
++
++    text = "\n".join(expand(pathlib.Path(shader)) for shader in shaders) + "\n"
++    out = pathlib.Path(output)
++    if not out.exists() or out.read_text(encoding="utf-8") != text:
++        out.write_text(text, encoding="utf-8")
++    deps = " ".join(str(p).replace(" ", "\\ ") for p in dict.fromkeys(inputs))
++    pathlib.Path(depfile).write_text(f"{str(out).replace(' ', chr(92) + ' ')}: {deps}\n", encoding="utf-8")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())

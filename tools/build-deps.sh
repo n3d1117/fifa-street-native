@@ -3,7 +3,7 @@
 # sources. Idempotent: each section is skipped when its output already exists.
 #   tools/build-deps.sh                      # build what is missing
 #   RX_FORCE="bridge spu2" tools/build-deps.sh   # rebuild named sections
-# Sections: ffmpeg metal-deps metal-resources bridge spu2
+# Sections: ffmpeg metal-deps bridge spu2
 # Needs: toolchain/bootstrap.sh done (or RX_LLVM set), `python3 tools/deps.py sync` done.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -151,18 +151,11 @@ PY
   echo "Pinned static dependency prefix ready: $prefix"
 }
 
-# --------------------------------------------------------- metal-resources
-# Provenance-checked PCSX2 v2.8.2 Metal shaders (pinned release asset + sha256).
-build_metal_resources() {
-  python3 -I "$ROOT/tools/prepare-metal-bridge.py"
-}
-
 # ----------------------------------------------------------------- bridge
 # Metal GS bridge from deps/pcsx2 (deps/fukami supplies the bridge target).
 build_bridge() {
   local pcsx2="$ROOT/deps/pcsx2" bridge="$ROOT/deps/fukami/tools/pcsx2-gs-bridge"
   local build="$ROOT/build/metal-bridge/pcsx2"
-  local resources="$ROOT/build/metal-bridge/pcsx2-2.8.2-resources"
   local deps_prefix="$ROOT/tools/metal-deps/prefix"
   [[ -d "$pcsx2/.git" && -d "$bridge" ]] || { echo 'Missing deps/; run python3 tools/deps.py sync' >&2; exit 1; }
   # The dylib carries a relative LLVM runtime rpath instead of an absolute one.
@@ -178,7 +171,6 @@ build_bridge() {
     -DENABLE_QT_UI=OFF -DENABLE_TESTS=OFF -DENABLE_GSRUNNER=OFF \
     -DUSE_VULKAN=OFF -DSKIP_POSTPROCESS_BUNDLE=ON \
     -DRRV_PCSX2_GS_BRIDGE_SOURCE_DIR="$bridge" \
-    -DRRV_PCSX2_GS_METAL_RESOURCE_DIR="$resources" \
     -DPCSX2_COMPILER_RT_OS_VERSION_CHECK_SOURCE="$ROOT/tools/metal-deps/compat/llvm19-os_version_check.c" \
     -DCMAKE_EXE_LINKER_FLAGS="$link" \
     -DCMAKE_SHARED_LINKER_FLAGS="$link" \
@@ -205,11 +197,10 @@ build_spu2() {
 }
 
 # ------------------------------------------------------------------- main
-RES="$ROOT/build/metal-bridge/pcsx2-2.8.2-resources"
 if needed ffmpeg "$ROOT/tools/ffmpeg/arm64/lib/libavcodec.a"; then build_ffmpeg; fi
 if needed metal-deps "$ROOT/tools/metal-deps/prefix/metal-deps-manifest.json"; then (build_metal_deps); fi
-if needed metal-resources "$RES/default.metallib" "$RES/Metal22.metallib" "$RES/Metal23.metallib"; then build_metal_resources; fi
 if needed bridge "$ROOT/build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib" \
+    "$ROOT/build/metal-bridge/pcsx2/pcsx2-gs-bridge/resources/pcsx2-metal-shaders.metal" \
     "$ROOT/build/metal-bridge/pcsx2/3rdparty/soundtouch/libpcsx2-soundtouch.a"; then build_bridge; fi
 if needed spu2 "$ROOT/build/spu2-backend/librrv_pcsx2_spu2.a"; then build_spu2; fi
 echo "== build-deps done"
