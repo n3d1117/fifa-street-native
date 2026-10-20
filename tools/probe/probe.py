@@ -55,6 +55,9 @@ ROUTES = {"match": {
               (2, 5, .12, "SELECT VENUE|MY RULES"), (2, 5, .12, "MY RULES")],
     "play_steps": [(3, 20, 12.0), (1, 19, 12.0)], "tail": 35, "timeout": 240,
     "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
+# --match: the language Cross is the only menu input; the host's PS2X_BOOT_MATCH hook starts the match once the
+# front end has loaded (docs/internals.md "Boot to match"). Intro skip and play steps are shared with `match`.
+ROUTES["match-boot"] = dict(ROUTES["match"], steps=[(4, 5, .12, "DEUTSCH")], timeout=90, sample_start=3.0, sample_every=2.0, intro_every=2.0)
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
 TOOL_FRAMEWORKS = {
@@ -327,6 +330,8 @@ def main():
     ap.add_argument("--profile-after", type=float, default=10)
     ap.add_argument("--keep-running-on-failure", action="store_true")
     ap.add_argument("--route", choices=sorted(ROUTES), help="scripted input: language menu -> front end -> quick match")
+    ap.add_argument("--match", action="store_true",
+                    help="boot straight into live match play (PS2X_BOOT_MATCH hook, isolated user dir only); implies --route match-boot")
     args = ap.parse_args()
     if args.quit_at_end and not args.app:
         ap.error("--quit-at-end needs --app")
@@ -334,6 +339,14 @@ def main():
         ap.error("--runner and --app are mutually exclusive")
     if args.save and args.user_dir:
         ap.error("--save and --user-dir cannot be combined")
+    if args.match:
+        if args.route and args.route != "match-boot":
+            ap.error("--match implies --route match-boot")
+        if args.app:
+            ap.error("--match is a diagnostic of the checkout runner, not the installed app")
+        if args.user_dir and args.user_dir.resolve() == REAL_SUPPORT.resolve():
+            ap.error("--match needs an isolated user dir, never the real save directory")
+        args.route = "match-boot"
     fixture_cards = None
     if args.save:
         fixture = args.save.resolve()
@@ -362,6 +375,10 @@ def main():
     env.setdefault("PS2X_TRACE_FAULTS", "1")
     env.setdefault("PS2X_TRACE_SPU2", "1")
     fifo_path = out / "input.fifo"
+    if args.match:
+        env["PS2X_BOOT_MATCH"] = "venue=3"
+    else:
+        env.pop("PS2X_BOOT_MATCH", None)
     if args.route:
         os.mkfifo(fifo_path)
         env["PS2X_DIAGNOSTIC_INPUT_FIFO"] = str(fifo_path)
@@ -413,7 +430,7 @@ def main():
     gameplay_input_key = None
     route_inputs = []
     intro_skip_at = None
-    next_black = started + BLACK_SAMPLE_START
+    next_black = started + ((route or {}).get("sample_start", BLACK_SAMPLE_START))
     seen_len = 0
     last_log_check = 0.0
     text_now = ""
@@ -472,7 +489,7 @@ def main():
                 elif (fifo_fd is not None and not steps and not release_at and cap.match_clock is None and
                       route["scene_marker"] in text_now and
                       re.search(r"MAR[5S]E[I1].*L", "\n".join(cap.labels)) and
-                      (intro_skip_at is None or now >= intro_skip_at + 5)):
+                      (intro_skip_at is None or now >= intro_skip_at + route.get("intro_every", 5))):
                     os.write(fifo_fd, struct.pack("<I", 1 << 5))
                     release_at = now + 1.0
                     intro_skip_at = now
@@ -497,7 +514,7 @@ def main():
                 cap.sample(proc.pid)
                 if route and play_steps and play_step_at is None and cap.gameplay_confirmed:
                     play_step_at = time.monotonic() + play_steps[0][0]
-                next_black = time.monotonic() + BLACK_SAMPLE_EVERY
+                next_black = time.monotonic() + (route or {}).get("sample_every", BLACK_SAMPLE_EVERY)
             time.sleep(0.04 if route else 0.2)
     finally:
         quit_ok = None
@@ -588,6 +605,8 @@ def main():
         "route_inputs": route_inputs if route else None,
         "route_waiting_for": steps[0][3] if route and steps else None,
         "gameplay_wall_seconds": round(gameplay_at - started, 3) if gameplay_at is not None else None,
+        "time_to_play_s": cap.clock_observations[0]["wall_seconds"] if route and cap.clock_observations else None,
+        "boot_match": re.findall(r"\[boot-match\] .*", text)[:4] if args.match else None,
         "scene": scene, "commentary_open": commentary_open if route else None,
         "gameplay_confirmed": cap.gameplay_confirmed if route else None,
         "match_clock_seconds": cap.match_clock if route else None,

@@ -496,6 +496,8 @@ def cmd_run(args):
             cmd.append("--profile")
         if args.route:
             cmd += ["--route", args.route]
+        if args.match:
+            cmd.append("--match")
         rc = run.sh(cmd)
         if rc == 2:
             raise Missing(run.last_message())
@@ -514,6 +516,8 @@ def cmd_run(args):
                       f"stubs: {stubs}"]
         if s.get("scene"):
             run.notes.append(f"scene: {s['scene']}")
+        if args.match:
+            run.notes.append(f"time_to_play_s: {fmt(s.get('time_to_play_s'))} (first HUD clock reading; confirmed at {fmt(s.get('gameplay_wall_seconds'))})")
         vu1 = s.get("vu1") or {}
         if vu1.get("diff_calls") or os.environ.get("PS2X_VU1_DIFF", "0") not in ("", "0"):
             run.notes.append(f"vu1_diff: calls={vu1.get('diff_calls', 0)} "
@@ -578,6 +582,8 @@ def main():
     r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")
     r.add_argument("--profile", action="store_true")
     r.add_argument("--route", choices=["match"], help="scripted input from the language menu to a quick match; fails unless the match scene opens")
+    r.add_argument("--match", action="store_true",
+                   help="diagnostic: boot straight into live match play in an isolated user dir (PS2X_BOOT_MATCH hook); reports time_to_play_s")
     r.add_argument("--app")
     r.add_argument("--quit-cycles", type=int, metavar="N",
                    help="with --app: N launch -> AppleEvent quit cycles; fails on non-zero exit or new crash report")

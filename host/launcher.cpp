@@ -21,6 +21,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+bool ps2x_boot_match_install(PS2Runtime &runtime, const std::filesystem::path &elfPath,
+                             const std::filesystem::path &userDir, const std::filesystem::path &realUserDir);
+
 namespace
 {
 // When this executable is Contents/MacOS/<name> of an app bundle, the game
@@ -280,6 +283,12 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         ioPaths.mcRoot = memoryCardDirectory;
         PS2Runtime::setIoPaths(ioPaths);
 
+        {
+            // Diagnostic only: inert unless `./rx run --match` set PS2X_BOOT_MATCH.
+            std::filesystem::path realUserDirectory;
+            try { realUserDirectory = defaultUserDirectory(); } catch (const std::exception &) {}
+            ps2x_boot_match_install(runtime, elfPath, userDirectory, realUserDirectory);
+        }
         std::cout << "Game ELF: " << elfPath << std::endl;
         std::cout << "Memory cards: " << memoryCardDirectory << std::endl;
         runtime.run();
