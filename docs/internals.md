@@ -87,6 +87,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_TRACE_SYSCALLS=1`, `PS2X_TRACE_RPC=1` | first calls per EE syscall number; first 2000 SIF RPC events |
 | `PS2X_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture |
 | `PS2X_AUDIO_STRETCH=1` | enable adaptive audio time stretching (off by default) |
+| `RRV_PCSX2_GS_PRESENT_MIN_US=<us>` | minimum interval between host presents (default 8000, 0 disables); frames closer than this are skipped so a burst of catch-up VBlanks cannot block the EE on `nextDrawable` |
 | `PS2X_VU1_WORKER=0\|sync` | inline or drained data side |
 | `PS2X_GS_VERIFY=1` | eager GS readback verify |
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |
@@ -117,6 +118,10 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Texture dashes as EE-side corruption (MMI ops, DMA, uploads, refpack): uploads and GS local memory match the disc byte for byte; the error was PCSX2 v2.8.2's Metal FBMask truncating RT alpha.
 - Sampling `SDL_GetAudioStreamQueued` at the health interval: callback-driven playback drains the stream immediately, so it does not report device or OS queue depth.
 - EE alarm host-deadline waits as the cause of startup audio gaps: tracing observed no long waits in `processDueDeadlines` during those gaps.
+
+- Metal pipeline or shader compilation as the cause of audio underrun bursts: `newRenderPipelineStateWithDescriptor` took at most 0.6 ms and `newFunctionWithName` under 3 ms in bursting runs; the stall was `[CAMetalLayer nextDrawable]` blocking the GS worker (EE waits for it in the `GS vsync` drain) after a catch-up burst of presents.
+- The upstream `RRV_PCSX2_GS_PRESENT_THROTTLE`/`ShouldSkipPresentingFrame` as the fix: it only acts with FIFO vsync, which the host does not enable, so it was a no-op (6 of 6 runs still burst).
+- CD reads and VU1/GS command traffic as the burst cause: `[cd-io]` reads take about 100 us and no stream-ring op exceeded 5 ms apart from `GsVsync`.
 
 ## Function discovery and SDK binding (stripped ELF)
 

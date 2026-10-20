@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Wed, 21 Oct 2026 01:18:22 +0200
+Subject: [PATCH 7/7] Metal: skip host presents closer than 8 ms so catch-up
+ VBlanks cannot block the EE on nextDrawable
+
+After a guest stall (the splash load, ~1 s) the missed VBlanks are delivered back to back. Each reached BeginPresent; with the drawable pool exhausted nextDrawable blocked the GS worker one refresh per frame and the EE, which drains the worker at every VSync, stalled ~250 ms. IOP/SPU2 mixing runs on the EE thread, so the 2000-frame audio ring ran dry (bursts of 1000-12000 underruns in about half of runs). GS state and Merge are unchanged; only the host present is skipped. RRV_PCSX2_GS_PRESENT_MIN_US=0 disables.
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index 55b4aac51abd7fedefba72d7de951cd72fae478f..60796ac1c11bb6cd14f924e0e3dc411915b340d1 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -1778,11 +1778,36 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+ 
+ static bool s_capture_next = false;
+ 
++// RRV: host presentation must not block the guest. After the guest stalls
++// (a long load), its missed VBlanks are delivered back to back and each one
++// reaches BeginPresent. With the drawable pool exhausted, nextDrawable then
++// blocks the GS worker for one display refresh per frame and the EE, which
++// drains the worker at every VSync, stalls with it (~250 ms; IOP/SPU2 mixing
++// runs on the EE thread, so audio underruns). Frames closer together than the
++// minimum interval cannot be shown separately, so they are skipped like
++// PCSX2's own ShouldSkipPresentingFrame skips frames when vsync is on; guest
++// GS state and Merge() are unaffected. RRV_PCSX2_GS_PRESENT_MIN_US=0 disables.
++static bool RrvShouldSkipFloodedPresent()
++{
++	static const double min_interval = [] {
++		const char* v = std::getenv("RRV_PCSX2_GS_PRESENT_MIN_US");
++		return (v && v[0] ? std::strtod(v, nullptr) : 8000.0) * 1e-6;
++	}();
++	static double last = 0.0;
++	if (min_interval <= 0.0)
++		return false;
++	const double now = CACurrentMediaTime();
++	if (last != 0.0 && now - last < min_interval)
++		return true;
++	last = now;
++	return false;
++}
++
+ GSDevice::PresentResult GSDeviceMTL::BeginPresent(bool frame_skip)
+ { @autoreleasepool {
+ 	if (m_capture_start_frame && FrameNo() == m_capture_start_frame)
+ 		s_capture_next = true;
+-	if (frame_skip || m_window_info.type == WindowInfo::Type::Surfaceless || !g_gs_device)
++	if (frame_skip || m_window_info.type == WindowInfo::Type::Surfaceless || !g_gs_device || RrvShouldSkipFloodedPresent())
+ 	{
+ 		ImGui::EndFrame();
+ 		return PresentResult::FrameSkipped;
