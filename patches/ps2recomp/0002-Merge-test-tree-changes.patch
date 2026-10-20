@@ -5,11 +5,11 @@ Subject: [PATCH 02/82] Merge test-tree changes
 
 
 diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
-index 4afccc3aa42ab5090a6314cf8b57bc4a3e388960..4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64 100644
+index b5bfafac541c51395c8f7439f1b8768003324db2..e279fa1d7e67749b788a14e60ae3a640f5969557 100644
 --- a/ps2xTest/CMakeLists.txt
 +++ b/ps2xTest/CMakeLists.txt
-@@ -40,6 +40,12 @@ add_library(ps2_test_lib STATIC
-     src/ps2_runtime_expansion_tests.cpp
+@@ -41,6 +41,12 @@ add_library(ps2_test_lib STATIC
+     src/ps2_float_semantics_tests.cpp
  )
  
 +# Exercise native VU helpers with the shipping arithmetic contract.

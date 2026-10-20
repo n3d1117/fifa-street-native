@@ -57,7 +57,7 @@ index 857102a22d61a920d315379b93b2e9befca63098..c0072efcb2f9dc19551ac491a1b5893e
  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
      EnableFastReleaseMode(ps2_recomp_lib)
 diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
-index 4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64..8057d01951ccd24c1fac6ee91615b934187d1cd8 100644
+index e279fa1d7e67749b788a14e60ae3a640f5969557..715d94dcb8b010ababea73dc7f1f543b7fa6dc68 100644
 --- a/ps2xTest/CMakeLists.txt
 +++ b/ps2xTest/CMakeLists.txt
 @@ -16,8 +16,8 @@ add_library(ps2_test_function_table OBJECT
@@ -71,7 +71,7 @@ index 4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64..8057d01951ccd24c1fac6ee91615b934
  )
  
  add_library(ps2_test_lib STATIC
-@@ -48,10 +48,10 @@ endif()
+@@ -49,10 +49,10 @@ endif()
  
  target_include_directories(ps2_test_lib PRIVATE
      ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -86,7 +86,7 @@ index 4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64..8057d01951ccd24c1fac6ee91615b934
  )
  
  target_link_libraries(ps2_test_lib PRIVATE
-@@ -79,9 +79,9 @@ endif()
+@@ -80,9 +80,9 @@ endif()
  
  target_include_directories(ps2x_tests PRIVATE
      ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -99,7 +99,7 @@ index 4c113c3fe142e1f7f6fc0d134fc0e0c2dabd7c64..8057d01951ccd24c1fac6ee91615b934
  )
  
  target_link_libraries(ps2x_tests PRIVATE
-@@ -104,7 +104,7 @@ if(COMMAND ps2x_stage_ffmpeg_runtime_dlls)
+@@ -105,7 +105,7 @@ if(COMMAND ps2x_stage_ffmpeg_runtime_dlls)
      ps2x_stage_ffmpeg_runtime_dlls(ps2x_tests)
  endif()
  

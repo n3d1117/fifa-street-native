@@ -2253,17 +2253,17 @@ index af3346b265c236bc7602c265a87831de3a34a7c9..b442b7dd8c9887ca44ffafafe2de5b9c
          {"Newest registered minor wins within the requested major", newestMinor},
          {"Ordinal lookup stays in the selected table", missingOrdinal},
 diff --git a/ps2xRecomp/src/lib/fpu_translator.cpp b/ps2xRecomp/src/lib/fpu_translator.cpp
-index 944cee7966f095d8358602c9c5cbfc6cb1a0f326..db8b6bebb3387ae1b86f1616aa72d4fc3a2d2c2c 100644
+index 435db3aa9367d8571161577ddfaadbe8e355f759..db8b6bebb3387ae1b86f1616aa72d4fc3a2d2c2c 100644
 --- a/ps2xRecomp/src/lib/fpu_translator.cpp
 +++ b/ps2xRecomp/src/lib/fpu_translator.cpp
 @@ -53,12 +53,30 @@ namespace ps2recomp
              case COP1_S_MUL:
                  return fmt::format("ctx->f[{}] = FPU_MUL_S(ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
              case COP1_S_DIV:
--                return fmt::format("if (ctx->f[{}] == 0.0f) {{ ctx->fcr31 |= 0x100000; /* DZ flag */ "
--                                   "ctx->f[{}] = copysignf(INFINITY, ctx->f[{}] * 0.0f); }} "
--                                   "else ctx->f[{}] = ctx->f[{}] / ctx->f[{}];",
--                                   ft, fd, fs, fd, fs, ft);
+-                // The EE has no Inf/NaN: x/0 gives +-max (sign of fs xor ft), see ps2_fdiv.
+-                return fmt::format("{{ if (ctx->f[{}] == 0.0f) ctx->fcr31 |= 0x100000; /* DZ flag */ "
+-                                   "ctx->f[{}] = FPU_DIV_S(ctx->f[{}], ctx->f[{}]); }}",
+-                                   ft, fd, fs, ft);
 +                // R5900 DIV.S treats zero and denormal divisors as zero and
 +                // saturates the quotient to signed FLT_MAX. Capture both
 +                // operands before writing Fd so Fs/Ft/Fd aliases are safe.
@@ -2292,11 +2292,12 @@ index 944cee7966f095d8358602c9c5cbfc6cb1a0f326..db8b6bebb3387ae1b86f1616aa72d4fc
              case COP1_S_ABS:
                  return fmt::format("ctx->f[{}] = FPU_ABS_S(ctx->f[{}]);", fd, fs);
              case COP1_S_MOV:
-@@ -76,7 +94,17 @@ namespace ps2recomp
+@@ -76,8 +94,17 @@ namespace ps2recomp
              case COP1_S_CVT_W:
                  return fmt::format("{{ int32_t tmp = FPU_CVT_W_S(ctx->f[{}]); std::memcpy(&ctx->f[{}], &tmp, sizeof(tmp)); }}", fs, fd);
              case COP1_S_RSQRT:
--                return fmt::format("ctx->f[{}] = 1.0f / sqrtf(ctx->f[{}]);", fd, fs);
+-                // RSQRT.S fd, fs, ft computes fs / sqrt(ft), not 1 / sqrt(fs).
+-                return fmt::format("ctx->f[{}] = FPU_RSQRT_S(ctx->f[{}], ctx->f[{}]);", fd, fs, ft);
 +                // R5900 RSQRT.S is Fs / sqrt(abs(Ft)), not the unary
 +                // reciprocal-square-root operation.  The EE treats zero and
 +                // denormal Ft as zero, returning FLT_MAX with Ft's sign.
@@ -10056,7 +10057,7 @@ index 0000000000000000000000000000000000000000..d48aa4e4e634ae65e6500c236b7947a8
 +    m_lastStatsTime = t;
 +}
 diff --git a/ps2xTest/CMakeLists.txt b/ps2xTest/CMakeLists.txt
-index 5db04b9230d3a7632842c54cffaf36b3b5aa9460..4afccc3aa42ab5090a6314cf8b57bc4a3e388960 100644
+index 3eaa8b3d28a3cdab3a97f4d9a1e03fec39d44164..b5bfafac541c51395c8f7439f1b8768003324db2 100644
 --- a/ps2xTest/CMakeLists.txt
 +++ b/ps2xTest/CMakeLists.txt
 @@ -29,6 +29,7 @@ add_library(ps2_test_lib STATIC
@@ -10266,7 +10267,7 @@ index 463b6cff1a92fd7ad08e606c2a92ef8331244624..4103355a9dd83c1c29d9a2e07a8f0869
  
          tc.Run("JAL to known function emits call and check", [](TestCase &t) {
 diff --git a/ps2xTest/src/main.cpp b/ps2xTest/src/main.cpp
-index 40a68b16bdac8236795edfdab8f7c483e0934843..cd1eb4cd31ab5d1872f9fe98795eeb3f98966880 100644
+index 7b78891488145a1727991e58de9b334c158bd0d7..1ed2a16864ff0b7a85a4abae6466bdbff6502fe1 100644
 --- a/ps2xTest/src/main.cpp
 +++ b/ps2xTest/src/main.cpp
 @@ -10,6 +10,7 @@ void register_ps2_runtime_io_tests();
@@ -10277,7 +10278,7 @@ index 40a68b16bdac8236795edfdab8f7c483e0934843..cd1eb4cd31ab5d1872f9fe98795eeb3f
  void register_ps2_vu1_tests();
  void register_ps2_vu_tests();
  void register_ps2_gs_tests();
-@@ -32,6 +33,7 @@ int main()
+@@ -33,6 +34,7 @@ int main()
      register_ps2_runtime_kernel_tests();
      register_ps2_runtime_interrupt_tests();
      register_ps2_memory_tests();
