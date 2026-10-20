@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:13:49 +0200
-Subject: [PATCH 18/78] upstream #320: fix(runtime): keep VU0 vf0 hardwired to
+Subject: [PATCH 18/79] upstream #320: fix(runtime): keep VU0 vf0 hardwired to
  (0, 0, 0, 1)
 
 Kept our equivalent LDC2/LQC2 vf0 handling; took the rest.
