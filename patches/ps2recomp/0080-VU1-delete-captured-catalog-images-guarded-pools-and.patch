@@ -1,0 +1,938 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 20 Oct 2026 14:04:01 +0200
+Subject: [PATCH 80/80] VU1: delete captured-catalog images, guarded pools and
+ capture; programs are the only native path
+
+
+diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
+index 9301b870e4b773e8df47c68d93bad94bdb12ad09..006848a9ce39606773f187e054033bbaf6b5f9dd 100644
+--- a/ps2xRuntime/CMakeLists.txt
++++ b/ps2xRuntime/CMakeLists.txt
+@@ -554,28 +554,12 @@ target_link_libraries(ps2EntryRunner
+ )
+ 
+ # Compile disc-derived VU1 recompilations into the runner so static registrars survive.
+-set(PS2X_VU1_CATALOG_DIR "" CACHE PATH "VU1 catalog directory (index.txt + <hash>.vu1)")
+ set(PS2X_VU1_GENERATOR "" CACHE FILEPATH "Path to tools/vu1recomp/vu1recomp.py")
+ set(PS2X_VU1GEN_DIR "" CACHE PATH "Directory holding generated VU1 microprogram C++")
+ set(PS2X_VU1_PROGRAM_EXTRACTOR "" CACHE FILEPATH "Path to tools/vu/extract-programs.py")
+ set(PS2X_VU1_PROGRAM_DIR "" CACHE PATH "Directory for extracted VU1 microprograms")
+ set(PS2X_DISC_DIR "" CACHE PATH "Extracted disc root")
+ if(PS2X_VU1GEN_DIR)
+-    if(PS2X_VU1_CATALOG_DIR AND PS2X_VU1_GENERATOR AND EXISTS "${PS2X_VU1_CATALOG_DIR}/index.txt")
+-        find_package(Python3 COMPONENTS Interpreter REQUIRED)
+-        get_filename_component(PS2X_VU1_GENERATOR_DIR "${PS2X_VU1_GENERATOR}" DIRECTORY)
+-        execute_process(
+-            COMMAND "${Python3_EXECUTABLE}" "${PS2X_VU1_GENERATOR}"
+-                    --catalog "${PS2X_VU1_CATALOG_DIR}" --out "${PS2X_VU1GEN_DIR}"
+-            RESULT_VARIABLE PS2X_VU1_GEN_RESULT)
+-        if(NOT PS2X_VU1_GEN_RESULT EQUAL 0)
+-            message(WARNING "vu1recomp failed (${PS2X_VU1_GEN_RESULT}); VU1 will use the interpreter")
+-        endif()
+-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+-            "${PS2X_VU1_CATALOG_DIR}/index.txt"
+-            "${PS2X_VU1_GENERATOR}"
+-            "${PS2X_VU1_GENERATOR_DIR}/vu1decode.py")
+-    endif()
+     # Position-independent microprograms derived from the boot ELF and DATA/INITSTAZ.BIG.
+     if(PS2X_VU1_PROGRAM_EXTRACTOR AND PS2X_VU1_GENERATOR AND PS2X_VU1_PROGRAM_DIR AND PS2X_DISC_DIR
+        AND EXISTS "${PS2X_DISC_DIR}/DATA/INITSTAZ.BIG")
+@@ -600,7 +584,7 @@ if(PS2X_VU1GEN_DIR)
+             "${PS2X_VU1_GENERATOR}"
+             "${PS2X_VU1_GENERATOR_DIR}/vu1decode.py")
+     endif()
+-    file(GLOB PS2X_VU1GEN_SOURCES CONFIGURE_DEPENDS "${PS2X_VU1GEN_DIR}/vu1rec_*.cpp" "${PS2X_VU1GEN_DIR}/vu1prog_*.cpp")
++    file(GLOB PS2X_VU1GEN_SOURCES CONFIGURE_DEPENDS "${PS2X_VU1GEN_DIR}/vu1prog_*.cpp")
+     if(PS2X_VU1GEN_SOURCES)
+         target_sources(ps2EntryRunner PRIVATE ${PS2X_VU1GEN_SOURCES})
+         set_source_files_properties(${PS2X_VU1GEN_SOURCES} PROPERTIES
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1_recomp.h b/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
+index c446788e8b24fbf94319b214e1e6d644a2413667..8af4a90d2c73595a445433cf266be9aaad58eb7e 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
+@@ -3,24 +3,19 @@
+ 
+ // Native (statically recompiled) VU1 microprograms.
+ //
+-// Generated sources (work/vu1gen/vu1rec_<hash>.cpp, produced by
+-// game/tools/vu1recomp/vu1recomp.py from a locally captured VU1 catalog)
+-// register themselves here keyed by the FNV-1a hash of the 16 KiB VU1 micro
+-// memory image.  The MSCAL path looks the image up (hash recomputed only when
+-// PS2Memory's VU1 code generation changes) and runs the native function for the
+-// requested start PC, or falls back to VU1Interpreter and counts the fallback.
++// Generated sources (vu1prog_<name>.cpp, produced from the disc by
++// tools/vu/vu1recomp.py --programs) register position-independent microprograms
++// here.  MSCAL/MSCNT find the program whose words sit in micro memory around the
++// requested PC and run it, or fall back to VU1Interpreter and count the fallback.
+ //
+ // Env switches:
++//   PS2X_VU1_PROGRAMS=0     disable native programs (interpreter only)
+ //   PS2X_VU1_INTERPRETER=1  force the interpreter (comparison / bisecting)
+ //   PS2X_VU1_DIFF=1         differential test: every MSCAL runs native code and
+ //                           the interpreter on identical copies and compares
+ //                           GIF packets, registers, flags, data memory, cycles.
+ //   PS2X_VU1_DIFF_LOG=<n>   number of mismatching calls to log in detail (default 8)
+ //   PS2X_VU1_STATS=<sec>    print counters every <sec> seconds (default 5, 0 = off)
+-//   PS2X_VU1_CAPTURE=<dir>  write sampled MSCAL input snapshots (VU1State + data memory)
+-//                           for the offline replay test (game/tests/vu1).  Disc-derived:
+-//                           keep the directory out of git.
+-//   PS2X_VU1_CAPTURE_EVERY=<n> sample every n-th MSCAL per entry (default 997; first 8 always)
+ 
+ #include <array>
+ #include <cstddef>
+@@ -73,25 +68,6 @@ struct Vu1RecContext
+ 
+ using Vu1RecFn = void (*)(Vu1RecContext &ctx, uint32_t entryPc);
+ 
+-struct Vu1RecImage
+-{
+-    uint64_t hash = 0;
+-    const uint32_t *entries = nullptr;
+-    size_t entryCount = 0;
+-    Vu1RecFn fast = nullptr;
+-    Vu1RecFn full = nullptr;
+-    bool hasDebugBits = false; // a reachable D or T bit; native code treats it as FBRST.DE/TE = 0
+-    bool guarded = false; // validates each instruction pair instead of a whole-bank hash
+-
+-    bool hasEntry(uint32_t pc) const
+-    {
+-        for (size_t i = 0; i < entryCount; ++i)
+-            if (entries[i] == pc)
+-                return true;
+-        return false;
+-    }
+-};
+-
+ // Position-independent microprogram: the dispatcher proves that the exact words
+ // sit at some micro-memory base and passes that base in Vu1RecContext::relocBase.
+ // Entries are program-relative byte PCs.
+@@ -136,28 +112,6 @@ struct Vu1RecProgramRegistrar
+     }
+ };
+ 
+-void vu1recRegister(const Vu1RecImage &image);
+-const Vu1RecImage *vu1recFind(uint64_t hash);
+-const Vu1RecImage *vu1recFindGuarded();
+-size_t vu1recImageCount();
+-
+-struct Vu1RecRegistrar
+-{
+-    Vu1RecRegistrar(uint64_t hash, const uint32_t *entries, size_t count, Vu1RecFn fast, Vu1RecFn full,
+-                    bool hasDebugBits = false, bool guarded = false)
+-    {
+-        Vu1RecImage image;
+-        image.hash = hash;
+-        image.entries = entries;
+-        image.entryCount = count;
+-        image.fast = fast;
+-        image.full = full;
+-        image.hasDebugBits = hasDebugBits;
+-        image.guarded = guarded;
+-        vu1recRegister(image);
+-    }
+-};
+-
+ // PATH1 copy engine (cycle-exact lazy model of VU1Interpreter's XGKICK pipeline).
+ void vu1rec_kick_start(Vu1RecContext &ctx, uint32_t qwordAddress, uint64_t cycle);
+ void vu1rec_kick_catchup(Vu1RecContext &ctx, uint64_t cycle);
+@@ -194,24 +148,20 @@ private:
+     {
+         uint64_t mscal = 0;
+         uint64_t native = 0;
+-        uint64_t fallbackNoImage = 0;
+-        uint64_t fallbackNoEntry = 0;
++        uint64_t fallbackNoProgram = 0;
+         uint64_t fallbackFailed = 0;
+         uint64_t forcedInterpreter = 0;
+         uint64_t mscnt = 0;
+         uint64_t nativeFailures = 0;
+         uint64_t diffCalls = 0;
+         uint64_t diffMismatchFull = 0;
+-        uint64_t diffMismatchFast = 0;
+         uint64_t diffInterpBudget = 0;
+         uint64_t diffPackets = 0;
+         uint64_t diffPacketBytes = 0;
+         uint64_t vu1Cycles = 0;
+     };
+ 
+-    const Vu1RecImage *currentImage(PS2Memory &memory);
+-    const Vu1RecImage *currentImage(const uint8_t *code, uint64_t codeGeneration);
+-    void runDiff(const Vu1RecImage &image, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++    void runDiff(const Vu1RecProgram &program, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
+                  uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume,
+                  uint32_t relocBase = 0);
+     const Vu1RecProgram *findProgram(PS2Memory &memory, uint32_t pc, uint32_t &base);
+@@ -222,29 +172,14 @@ private:
+     int m_diffLogBudget = 8;
+     double m_statsPeriod = 5.0;
+     double m_lastStatsTime = 0.0;
+-    uint64_t m_cachedGeneration = ~0ull;
+-    const uint8_t *m_cachedCode = nullptr;
+-    uint64_t m_cachedHash = 0;
+-    const Vu1RecImage *m_cachedImage = nullptr;
+     Stats m_stats;
+     Stats m_lastPrinted;
+     Vu1RecContext *m_ctx = nullptr;     // heap: holds a 64 KiB kick buffer
+-    Vu1RecContext *m_ctx2 = nullptr;
+-    std::vector<uint64_t> m_unknownHashes;
+-    std::vector<std::pair<uint64_t, uint32_t>> m_unknownEntries;
+-    void maybeCapture(uint64_t hash, VU1State &st, const uint8_t *data, uint32_t pc, uint32_t top,
+-                      uint32_t itop, uint32_t maxCycles, uint64_t cycle, bool resume);
+-    const char *m_captureDir = nullptr;
+-    uint32_t m_captureEvery = 997;
+-    uint64_t m_captureCount = 0;
+-    std::vector<std::pair<std::tuple<uint64_t, uint32_t, bool>, uint64_t>> m_captureSeen;
+     PS2Memory *m_memory = nullptr;
+     uint64_t m_lastSwaps = 0;
+     uint64_t m_lastSwaps2 = 0;
+     double m_vu1Seconds = 0.0;
+     double m_lastVu1Seconds = 0.0;
+-    // Keep new cache state at the end: debugger tooling relies on existing offsets.
+-    uint64_t m_cachedRegistryGeneration = ~0ull;
+     // Position-independent programs found in the current micro memory.
+     struct Placement
+     {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 41a5ba4fb0fad36add14c04a97342452473cc0a5..5222b5454e366f12cf474134e4357c75802e928b 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -116,65 +116,6 @@ namespace
+         return dispatcher;
+     }
+ 
+-    void catalogVu1Program(const uint8_t *code, uint32_t startPC)
+-    {
+-        static const char *dirName = std::getenv("PS2X_VU1_CATALOG");
+-        if (!dirName || !*dirName || !code)
+-            return;
+-        uint64_t hash = 1469598103934665603ull;
+-        for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
+-        {
+-            hash ^= code[i];
+-            hash *= 1099511628211ull;
+-        }
+-        static std::mutex mutex;
+-        static std::map<std::pair<uint64_t, uint32_t>, uint64_t> entries;
+-        static std::set<uint64_t> images;
+-        static uint64_t calls = 0;
+-        static bool loaded = false;
+-        std::lock_guard<std::mutex> lock(mutex);
+-        const std::filesystem::path dir(dirName);
+-        if (!loaded)
+-        {
+-            loaded = true;
+-            if (FILE *f = std::fopen((dir / "index.txt").string().c_str(), "r"))
+-            {
+-                unsigned long long h = 0, n = 0;
+-                unsigned pc = 0;
+-                while (std::fscanf(f, "%llx %x %llu", &h, &pc, &n) == 3)
+-                {
+-                    entries[{static_cast<uint64_t>(h), pc}] += n;
+-                    images.insert(static_cast<uint64_t>(h));
+-                }
+-                std::fclose(f);
+-            }
+-        }
+-        std::error_code ec;
+-        std::filesystem::create_directories(dir, ec);
+-        char name[32];
+-        std::snprintf(name, sizeof(name), "%016llx", static_cast<unsigned long long>(hash));
+-        if (images.insert(hash).second)
+-        {
+-            if (FILE *f = std::fopen((dir / (std::string(name) + ".vu1")).string().c_str(), "wb"))
+-            {
+-                std::fwrite(code, 1, PS2_VU1_CODE_SIZE, f);
+-                std::fclose(f);
+-            }
+-        }
+-        const bool newEntry = entries.find({hash, startPC}) == entries.end();
+-        ++entries[{hash, startPC}];
+-        if (newEntry || (++calls % 256u) == 0u)
+-        {
+-            if (FILE *f = std::fopen((dir / "index.txt").string().c_str(), "w"))
+-            {
+-                for (const auto &[key, count] : entries)
+-                    std::fprintf(f, "%016llx %04x %llu\n", static_cast<unsigned long long>(key.first), key.second,
+-                                 static_cast<unsigned long long>(count));
+-                std::fclose(f);
+-            }
+-        }
+-    }
+-
+     uint32_t g_arenaHeapBase = 0u;
+     uint32_t g_arenaHeapLimit = 0u;
+     uint32_t g_arenaStackFloor = 0u;
+@@ -864,7 +805,6 @@ bool PS2Runtime::syncCoreSubsystems()
+                                  {
+                                      m_vu1.state().dBitEnabled = (m_memory.vu1Exec().dtEnable & 1u) != 0u;
+                                      m_vu1.state().tBitEnabled = (m_memory.vu1Exec().dtEnable & 2u) != 0u;
+-                                     catalogVu1Program(m_memory.getVU1Code(), startPC);
+                                      Vu1NativeDispatcher &native = vu1NativeDispatcher();
+                                      if (!native.mscal(m_vu1, m_memory, m_gs, startPC, top, itop, 65536))
+                                      {
+@@ -881,7 +821,6 @@ bool PS2Runtime::syncCoreSubsystems()
+                                  {
+                                      m_vu1.state().dBitEnabled = (m_memory.vu1Exec().dtEnable & 1u) != 0u;
+                                      m_vu1.state().tBitEnabled = (m_memory.vu1Exec().dtEnable & 2u) != 0u;
+-                                     catalogVu1Program(m_memory.getVU1Code(), m_vu1.state().pc);
+                                      Vu1NativeDispatcher &native = vu1NativeDispatcher();
+                                      if (!native.mscnt(m_vu1, m_memory, m_gs, top, itop, 65536))
+                                      {
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+index d828ddc5a11c17afa29843593bf7bc0991dfbf5a..ac2fa6ae07b256656e3749d4569f5c3c3e4eb38f 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+@@ -17,60 +17,6 @@
+ 
+ namespace
+ {
+-    std::vector<Vu1RecImage> &registry()
+-    {
+-        static std::vector<Vu1RecImage> images;
+-        return images;
+-    }
+-
+-    uint64_t &registryGeneration()
+-    {
+-        static uint64_t generation = 0u;
+-        return generation;
+-    }
+-
+-    struct CodeImageCacheEntry
+-    {
+-        std::array<uint8_t, PS2_VU1_CODE_SIZE> code{};
+-        uint64_t hash = 0u;
+-        uint64_t registryGeneration = 0u;
+-        uint64_t lastUse = 0u;
+-        const Vu1RecImage *image = nullptr;
+-        bool valid = false;
+-    };
+-
+-    struct CodeImageCache
+-    {
+-        static constexpr size_t kEntryCount = 16u;
+-        std::array<CodeImageCacheEntry, kEntryCount> entries{};
+-        uint64_t clock = 0u;
+-        uint64_t hits = 0u;
+-        uint64_t misses = 0u;
+-        uint64_t lookups = 0u;
+-        uint64_t lastStatsLookup = 0u;
+-        uint32_t statsLines = 0u;
+-    };
+-
+-    CodeImageCache &codeImageCache()
+-    {
+-        // The bytecode is compared by value, so this cache never retains a
+-        // PS2Memory pointer and remains safe when game memory is destroyed.
+-        // Per-thread ownership avoids synchronization on the hot dispatch path.
+-        static thread_local CodeImageCache cache;
+-        return cache;
+-    }
+-
+-    uint64_t fnv1a64(const uint8_t *data, size_t size)
+-    {
+-        uint64_t hash = 1469598103934665603ull;
+-        for (size_t i = 0; i < size; ++i)
+-        {
+-            hash ^= data[i];
+-            hash *= 1099511628211ull;
+-        }
+-        return hash;
+-    }
+-
+     double nowSeconds()
+     {
+         using namespace std::chrono;
+@@ -85,14 +31,6 @@ namespace
+         return std::atoi(v);
+     }
+ 
+-    double envDouble(const char *name, double fallback)
+-    {
+-        const char *v = std::getenv(name);
+-        if (!v || !*v)
+-            return fallback;
+-        return std::atof(v);
+-    }
+-
+     struct PacketCapture
+     {
+         std::vector<std::vector<uint8_t>> packets;
+@@ -199,7 +137,6 @@ namespace
+ void vu1recRegisterProgram(const Vu1RecProgram &program)
+ {
+     programRegistry().push_back(program);
+-    ++registryGeneration();
+ }
+ 
+ size_t vu1recProgramCount()
+@@ -207,33 +144,6 @@ size_t vu1recProgramCount()
+     return programRegistry().size();
+ }
+ 
+-void vu1recRegister(const Vu1RecImage &image)
+-{
+-    registry().push_back(image);
+-    ++registryGeneration();
+-}
+-
+-const Vu1RecImage *vu1recFind(uint64_t hash)
+-{
+-    for (const Vu1RecImage &image : registry())
+-        if (!image.guarded && image.hash == hash)
+-            return &image;
+-    return nullptr;
+-}
+-
+-const Vu1RecImage *vu1recFindGuarded()
+-{
+-    for (const Vu1RecImage &image : registry())
+-        if (image.guarded)
+-            return &image;
+-    return nullptr;
+-}
+-
+-size_t vu1recImageCount()
+-{
+-    return registry().size();
+-}
+-
+ void vu1rec_kick_start(Vu1RecContext &ctx, uint32_t qwordAddress, uint64_t cycle)
+ {
+     Vu1RecKick &k = ctx.kick;
+@@ -278,14 +188,8 @@ Vu1NativeDispatcher::Vu1NativeDispatcher()
+     m_diff = diff && diff[0] != '\0' && diff[0] != '0';
+     m_diffLogBudget = envInt("PS2X_VU1_DIFF_LOG", 8);
+     m_statsPeriod = 5.0;
+-    m_captureDir = std::getenv("PS2X_VU1_CAPTURE");
+-    if (m_captureDir && !*m_captureDir)
+-        m_captureDir = nullptr;
+-    m_captureEvery = static_cast<uint32_t>(std::max(1, envInt("PS2X_VU1_CAPTURE_EVERY", 997)));
+     m_ctx = new Vu1RecContext();
+-    m_ctx2 = new Vu1RecContext();
+-    std::fprintf(stderr, "[vu1rec] %zu native image(s) and %zu program(s) registered; mode=%s\n", vu1recImageCount(),
+-                 vu1recProgramCount(),
++    std::fprintf(stderr, "[vu1rec] %zu program(s) registered; mode=%s\n", vu1recProgramCount(),
+                  m_forceInterpreter ? "interpreter (PS2X_VU1_INTERPRETER)" : (m_diff ? "diff (PS2X_VU1_DIFF)" : "native"));
+     m_lastStatsTime = nowSeconds();
+ }
+@@ -294,7 +198,6 @@ Vu1NativeDispatcher::~Vu1NativeDispatcher()
+ {
+     printStats("exit");
+     delete m_ctx;
+-    delete m_ctx2;
+ }
+ 
+ // A program is placed where every one of its words matches micro memory exactly;
+@@ -337,90 +240,6 @@ const Vu1RecProgram *Vu1NativeDispatcher::findProgram(PS2Memory &memory, uint32_
+     return nullptr;
+ }
+ 
+-const Vu1RecImage *Vu1NativeDispatcher::currentImage(PS2Memory &memory)
+-{
+-    return currentImage(memory.getVU1Code(), memory.getVU1CodeGeneration());
+-}
+-
+-const Vu1RecImage *Vu1NativeDispatcher::currentImage(const uint8_t *code, uint64_t generation)
+-{
+-    const uint64_t currentRegistryGeneration = registryGeneration();
+-    if (code != m_cachedCode || generation != m_cachedGeneration ||
+-        currentRegistryGeneration != m_cachedRegistryGeneration)
+-    {
+-        m_cachedCode = code;
+-        m_cachedGeneration = generation;
+-        m_cachedRegistryGeneration = currentRegistryGeneration;
+-        CodeImageCache &cache = codeImageCache();
+-        ++cache.lookups;
+-        CodeImageCacheEntry *hit = nullptr;
+-        for (CodeImageCacheEntry &entry : cache.entries)
+-        {
+-            if (entry.valid && std::memcmp(entry.code.data(), code, PS2_VU1_CODE_SIZE) == 0)
+-            {
+-                hit = &entry;
+-                break;
+-            }
+-        }
+-
+-        if (hit)
+-        {
+-            ++cache.hits;
+-            hit->lastUse = ++cache.clock;
+-            m_cachedHash = hit->hash;
+-            // Registration is normally complete before dispatch. If a plugin
+-            // adds images later, vector growth can invalidate stored pointers;
+-            // the epoch lets us refresh the pointer without rehashing code.
+-            if (hit->registryGeneration != currentRegistryGeneration)
+-            {
+-                hit->image = vu1recFind(hit->hash);
+-                if (!hit->image)
+-                    hit->image = vu1recFindGuarded();
+-                hit->registryGeneration = currentRegistryGeneration;
+-            }
+-            m_cachedImage = hit->image;
+-        }
+-        else
+-        {
+-            ++cache.misses;
+-            m_cachedHash = fnv1a64(code, PS2_VU1_CODE_SIZE);
+-            m_cachedImage = vu1recFind(m_cachedHash);
+-            if (!m_cachedImage)
+-                m_cachedImage = vu1recFindGuarded();
+-
+-            CodeImageCacheEntry *victim = nullptr;
+-            for (CodeImageCacheEntry &entry : cache.entries)
+-            {
+-                if (!entry.valid)
+-                {
+-                    victim = &entry;
+-                    break;
+-                }
+-                if (!victim || entry.lastUse < victim->lastUse)
+-                    victim = &entry;
+-            }
+-            if (victim)
+-            {
+-                std::memcpy(victim->code.data(), code, PS2_VU1_CODE_SIZE);
+-                victim->hash = m_cachedHash;
+-                victim->registryGeneration = currentRegistryGeneration;
+-                victim->lastUse = ++cache.clock;
+-                victim->image = m_cachedImage;
+-                victim->valid = true;
+-            }
+-        }
+-
+-        if (!m_cachedImage &&
+-            std::find(m_unknownHashes.begin(), m_unknownHashes.end(), m_cachedHash) == m_unknownHashes.end())
+-        {
+-            m_unknownHashes.push_back(m_cachedHash);
+-            std::fprintf(stderr, "[vu1rec] VU1 image %016llx has no native code (interpreter fallback)\n",
+-                         static_cast<unsigned long long>(m_cachedHash));
+-        }
+-    }
+-    return m_cachedImage;
+-}
+-
+ namespace
+ {
+     // VU1Interpreter::execute() preamble.
+@@ -501,61 +320,24 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
+     const uint32_t pc = startPC & 0x3FFFu;
+     uint32_t relocBase = 0;
+     const Vu1RecProgram *program = m_forceInterpreter ? nullptr : findProgram(memory, pc, relocBase);
+-    const Vu1RecImage *image = (program && !m_captureDir) ? nullptr : currentImage(memory);
+-    if (!program && image && !image->hasEntry(pc))
+-    {
+-        const Vu1RecImage *guarded = vu1recFindGuarded();
+-        if (guarded && guarded->hasEntry(pc))
+-            image = guarded;
+-    }
+-    // Capture interpreter-only images too: these snapshots bootstrap native
+-    // generation and allow offline equivalence checks before enabling it.
+-    if (m_captureDir)
+-    {
+-        VU1State input = vu1.state();
+-        prepareState(input, startPC, top, itop, resume);
+-        maybeCapture(m_cachedHash, input, memory.getVU1Data(), pc, top, itop, maxCycles, vu1.cycleCount(), resume);
+-    }
+     if (m_forceInterpreter)
+     {
+         ++m_stats.forcedInterpreter;
+         return false;
+     }
+-    if (!program && !image)
++    if (!program)
+     {
+-        ++m_stats.fallbackNoImage;
+-        return false;
+-    }
+-    if (!program && !image->hasEntry(pc))
+-    {
+-        ++m_stats.fallbackNoEntry;
+-        const std::pair<uint64_t, uint32_t> key(image->hash, pc);
+-        if (std::find(m_unknownEntries.begin(), m_unknownEntries.end(), key) == m_unknownEntries.end())
+-        {
+-            m_unknownEntries.push_back(key);
+-            std::fprintf(stderr, "[vu1rec] VU1 image %016llx entry 0x%04x has no native code (interpreter fallback)\n",
+-                         static_cast<unsigned long long>(image->hash), pc);
+-        }
++        ++m_stats.fallbackNoProgram;
+         return false;
+     }
+-    if ((program ? program->hasDebugBits : image->hasDebugBits) &&
+-        (vu1.state().dBitEnabled || vu1.state().tBitEnabled))
++    if (program->hasDebugBits && (vu1.state().dBitEnabled || vu1.state().tBitEnabled))
+     {
+         ++m_stats.fallbackFailed; // D/T halts are only modelled by the interpreter
+         return false;
+     }
+     if (m_diff)
+     {
+-        if (program)
+-        {
+-            Vu1RecImage wrapped;
+-            wrapped.hash = program->hash;
+-            wrapped.fast = program->full;
+-            wrapped.full = program->full;
+-            runDiff(wrapped, vu1, memory, gs, pc, top, itop, maxCycles, resume, relocBase);
+-        }
+-        else
+-            runDiff(*image, vu1, memory, gs, pc, top, itop, maxCycles, resume);
++        runDiff(*program, vu1, memory, gs, pc, top, itop, maxCycles, resume, relocBase);
+         return true;
+     }
+ 
+@@ -575,17 +357,15 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
+     ctx.sink = &PacketCapture::sink;
+     ctx.sinkUser = &stagedPackets;
+     const double t0 = nowSeconds();
+-    // A guarded pool admits code combinations beyond the closed image catalog.
+-    // Such programs may observe flags the catalog's fast variant omitted.
+-    (program ? program->full : (vu1recFindGuarded() ? image->full : image->fast))(ctx, pc);
++    program->full(ctx, pc);
+     m_vu1Seconds += nowSeconds() - t0;
+     if (ctx.failed)
+     {
+         ++m_stats.nativeFailures;
+         ++m_stats.fallbackFailed;
+         if (m_stats.nativeFailures <= 16u)
+-            std::fprintf(stderr, "[vu1rec] native program failed, using unchanged interpreter input: image=%016llx entry=0x%04x failPc=0x%04x kickErrors=%u\n",
+-                         static_cast<unsigned long long>(program ? program->hash : m_cachedHash), pc, ctx.failPc, ctx.kickErrors);
++            std::fprintf(stderr, "[vu1rec] native program failed, using unchanged interpreter input: program=%016llx entry=0x%04x failPc=0x%04x kickErrors=%u\n",
++                         static_cast<unsigned long long>(program->hash), pc, ctx.failPc, ctx.kickErrors);
+         return false;
+     }
+     vu1.state() = stagedState;
+@@ -598,44 +378,9 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
+     return true;
+ }
+ 
+-void Vu1NativeDispatcher::maybeCapture(uint64_t hash, VU1State &st, const uint8_t *data, uint32_t pc,
+-                                       uint32_t top, uint32_t itop, uint32_t maxCycles, uint64_t cycle, bool resume)
+-{
+-    uint64_t *seen = nullptr;
+-    const auto key = std::make_tuple(hash, pc, resume);
+-    for (auto &e : m_captureSeen)
+-        if (e.first == key)
+-            seen = &e.second;
+-    if (!seen)
+-    {
+-        m_captureSeen.emplace_back(key, 0u);
+-        seen = &m_captureSeen.back().second;
+-    }
+-    static const uint64_t s_captureSkip = static_cast<uint64_t>(envDouble("PS2X_VU1_CAPTURE_SKIP", 0.0));
+-    if (m_stats.mscal + m_stats.mscnt < s_captureSkip)
+-        return; // PS2X_VU1_CAPTURE_SKIP=<dispatch count>: start capturing later in a run
+-    const uint64_t n = (*seen)++;
+-    if (!(n < 8u || (n % m_captureEvery) == 0u) || m_captureCount >= 4096u)
+-        return;
+-    char path[1024];
+-    std::snprintf(path, sizeof(path), "%s/snap_%016llx_%04x_%06llu.bin", m_captureDir,
+-                  static_cast<unsigned long long>(hash), pc, static_cast<unsigned long long>(m_captureCount++));
+-    if (FILE *f = std::fopen(path, "wb"))
+-    {
+-        const uint32_t header[8] = {0x53315556u /* 'VU1S' */, resume ? 2u : 1u, pc, top, itop, maxCycles,
+-                                    static_cast<uint32_t>(sizeof(VU1State)), 0u};
+-        std::fwrite(header, sizeof(header), 1, f);
+-        std::fwrite(&hash, sizeof(hash), 1, f);
+-        std::fwrite(&cycle, sizeof(cycle), 1, f);
+-        std::fwrite(&st, sizeof(VU1State), 1, f);
+-        std::fwrite(data, 1, PS2_VU1_DATA_SIZE, f);
+-        std::fclose(f);
+-    }
+-}
+-
+ double Vu1NativeDispatcher::now() { return nowSeconds(); }
+ 
+-void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
++void Vu1NativeDispatcher::runDiff(const Vu1RecProgram &program, VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
+                                   uint32_t pc, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume,
+                                   uint32_t relocBase)
+ {
+@@ -644,10 +389,9 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1,
+     prepareState(real, pc, top, itop, resume);
+     const VU1State s0 = real;
+     uint8_t *realData = memory.getVU1Data();
+-    static std::vector<uint8_t> d0, dFull, dFast;
++    static std::vector<uint8_t> d0, dFull;
+     d0.assign(realData, realData + PS2_VU1_DATA_SIZE);
+     dFull = d0;
+-    dFast = d0;
+     const uint64_t c0 = vu1.cycleCount();
+ 
+     // native, full-flag variant
+@@ -658,22 +402,10 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1,
+     m_ctx->relocBase = relocBase;
+     m_ctx->sink = &PacketCapture::sink;
+     m_ctx->sinkUser = &pFull;
+-    image.full(*m_ctx, pc);
++    program.full(*m_ctx, pc);
+     const bool fullFailed = m_ctx->failed;
+     const uint64_t fullCycle = m_ctx->cycle;
+ 
+-    // native, fast variant
+-    VU1State sFast = s0;
+-    PacketCapture pFast;
+-    resetContext(*m_ctx2, &sFast, dFast.data(), c0, maxCycles, top, itop, nullptr, nullptr);
+-    m_ctx2->code = memory.getVU1Code();
+-    m_ctx2->relocBase = relocBase;
+-    m_ctx2->sink = &PacketCapture::sink;
+-    m_ctx2->sinkUser = &pFast;
+-    image.fast(*m_ctx2, pc);
+-    const bool fastFailed = m_ctx2->failed;
+-    const uint64_t fastCycle = m_ctx2->cycle;
+-
+     // interpreter (oracle) on the real state
+     PacketCapture pInterp;
+     vu1.setPacketSink(&PacketCapture::sink, &pInterp);
+@@ -783,8 +515,8 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1,
+         if (m_diffLogBudget > 0)
+         {
+             --m_diffLogBudget;
+-            std::fprintf(stderr, "[vu1diff] MISMATCH variant=%s image=%016llx entry=0x%04x call=%llu (%zu diffs)\n",
+-                         variant, static_cast<unsigned long long>(image.hash), pc,
++            std::fprintf(stderr, "[vu1diff] MISMATCH variant=%s program=%016llx entry=0x%04x call=%llu (%zu diffs)\n",
++                         variant, static_cast<unsigned long long>(program.hash), pc,
+                          static_cast<unsigned long long>(m_stats.diffCalls), diffs.size());
+             for (size_t i = 0; i < diffs.size() && i < 24; ++i)
+                 std::fprintf(stderr, "[vu1diff]   %s\n", diffs[i].c_str());
+@@ -792,12 +524,8 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecImage &image, VU1Interpreter &vu1,
+         return false;
+     };
+ 
+-    // The fast variant only writes back flags that some program in the image can
+-    // read (for the RTA image: clip only; MAC/status have no reader).
+     if (!compare("full", sFull, dFull, pFull, fullFailed, fullCycle, true, true))
+         ++m_stats.diffMismatchFull;
+-    if (!compare("fast", sFast, dFast, pFast, fastFailed, fastCycle, false, true))
+-        ++m_stats.diffMismatchFast;
+ 
+     m_stats.diffPackets += pInterp.packets.size();
+     for (const auto &packet : pInterp.packets)
+@@ -826,7 +554,7 @@ void Vu1NativeDispatcher::printStats(const char *why)
+     const double dt = std::max(1e-6, t - m_lastStatsTime);
+     const Stats &s = m_stats;
+     const Stats &l = m_lastPrinted;
+-    const uint64_t fallbacks = s.fallbackNoImage + s.fallbackNoEntry + s.fallbackFailed;
++    const uint64_t fallbacks = s.fallbackNoProgram + s.fallbackFailed;
+     const uint64_t swaps = m_memory ? m_memory->dispfbSwapCount() : 0u;
+     const double fps = (swaps - m_lastSwaps) / dt;
+     m_lastSwaps = swaps;
+@@ -836,14 +564,14 @@ void Vu1NativeDispatcher::printStats(const char *why)
+     const double vu1Share = (m_vu1Seconds - m_lastVu1Seconds) / dt;
+     m_lastVu1Seconds = m_vu1Seconds;
+     std::fprintf(stderr,
+-                 "[vu1rec] %s: mscal=%llu native=%llu fallback=%llu (noimage=%llu noentry=%llu) forced=%llu "
+-                 "mscnt=%llu nativeFail=%llu | diff calls=%llu mismatch full=%llu fast=%llu interpBudget=%llu "
++                 "[vu1rec] %s: mscal=%llu native=%llu fallback=%llu (noprogram=%llu) forced=%llu "
++                 "mscnt=%llu nativeFail=%llu | diff calls=%llu mismatch=%llu interpBudget=%llu "
+                  "| %.1f calls/s, %.2f Mcyc/s, DISPFB1/2 changes/s %.2f (DISPFB2 %.2f), VU1 time %.1f%% over %.1fs\n",
+                  why, (unsigned long long)s.mscal, (unsigned long long)s.native, (unsigned long long)fallbacks,
+-                 (unsigned long long)s.fallbackNoImage, (unsigned long long)s.fallbackNoEntry,
++                 (unsigned long long)s.fallbackNoProgram,
+                  (unsigned long long)s.forcedInterpreter, (unsigned long long)s.mscnt,
+                  (unsigned long long)s.nativeFailures, (unsigned long long)s.diffCalls,
+-                 (unsigned long long)s.diffMismatchFull, (unsigned long long)s.diffMismatchFast,
++                 (unsigned long long)s.diffMismatchFull,
+                  (unsigned long long)s.diffInterpBudget,
+                  ((s.mscal - l.mscal) + (s.mscnt - l.mscnt)) / dt,
+                  (s.vu1Cycles - l.vu1Cycles) / dt / 1e6, fps, fps2, vu1Share * 100.0, dt);
+diff --git a/ps2xTest/src/ps2_vu1_tests.cpp b/ps2xTest/src/ps2_vu1_tests.cpp
+index 2f5dd3ed299a12ec20f23f6ff60aea9ed36a4cef..91f941d95363efa7a9039dc0dd613d4369512d39 100644
+--- a/ps2xTest/src/ps2_vu1_tests.cpp
++++ b/ps2xTest/src/ps2_vu1_tests.cpp
+@@ -212,50 +212,6 @@ namespace
+     {
+         std::memcpy(values, data + qwordIndex * 16u, sizeof(float) * 4u);
+     }
+-
+-    constexpr uint32_t kGuardedVu1Entry = 0x3F00u;
+-    constexpr uint64_t kGuardedVu1ExpectedWord = 0x1122334455667788ull;
+-    const uint8_t *gGuardedVu1ExpectedCode = nullptr;
+-    uint32_t gGuardedVu1FastCalls = 0u;
+-    uint32_t gGuardedVu1FullCalls = 0u;
+-
+-    void runGuardedVu1TestImage(Vu1RecContext &ctx, uint32_t entryPc)
+-    {
+-        uint64_t currentWord = 0u;
+-        const bool codePointerMatches = ctx.code != nullptr && ctx.code == gGuardedVu1ExpectedCode;
+-        if (codePointerMatches)
+-            std::memcpy(&currentWord, ctx.code + entryPc, sizeof(currentWord));
+-
+-        if (codePointerMatches && entryPc == kGuardedVu1Entry &&
+-            currentWord == kGuardedVu1ExpectedWord)
+-        {
+-            ctx.state->vi[3] = 77;
+-            ctx.state->pc = entryPc + 8u;
+-            ctx.cycle += 2u;
+-            return;
+-        }
+-
+-        ctx.state->vi[3] = 1234;
+-        ctx.data[7] = 0xCCu;
+-        ctx.cycle += 100u;
+-        const uint8_t packet[16] = {0u, 0x80u};
+-        if (ctx.sink)
+-            ctx.sink(ctx.sinkUser, packet, sizeof(packet));
+-        ctx.failed = true;
+-        ctx.failPc = entryPc;
+-    }
+-
+-    void guardedVu1FastForTest(Vu1RecContext &ctx, uint32_t entryPc)
+-    {
+-        ++gGuardedVu1FastCalls;
+-        runGuardedVu1TestImage(ctx, entryPc);
+-    }
+-
+-    void guardedVu1FullForTest(Vu1RecContext &ctx, uint32_t entryPc)
+-    {
+-        ++gGuardedVu1FullCalls;
+-        runGuardedVu1TestImage(ctx, entryPc);
+-    }
+ }
+ 
+ void register_ps2_vu1_tests()
+@@ -1828,18 +1784,22 @@ void register_ps2_vu1_tests()
+             writeVuInstructionPair(fx.code, 8u, 0x8000033Cu, kVuUpperNop);
+             writeVuInstructionPair(fx.code, 16u, makeVuIaddiu(1u, 1u, 5), kVuUpperNop | (1u << 30));
+             writeVuInstructionPair(fx.code, 24u, 0x8000033Cu, kVuUpperNop);
+-            uint64_t hash = 1469598103934665603ull;
+-            for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
+-                hash = (hash ^ fx.code[i]) * 1099511628211ull;
++            static uint64_t words1[4];
++            std::memcpy(words1, fx.code, sizeof(words1));
+             static const uint32_t entries[] = {0u, 16u};
+-            Vu1RecImage image;
+-            image.hash = hash; image.entries = entries; image.entryCount = 2u;
+-            image.fast = image.full = [](Vu1RecContext &ctx, uint32_t pc) {
++            Vu1RecProgram program;
++            program.name = "continuation-test";
++            program.slots = 4u;
++            program.hash = 1u;
++            program.words = words1;
++            program.entries = entries;
++            program.entryCount = 2u;
++            program.full = [](Vu1RecContext &ctx, uint32_t pc) {
+                 ctx.state->vi[1] = pc == 0u ? 7 : ctx.state->vi[1] + 5;
+                 ctx.state->pc = pc + 16u;
+                 ctx.cycle += 2u;
+             };
+-            vu1recRegister(image);
++            vu1recRegisterProgram(program);
+             VU1Interpreter reference, nativeVu;
+             reference.execute(fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem, 0u);
+             reference.resume(fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem);
+@@ -1862,15 +1822,17 @@ void register_ps2_vu1_tests()
+             Vu1Fixture fx;
+             t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+             fx.code[0] = 0xABu;
+-            uint64_t hash = 1469598103934665603ull;
+-            for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
+-                hash = (hash ^ fx.code[i]) * 1099511628211ull;
++            static uint64_t words2[1];
++            std::memcpy(words2, fx.code, sizeof(words2));
+             static const uint32_t entries[] = {0u};
+-            Vu1RecImage image;
+-            image.hash = hash;
+-            image.entries = entries;
+-            image.entryCount = 1u;
+-            image.fast = image.full = [](Vu1RecContext &ctx, uint32_t) {
++            Vu1RecProgram program;
++            program.name = "failure-test";
++            program.slots = 1u;
++            program.hash = 2u;
++            program.words = words2;
++            program.entries = entries;
++            program.entryCount = 1u;
++            program.full = [](Vu1RecContext &ctx, uint32_t) {
+                 ctx.state->vi[3] = 1234;
+                 ctx.data[7] = 0xCCu;
+                 ctx.cycle += 100u;
+@@ -1882,7 +1844,7 @@ void register_ps2_vu1_tests()
+                 ctx.failed = true;
+                 ctx.failPc = 0x100u;
+             };
+-            vu1recRegister(image);
++            vu1recRegisterProgram(program);
+             VU1Interpreter vu1;
+             vu1.state().vi[3] = 42;
+             vu1.state().pc = 0x80u;
+@@ -1921,78 +1883,5 @@ void register_ps2_vu1_tests()
+             t.Equals(vu1.state().vi[1], 0,
+                      "instruction following a reserved opcode must not execute");
+         });
+-
+-        tc.Run("guarded VU image validates only executed code and stages failures", [](TestCase &t)
+-        {
+-            Vu1Fixture fx;
+-            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+-            std::memcpy(fx.code + kGuardedVu1Entry, &kGuardedVu1ExpectedWord,
+-                        sizeof(kGuardedVu1ExpectedWord));
+-
+-            uint64_t codeHash = 1469598103934665603ull;
+-            for (uint32_t i = 0; i < PS2_VU1_CODE_SIZE; ++i)
+-                codeHash = (codeHash ^ fx.code[i]) * 1099511628211ull;
+-            t.IsTrue(vu1recFind(codeHash) == nullptr,
+-                     "the test bank must not have an exact whole-bank image");
+-
+-            static const uint32_t entries[] = {kGuardedVu1Entry};
+-            Vu1RecImage image;
+-            image.hash = codeHash;
+-            image.entries = entries;
+-            image.entryCount = 1u;
+-            image.fast = &guardedVu1FastForTest;
+-            image.full = &guardedVu1FullForTest;
+-            image.guarded = true;
+-            vu1recRegister(image);
+-
+-            gGuardedVu1ExpectedCode = fx.code;
+-            gGuardedVu1FastCalls = 0u;
+-            gGuardedVu1FullCalls = 0u;
+-
+-            VU1Interpreter vu1;
+-            Vu1NativeDispatcher native;
+-            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
+-                     "unknown whole-bank hashes should dispatch through the guarded image");
+-            t.Equals(gGuardedVu1FullCalls, 1u,
+-                     "guarded images must use the full-flag native variant");
+-            t.Equals(gGuardedVu1FastCalls, 0u,
+-                     "guarded images must not use the fast native variant");
+-            t.Equals(vu1.state().vi[3], 77,
+-                     "the guarded callback should execute when its current word matches");
+-
+-            fx.code[0x2F00u] = 0xA5u; // Not reached by this test image.
+-            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
+-                     "mutating an unexecuted code word must not reject the guarded image");
+-            t.Equals(gGuardedVu1FullCalls, 2u,
+-                     "the guarded full variant should receive the second dispatch");
+-            t.Equals(gGuardedVu1FastCalls, 0u,
+-                     "the guarded fast variant should remain unused");
+-
+-            vu1.state().vi[3] = 42;
+-            vu1.state().pc = 0x2580u;
+-            vu1.setCycleCount(17u);
+-            fx.data[7] = 0x55u;
+-            const uint64_t gifBefore = fx.mem.gifCopyCount();
+-            const uint64_t changedWord = kGuardedVu1ExpectedWord ^ 1u;
+-            std::memcpy(fx.code + kGuardedVu1Entry, &changedWord, sizeof(changedWord));
+-
+-            t.IsTrue(!native.mscal(vu1, fx.mem, fx.gs, kGuardedVu1Entry, 0u, 0u, 100u),
+-                     "changing an executed code word must fail the guarded image");
+-            t.Equals(gGuardedVu1FullCalls, 3u,
+-                     "the changed executed word should reach the full guard");
+-            t.Equals(gGuardedVu1FastCalls, 0u,
+-                     "failed guarded dispatch must not use the fast variant");
+-            t.Equals(vu1.state().vi[3], 42,
+-                     "a guarded failure must preserve the input registers");
+-            t.Equals(vu1.state().pc, 0x2580u,
+-                     "a guarded failure must preserve the input PC");
+-            t.Equals(vu1.cycleCount(), uint64_t(17u),
+-                     "a guarded failure must preserve guest cycles");
+-            t.Equals(fx.data[7], uint8_t(0x55u),
+-                     "a guarded failure must discard staged data writes");
+-            t.Equals(fx.mem.gifCopyCount(), gifBefore,
+-                     "a guarded failure must discard staged GIF packets");
+-            gGuardedVu1ExpectedCode = nullptr;
+-        });
+     });
+ }

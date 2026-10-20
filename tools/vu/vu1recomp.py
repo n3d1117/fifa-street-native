@@ -1777,51 +1777,10 @@ def generate_image(code: bytes, entries: List[int], name: str, live_exit: Option
     if register:
         ent = ", ".join(f"0x{e:04x}u" for e in sorted(g.entry_nodes))
         out.append(f"const uint32_t kEntries[] = {{{ent}}};\n")
-        registrar = 'Vu0RecRegistrar' if g.unit == 'vu0' else 'Vu1RecRegistrar'
-        prefix = 'vu0rec' if g.unit == 'vu0' else 'vu1rec'
-        hash_literal = '0ull' if g.guarded else f'0x{name}ull'
-        guarded_arg = ', true' if g.guarded else ''
-        fast_name = 'full' if g.guarded else 'fast'
-        out.append(f"const {registrar} kRegistrar({hash_literal}, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
-                   f"                                 &{prefix}_{name}_{fast_name}, &{prefix}_{name}_full, {'true' if g.dt_pcs else 'false'}{guarded_arg});\n")
+        out.append(f"const Vu0RecRegistrar kRegistrar(0x{name}ull, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n"
+                   f"                                 &vu0rec_{name}_fast, &vu0rec_{name}_full, {'true' if g.dt_pcs else 'false'});\n")
     out.append("} // namespace\n")
     return "".join(out), stats
-
-
-def generate_guarded_pool(pool_codes: List[bytes], entries: List[int], dynamic_targets: dict) -> Tuple[str, dict]:
-    # Overlapping uploads with different entry pairs have unrelated schedulers.
-    # Pooling them together admits arbitrary cross-program instruction sequences.
-    groups = defaultdict(list)
-    for code in pool_codes:
-        groups[struct.unpack_from('<Q', code)[0]].append(code)
-    if len(groups) == 1:
-        return generate_image(pool_codes[0], entries, 'guarded', set(FLAG_REGS),
-                              dynamic_targets, 'vu1', pool_codes)
-    out, programs = [], []
-    for i, (signature, codes) in enumerate(sorted(groups.items())):
-        name = f'guarded_program_{i}'
-        src, stats = generate_image(codes[0], entries, name, set(FLAG_REGS),
-                                    dynamic_targets, 'vu1', codes, register=False)
-        out.append(src)
-        programs.append((signature, name, stats))
-    entries = sorted({e for _, _, stats in programs for e in stats['entries']})
-    out.append(HEADER)
-    out.append('static void vu1rec_guarded_full(Vu1RecContext &ctx, uint32_t entryPc)\n{\n')
-    out.append('    if (ctx.code) {\n        uint64_t signature;\n'
-               '        std::memcpy(&signature, ctx.code, sizeof(signature));\n'
-               '        switch (signature) {\n')
-    for signature, name, _ in programs:
-        out.append(f'        case 0x{signature:016x}ull: return vu1rec_{name}_full(ctx, entryPc);\n')
-    out.append('        }\n    }\n    ctx.failed = true; ctx.failPc = 0;\n}\n')
-    ent = ', '.join(f'0x{e:04x}u' for e in entries)
-    dt_pcs = sorted({pc for _, _, stats in programs for pc in stats['dt_pcs']})
-    out.append(f'const uint32_t kEntries[] = {{{ent}}};\n'
-               'const Vu1RecRegistrar kRegistrar(0ull, kEntries, sizeof(kEntries) / sizeof(kEntries[0]),\n'
-               f'    &vu1rec_guarded_full, &vu1rec_guarded_full, {"true" if dt_pcs else "false"}, true);\n'
-               '} // namespace\n')
-    return ''.join(out), {'entries': entries, 'dt_pcs': dt_pcs,
-                         'nodes': sum(s['nodes'] for _, _, s in programs),
-                         'pairs': sum(s['pairs'] for _, _, s in programs)}
 
 
 def generate_reloc_program(name: str, words: bytes) -> Tuple[str, dict]:
@@ -1894,17 +1853,6 @@ def jump_table_entries(code: bytes) -> List[int]:
     return out if len(out) >= 2 else []
 
 
-def parse_vu1_entry(value: str) -> int:
-    """Parse an explicit guarded-pool entry PC (decimal or 0x-prefixed hex)."""
-    try:
-        pc = int(value, 0)
-    except ValueError as ex:
-        raise argparse.ArgumentTypeError(f"invalid VU1 PC {value!r}") from ex
-    if pc < 0 or pc > VU1_PC_MASK or pc & 7:
-        raise argparse.ArgumentTypeError(f"VU1 entry PC must be pair-aligned in 0..0x{VU1_PC_MASK:04x}")
-    return pc
-
-
 def generate_programs(program_dir: str, out_dir: str) -> int:
     written = []
     failed = 0
@@ -1944,28 +1892,18 @@ def main():
     ap.add_argument("--programs", help="program dir from extract-programs.py: emit position-independent "
                     "vu1prog_<name>.cpp per microprogram (VU1 only; replaces the catalog for these)")
     ap.add_argument("--out", required=True, help="output directory for generated C++")
-    ap.add_argument("--guarded", action="store_true",
-                    help="emit one fail-closed VU1 implementation selected by exact executed instruction pairs")
-    ap.add_argument("--pool-code", action="append", default=[], metavar="FILE",
-                    help="additional raw code image for --guarded (exactly 16 KiB; repeatable)")
-    ap.add_argument("--entry", action="append", default=[], type=parse_vu1_entry, metavar="PC",
-                    help="additional guarded VU1 entry PC (decimal or 0x-prefixed hex; repeatable)")
-    ap.add_argument("--indirect-entry", action="append", default=[], type=parse_vu1_entry, metavar="PC",
-                    help="additional guarded indirect-table arm entry (repeatable)")
     ap.add_argument("--dump", action="store_true", help="print node graph statistics")
     ap.add_argument("--jr-targets", help="observed dynamic branch destinations file (hash pc target); defaults to catalog/jr_targets.txt")
     args = ap.parse_args()
-    if args.guarded and args.unit != 'vu1':
-        ap.error("--guarded is currently supported only for VU1")
-    if (args.entry or args.indirect_entry) and not args.guarded:
-        ap.error("--entry and --indirect-entry are currently supported only with --guarded")
     os.makedirs(args.out, exist_ok=True)
     if args.programs:
-        if args.unit != 'vu1' or args.guarded or args.catalog:
-            ap.error("--programs is VU1-only and excludes --catalog/--guarded")
+        if args.unit != 'vu1' or args.catalog:
+            ap.error("--programs is VU1-only and excludes --catalog")
         return generate_programs(args.programs, args.out)
     if not args.catalog:
         ap.error("--catalog or --programs is required")
+    if args.unit != 'vu0':
+        ap.error("--catalog is VU0-only; VU1 comes from --programs")
     cat = read_catalog(args.catalog)
     target_path = args.jr_targets or os.path.join(args.catalog, "jr_targets.txt")
     dynamic_targets = read_dynamic_targets(target_path)
@@ -1985,52 +1923,7 @@ def main():
         if len(code) != expected_size:
             print(f"[vu{args.unit[-1]}recomp] {h}: image size {len(code)} != {expected_size}; skipped", file=sys.stderr)
             continue
-        jt = jump_table_entries(code) if args.unit == 'vu1' else []
-        extra = sorted(set(jt) - set(entries))
-        if extra:
-            print(f"[vu{args.unit[-1]}recomp] {h}: adding uncatalogued jump-table entries {['0x%04x' % e for e in extra]}")
-        images.append((h, code, sorted(set(entries) | set(jt)), dynamic_targets.get(h, {})))
-    if args.guarded:
-        pool_codes = [image[1] for image in images]
-        pool_entries = set(pc for image in images for pc in image[2])
-        pool_entries.update(args.entry)
-        pooled_targets: Dict[int, set] = defaultdict(set)
-        for by_pc in dynamic_targets.values():
-            for pc, targets in by_pc.items():
-                pooled_targets[pc].update(targets)
-        for path in args.pool_code:
-            with open(path, 'rb') as f:
-                code = f.read()
-            if len(code) != VU1_CODE_SIZE:
-                ap.error(f"--pool-code {path}: image size {len(code)} != 16 KiB")
-            pool_codes.append(code)
-            pool_entries.update(jump_table_entries(code))
-        if not pool_codes:
-            ap.error("--guarded needs at least one valid catalog image or --pool-code")
-        if args.indirect_entry:
-            for code in pool_codes:
-                for pc in range(0, VU1_CODE_SIZE, 8):
-                    pair = decode_pair(code, pc)
-                    if not pair.ibit and lower_name(pair.lower) in ('JR', 'JALR'):
-                        pooled_targets[pc].update(args.indirect_entry)
-        try:
-            src, stats = generate_guarded_pool(pool_codes, sorted(pool_entries),
-                                              {pc: sorted(ts) for pc, ts in pooled_targets.items()})
-        except GenError as ex:
-            print(f"[vu1recomp] guarded pool FAILED: {ex}", file=sys.stderr)
-            return 1
-        dst = os.path.join(args.out, "vu1rec_guarded.cpp")
-        old = open(dst).read() if os.path.exists(dst) else None
-        if old != src:
-            with open(dst, "w") as f:
-                f.write(src)
-        print(f"[vu1recomp] guarded: images={len(pool_codes)} entries={['0x%04x' % e for e in stats['entries']]} "
-              f"nodes={stats['nodes']} pairs={stats['pairs']} full-flags=yes")
-        for fn in os.listdir(args.out):
-            p = os.path.join(args.out, fn)
-            if fn.startswith("vu1rec_guarded") and fn.endswith(".cpp") and p != dst:
-                os.remove(p)
-        return 0
+        images.append((h, code, sorted(set(entries)), dynamic_targets.get(h, {})))
     # pass 1: liveness-only analysis of every image, then the live-at-exit fixpoint
     infos = []
     for h, code, entries, targets in images:

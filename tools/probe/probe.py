@@ -94,13 +94,13 @@ def parse_log(text):
     if vu:
         out["vu_fallbacks"] = int(vu[-1][0])
         out["fps_dispfb2"] = round(float(vu[-1][1]), 1)
-    native = re.findall(r"\[vu1rec\] \w+: mscal=(\d+) native=(\d+) fallback=(\d+) \(noimage=(\d+) noentry=(\d+)\) "
+    native = re.findall(r"\[vu1rec\] \w+: mscal=(\d+) native=(\d+) fallback=(\d+) \(noprogram=(\d+)\) "
                         r"forced=(\d+) mscnt=(\d+) nativeFail=(\d+) \| diff calls=(\d+) "
-                        r"mismatch full=(\d+) fast=(\d+) interpBudget=(\d+)", text)
+                        r"mismatch=(\d+) interpBudget=(\d+)", text)
     if native:
-        out["vu1"] = dict(zip(("mscal", "native_calls", "interpreter_fallbacks", "no_image", "no_entry",
+        out["vu1"] = dict(zip(("mscal", "native_calls", "interpreter_fallbacks", "no_program",
                                "forced_interpreter", "mscnt", "native_failures", "diff_calls",
-                               "mismatch_full", "mismatch_fast", "interpreter_budget_stops"),
+                               "mismatch", "interpreter_budget_stops"),
                               map(int, native[-1])))
     presents = re.findall(r"\[gs-present\] frames=(\d+) over=([0-9.]+)s presents/s=([0-9.]+)", text)
     if presents:
@@ -601,7 +601,7 @@ def main():
         shutil.rmtree(scratch, ignore_errors=True)
     scene_ok = not route or scene == "match_play"
     vu1 = metrics.get("vu1", {})
-    vu_ok = not any(vu1.get(key, 0) for key in ("mismatch_full", "mismatch_fast", "interpreter_budget_stops"))
+    vu_ok = not any(vu1.get(key, 0) for key in ("mismatch", "interpreter_budget_stops"))
     if env.get("PS2X_VU1_DIFF", "0") not in ("", "0"):
         vu_ok = vu_ok and vu1.get("diff_calls", 0) > 0
     return 0 if reached == target and scene_ok and vu_ok and not changed and not summary["audio_underruns"] and quit_ok is not False else 1
