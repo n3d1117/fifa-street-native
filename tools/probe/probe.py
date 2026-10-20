@@ -38,13 +38,13 @@ ELF = game.ELF
 CRASH_MARKERS = ("Error during program execution", "[terminate]", "No exact recompiled function",
                  "Failed to initialize", "Failed to load ELF", "[guest-branch:missing-target]",
                  "[memory-fault]")
-# Scripted input routes: (seconds since the previous step, key bit) over the diagnostic input FIFO (key bit 5 Cross,
-# 9 Square, 2 Down, 17 Start). The title screen needs the language menu and all intro movies first; waits are
-# measured, not guarded. scene 'match' means the match audio stream (commentary data) was opened.
+# Scripted input routes: (seconds since the previous step, key bit[, hold seconds]) over the diagnostic input FIFO
+# (5 Cross, 9 Square, 2 Down, 17 Start; bits 19-22 left-stick left/right/up/down). The title screen needs the
+# language menu and all intro movies first; menu waits are measured, not guarded. scene 'match' means commentary opened.
 ROUTES = {"match": {
     "steps": [(16, 5), (66, 17), (8, 5), (6, 2), (1.5, 5), (8, 2), (1.5, 5), (6, 5), (4, 5), (5, 5), (3, 5), (4, 9),
               (3, 5), (3, 9), (2, 5), (5, 5), (5, 5)],
-    "tail": 60, "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
+    "play_steps": [(260, 19, 20.0)], "tail": 25, "scene_marker": "DATA/AUDIO/PBPDAT_E.BIG"}}
 
 FAULT_MARKERS = CRASH_MARKERS + ("[iop-budget] entry=",)
 TOOL_FRAMEWORKS = {
@@ -298,9 +298,12 @@ def main():
     route = ROUTES.get(args.route)
     cap = Capture(out, preserve=bool(route))
     if route:
-        args.seconds = max(args.seconds, int(sum(d for d, _ in route["steps"]) + route["tail"]))
+        menu_delay = sum(step[0] for step in route["steps"])
+        play_delay = sum(step[0] for step in route.get("play_steps", []))
+        args.seconds = max(args.seconds, int(menu_delay + play_delay + route["tail"]))
     deadline = started + args.seconds
     steps, step_at, release_at, fifo_fd = list(route["steps"]) if route else [], started, 0.0, None
+    play_steps, play_step_at = list(route.get("play_steps", [])) if route else [], None
     if route:
         step_at = started + steps[0][0]
     killed_by_us = fault_stop = False
@@ -309,6 +312,7 @@ def main():
     next_black = started + BLACK_SAMPLE_START
     seen_len = 0
     last_log_check = 0.0
+    text_now = ""
     try:
         while time.monotonic() < deadline and not child_exited(exit_watch):
             now = time.monotonic()
@@ -320,6 +324,8 @@ def main():
                     break
                 seen_len = len(text_now)
             if route:
+                if play_steps and play_step_at is None and route["scene_marker"] in text_now:
+                    play_step_at = now + play_steps[0][0]
                 if fifo_fd is None:
                     try:
                         fifo_fd = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
@@ -329,11 +335,20 @@ def main():
                     os.write(fifo_fd, struct.pack("<I", 0))
                     release_at = 0.0
                 if fifo_fd is not None and steps and now >= step_at and not release_at:
-                    _, key = steps.pop(0)
+                    step = steps.pop(0)
+                    _, key = step[:2]
+                    hold = step[2] if len(step) > 2 else 0.12
                     os.write(fifo_fd, struct.pack("<I", 1 << key))
-                    release_at = now + 0.12
+                    release_at = now + hold
                     if steps:
                         step_at = now + steps[0][0]
+                elif fifo_fd is not None and play_steps and play_step_at is not None and now >= play_step_at and not release_at:
+                    step = play_steps.pop(0)
+                    _, key, hold = step
+                    os.write(fifo_fd, struct.pack("<I", 1 << key))
+                    release_at = now + hold
+                    if play_steps:
+                        play_step_at = now + play_steps[0][0]
             if args.profile and profiled is None and now - started >= args.profile_after:
                 profiled = sample_game_thread(proc.pid, out / "game-thread.sample") or []
             if not state_asked and args.seconds >= 8 and now >= deadline - 3.5:

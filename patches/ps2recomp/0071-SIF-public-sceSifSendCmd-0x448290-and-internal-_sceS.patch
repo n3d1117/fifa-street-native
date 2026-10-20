@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 01:40:26 +0200
-Subject: [PATCH 71/74] SIF: public sceSifSendCmd (0x448290) and internal
+Subject: [PATCH 71/75] SIF: public sceSifSendCmd (0x448290) and internal
  _sceSifSendCmd (0x448158) bind to separate handlers (EA snd command thread
  was sending shifted arguments); interpreter only above the ELF
 

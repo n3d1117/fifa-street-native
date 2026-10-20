@@ -1,17 +1,17 @@
 ## Resume
 
 - Intent: reach and verify active match gameplay, then guard it in `./rx run --route match`.
-- Verified: the `0x2e0000` false function split is fixed; the route reaches the Marseille court and opens commentary data. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
+- Verified: the route reaches the live England–Brazil match HUD; the captured match clock advanced from 0:13 to 0:18. A diagnostic left-stick hold was sent during timed play, but player movement from that input is not established. Disabling time stretching reduced reported match underruns in repeated route runs; all output underruns are now counted.
 - Blocker: audio underruns remain severe. A profile sampled occasional EE waits in `DataStream::gsVsync`/`StreamRing::waitFor`, but most EE samples were guest code in `sub_003C18D0` and the data worker was usually idle; the observed wait does not explain the periodic cycle-accounting gaps.
-- Next: (1) reproduce and localize the cycle-accounting gaps during active play; (2) verify kickoff and player movement under scripted input, save a play frame, and guard the route on gameplay state; (3) measure gameplay fps over a steady window without tracing; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
-- Gotchas: `scene=match` means commentary data opened, not that gameplay began; route timing is fixed and takes about 3.5 minutes; FIFO presses last 0.12 s; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
+- Next: (1) guard the route on the live match HUD and verify player movement under scripted input; (2) save a play frame and measure gameplay fps over a steady window without tracing; (3) localize the EE cycle-accounting gaps during active play; (4) compare the pitch, portrait and flag dot pattern against PCSX2.
+- Gotchas: `scene=match` means commentary data opened, not that gameplay began; the match intro continues for several minutes; the diagnostic route holds left stick for 20 s late in the run; `PS2X_AUDIO_STRETCH=1` re-enables the stretcher.
 
 ## Current
 
 | Area | State |
 |---|---|
 | Engine | Builds on macOS arm64. `./rx test --full` passes all 54 tests |
-| Game | `./rx run --route match` reaches the Marseille court and opens commentary data; the captured frame shows the court and players. Kickoff, player control and active gameplay are not verified. Audio underflows remain severe |
+| Game | The route reaches the live England–Brazil HUD and timer. Scripted player movement and gameplay fps remain unverified. Audio underflows remain severe |
 | Entry | `0x100008`; `.text` at `0x100000`, about 3.6 MB |
 | Platforms | macOS arm64 only |
 

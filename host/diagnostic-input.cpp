@@ -11,7 +11,7 @@
 #include <unistd.h>
 
 namespace {
-constexpr uint32_t kValidKeyMask = 0x7ffffu & ~1u; // key bits 1 through 18
+constexpr uint32_t kValidKeyMask = (uint32_t{1} << 23) - 2u; // key bits 1 through 18; analog bits 19 through 22
 constexpr size_t kMaxMessagesPerPoll = 32;
 constexpr auto kMaskLifetime = std::chrono::milliseconds(2500);
 
@@ -84,7 +84,7 @@ extern "C" void ps2x_diagnostic_input_poll() {
 }
 
 extern "C" int ps2x_diagnostic_input_key_down(uint32_t key) {
-    if (key == 0 || key > 18) return 0;
+    if (key == 0 || key > 22) return 0;
     return (s_keyMask.load(std::memory_order_acquire) & (uint32_t{1} << key)) != 0;
 }
 
