@@ -17,6 +17,10 @@ Mechanisms, invariants and constants that the code relies on. Commands are in `A
 
 Generated translation units include only `ps2_guest_abi.h`, `ps2_guest_macros.h`, and the generated function/stub declarations (plus debug logging when enabled). Runtime-only headers remain behind the out-of-line ABI entry points; edits to them do not rebuild generated unity units. Fast RAM access, address classification and guest arithmetic remain inline with the same semantics.
 
+The EE scheduler keeps an always-on, allocation-free ring of its last 32 context transitions (thread switch, block, suspend, invocation save/entry/return/restore and poll yield). Missing-target reports, guest exceptions and uncaught executor exceptions dump `[ee-context-history]` records plus every live base/invocation context: thread, depth/kind, PC, RA, SP, EPC and delay-slot state. There is no logging on the normal path. `PS2RuntimeKernel` tests wrapping, nested-context identity and reset. For a manual crash report, include the entire `begin`/`end` block and adjacent missing-target line.
+
+The `pc=ra=0x3` skill-move fault remains undiagnosed. Static evidence: `0x2AE7C8` follows a call to `0x1E83A8`; its epilogue loads RA from `[sp]` at `0x1E83F8` before returning at `0x1E83FC`. The scheduler diagnostic supplies the current PC as both source and target, so it cannot identify the corrupting instruction. A damaged guest stack is a hypothesis, not an established cause; the idle and invocation paths have not been exonerated by reproduction.
+
 ## Instruction hooks
 
 PS2Recomp has no mid-function override. Config `[[hooks]]` (address, `before`/`after`, optional `redirect`) make the recompiler emit a call through `g_ps2InstructionHooks[]`. Handlers are registered by the host and installed only if every guest instruction word they depend on matches the retail ELF. `generated/` stays pure recompiler output. One hook is in use: the vblank poll below.
@@ -129,6 +133,8 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 `deps.lock` pins each upstream (`ps2recomp`, `pcsx2`) by SHA. `./rx deps sync` creates `deps/<name>` at the pin on branch `rx` and applies `patches/<name>/*.patch` with `git am -3`. `./rx deps export` rewrites `patches/<name>/` with `git format-patch` (byte-stable) and refuses dirty trees. `./rx deps status` shows pin, commits and exported state; `./rx check` fails on unexported commits. Pull upstream in themed batches with a verifying test each; regenerate into a separate directory first (`tools/generate.py --out DIR`) to review output diffs.
 
 ## Tried and rejected
+
+- Treating scheduler `source=target=0x3` as evidence of a missing translated function: both fields come from the same saved PC; the preceding guest epilogue can return an unchecked stack-loaded RA.
 
 - Fast-math, FP contraction and FPCR flush-to-zero change PS2 arithmetic.
 - The VBlank poll is not a lost DMA IRQ: the VBlank handler clears the poll word after the VIF1 END tag and configured field count. A rejected language-menu input was a pad packet-ID mismatch.

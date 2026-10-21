@@ -1,0 +1,297 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Wed, 21 Oct 2026 18:03:59 +0200
+Subject: [PATCH 91/91] runtime: retain EE context transitions for manual crash
+ diagnosis
+
+Keep the last 32 scheduler transitions in fixed storage without normal-path I/O; dump them and live nested contexts on missing targets, guest exceptions and uncaught executor faults. Capture PC/RA/SP/EPC and delay-slot identity before invocation and scheduling changes. No guest behavior change or claim of fixing the skill-move fault.
+
+PS2RuntimeKernel covers wraparound, nested saved contexts and reset. Verified rx build and rx test --full (57/57). One 60-second match probe reached play at 50.0 FPS without a fault; its audio check failed with 123 steady-state underruns.
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index c9bf902b2facf713528f6a6baabcef6d79928b08..f9ca0f12d760485326f8ffae0cc5bdd2f8105336 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -7,6 +7,7 @@
+ #include <chrono>
+ #include <condition_variable>
+ #include <cstdint>
++#include <cstdio>
+ #include <deque>
+ #include <functional>
+ #include <mutex>
+@@ -367,8 +368,20 @@ public:
+ 
+     [[nodiscard]] EeKernelSnapshot snapshot() const;
+     void publishSnapshot();
++    void dumpContextHistory(FILE *out = stderr) const;
+ 
+ private:
++    struct ContextHistoryEntry
++    {
++        const char *reason = nullptr;
++        int threadId = 0;
++        uint32_t depth = 0, kind = 0, pc = 0, ra = 0, sp = 0, epc = 0, branchPc = 0;
++        bool delaySlot = false;
++    };
++    void recordContext(const char *reason, const GuestThread &thread);
++    std::array<ContextHistoryEntry, 32> m_contextHistory{};
++    uint64_t m_contextHistoryCount = 0;
++
+     struct ScheduledEvent
+     {
+         uint64_t deadlineCycle = 0;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index e7434d5c1e22ba6ce63f65d6a31322e9ea534a2c..1ba28df5006ef7df9e053f84f218a8657be4ab44 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -133,6 +133,7 @@ EeScheduler::~EeScheduler()
+ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+ {
+     m_executorThread = std::this_thread::get_id();
++    m_contextHistoryCount = 0;
+     m_rdram = rdram;
+     m_readyQueues = {};
+     m_threads.clear();
+@@ -193,6 +194,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
+     main.initialPriority = 0;
+     main.currentPriority = 0;
+     main.status = EeThreadStatus::Ready;
++    recordContext("reset", main);
+     m_threads.emplace(main.id, std::move(main));
+     m_readyQueues[0].push_back(kMainThreadId);
+     const uint64_t periodUs = ps2VsyncPeriodMicroseconds(m_runtime.memory());
+@@ -264,7 +266,9 @@ void EeScheduler::run()
+                 {
+                     SET_GPR_U32(&invocation.context, 29, invocationStackTop());
+                 }
++                recordContext("invocation-save", *owner);
+                 owner->invocations.push_back(std::move(invocation));
++                recordContext("invocation-enter", *owner);
+             }
+         }
+ 
+@@ -305,8 +309,10 @@ void EeScheduler::run()
+         {
+             if (!running->invocations.empty())
+             {
++                recordContext("invocation-return", *running);
+                 GuestInvocation completed = std::move(running->invocations.back());
+                 running->invocations.pop_back();
++                recordContext("invocation-restore", *running);
+                 if (completed.onComplete)
+                 {
+                     try
+@@ -346,7 +352,9 @@ void EeScheduler::run()
+             {
+                 SET_GPR_U32(&invocation.context, 29, invocationStackTop());
+             }
++            recordContext("invocation-save", *running);
+             running->invocations.push_back(std::move(invocation));
++            recordContext("invocation-enter", *running);
+             continue;
+         }
+ 
+@@ -538,6 +546,7 @@ void EeScheduler::idlePoll()
+     if (!m_checkpointPending.load(std::memory_order_acquire))
+         waitForEvent(m_runtime.m_iopSubsystem->eeCyclesUntilService(), sampledAt);
+     accountCycles(294912u);
++    recordContext("poll-idle-yield", *currentThread());
+     // Dispatch interrupts/callbacks before the guest rereads its poll words.
+     throw EeDispatcherTransfer{};
+ }
+@@ -720,6 +729,7 @@ int EeScheduler::suspendThread(int id, bool interruptSafe)
+     switch (target->status)
+     {
+     case EeThreadStatus::Running:
++        recordContext("suspend", *target);
+         target->status = EeThreadStatus::Suspended;
+         m_currentThreadId = 0;
+         m_rescheduleRequested = true;
+@@ -1263,7 +1273,9 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
+         SET_GPR_U32(&invocation.context, 29, invocationStackTop());
+     }
+     invocation.sequence = ++m_invocationSequence;
++    recordContext("invocation-save", *owner);
+     owner->invocations.push_back(std::move(invocation));
++    recordContext("invocation-enter", *owner);
+     publishSnapshot();
+     throw EeDispatcherTransfer{};
+ }
+@@ -1281,7 +1293,9 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
+             SET_GPR_U32(&it->context, 29, invocationStackTop());
+         }
+         it->sequence = ++m_invocationSequence;
++        recordContext("invocation-save", *owner);
+         owner->invocations.push_back(std::move(*it));
++        recordContext("invocation-enter", *owner);
+     }
+     publishSnapshot();
+     throw EeDispatcherTransfer{};
+@@ -1720,6 +1734,42 @@ void EeScheduler::publishSnapshot()
+     }
+ }
+ 
++void EeScheduler::recordContext(const char *reason, const GuestThread &item)
++{
++    const R5900Context &ctx = item.activeContext();
++    m_contextHistory[m_contextHistoryCount++ % m_contextHistory.size()] = {
++        reason, item.id, static_cast<uint32_t>(item.invocations.size()),
++        item.invocations.empty() ? UINT32_MAX : static_cast<uint32_t>(item.invocations.back().kind),
++        ctx.pc, getRegU32(&ctx, 31), getRegU32(&ctx, 29), ctx.cop0_epc, ctx.branch_pc, ctx.in_delay_slot};
++}
++
++void EeScheduler::dumpContextHistory(FILE *out) const
++{
++    const uint64_t begin = m_contextHistoryCount > m_contextHistory.size()
++                               ? m_contextHistoryCount - m_contextHistory.size() : 0u;
++    std::fprintf(out, "[ee-context-history] begin current=%d events=%llu\n",
++                 m_currentThreadId, static_cast<unsigned long long>(m_contextHistoryCount - begin));
++    for (uint64_t n = begin; n < m_contextHistoryCount; ++n)
++    {
++        const auto &e = m_contextHistory[n % m_contextHistory.size()];
++        std::fprintf(out, "[ee-context-history] #%llu thread=%d reason=%s depth=%u kind=%u pc=0x%x ra=0x%x sp=0x%x epc=0x%x branch=0x%x delay=%u\n",
++                     static_cast<unsigned long long>(n), e.threadId, e.reason, e.depth, e.kind,
++                     e.pc, e.ra, e.sp, e.epc, e.branchPc, static_cast<unsigned>(e.delaySlot));
++    }
++    for (const auto &[id, item] : m_threads)
++    {
++        const auto print = [&](const R5900Context &ctx, size_t depth) {
++            std::fprintf(out, "[ee-context-history] live thread=%d status=%u depth=%zu pc=0x%x ra=0x%x sp=0x%x epc=0x%x branch=0x%x delay=%u\n",
++                         id, static_cast<unsigned>(item.status), depth, ctx.pc, getRegU32(&ctx, 31),
++                         getRegU32(&ctx, 29), ctx.cop0_epc, ctx.branch_pc, static_cast<unsigned>(ctx.in_delay_slot));
++        };
++        print(item.context, 0u);
++        for (size_t i = 0; i < item.invocations.size(); ++i)
++            print(item.invocations[i].context, i + 1u);
++    }
++    std::fprintf(out, "[ee-context-history] end\n");
++}
++
+ void EeScheduler::assertExecutor() const
+ {
+     assert(m_executorThread == std::this_thread::get_id());
+@@ -1760,6 +1810,7 @@ GuestThread &EeScheduler::acquireInvocationThread()
+ void EeScheduler::enqueueReady(GuestThread &item, bool front)
+ {
+     assert(item.currentPriority >= 0 && item.currentPriority < kPriorityCount);
++    recordContext(item.status == EeThreadStatus::Running ? "switch-out" : "ready", item);
+     item.status = EeThreadStatus::Ready;
+     auto &queue = m_readyQueues[item.currentPriority];
+     if (front)
+@@ -1806,6 +1857,7 @@ void EeScheduler::makeRunning(GuestThread &item)
+ {
+     assert(m_currentThreadId == 0);
+     assert(item.status == EeThreadStatus::Ready);
++    recordContext("switch-in", item);
+     item.status = EeThreadStatus::Running;
+     m_currentThreadId = item.id;
+     renewTimeSlice();
+@@ -1813,6 +1865,7 @@ void EeScheduler::makeRunning(GuestThread &item)
+ 
+ void EeScheduler::makeDormant(GuestThread &item)
+ {
++    recordContext("dormant", item);
+     removeReady(item);
+     removeFromWaitObject(item);
+     item.status = EeThreadStatus::Dormant;
+@@ -1857,6 +1910,7 @@ void EeScheduler::blockCurrent(EeWaitState wait)
+ {
+     GuestThread *self = currentThread();
+     assert(self != nullptr);
++    recordContext("block", *self);
+     self->wait = std::move(wait);
+     self->status = self->suspendCount == 0 ? EeThreadStatus::Waiting : EeThreadStatus::WaitingSuspended;
+     m_currentThreadId = 0;
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index deb16abf377090bbb9bb92481e47618480e61532..d30c57941875ec58a7a25f6b6c1054f416ef268c 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -1475,6 +1475,7 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+ 
+     if (firstReport)
+     {
++        if (m_eeScheduler) m_eeScheduler->dumpContextHistory();
+         std::ostringstream oss;
+         oss << "[guest-branch:missing-target] kind=" << describeGuestBranchKind(kind)
+             << " op=" << (debugName ? debugName : "<unknown>")
+@@ -1630,6 +1631,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram, R5900Context *ctx, uint32_t
+ 
+ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+ {
++    if (m_eeScheduler) m_eeScheduler->dumpContextHistory();
+     if (exception == EXCEPTION_INTEGER_OVERFLOW)
+     {
+         HandleIntegerOverflow(ctx);
+@@ -2693,10 +2695,12 @@ void PS2Runtime::run()
+         }
+         catch (const std::exception &e)
+         {
++            m_eeScheduler->dumpContextHistory();
+             std::cerr << "Error during program execution: " << e.what() << std::endl;
+         }
+         catch (...)
+         {
++            m_eeScheduler->dumpContextHistory();
+             std::cerr << "Error during program execution: unknown exception" << std::endl;
+         }
+ #if defined(PS2X_USE_METAL)
+diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+index f1d5507bd1be0ce5bb7b5104c0a6e7bd0fc59eeb..27271c27e4506f38e7e5c38ffcb3d49dde81aa80 100644
+--- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+@@ -572,6 +572,54 @@ void register_ps2_runtime_kernel_tests()
+ {
+     MiniTest::Case("PS2RuntimeKernel", [](TestCase &tc)
+     {
++        tc.Run("context history wraps chronologically and preserves saved nested contexts", [](TestCase &t)
++        {
++            TestEnv env;
++            EeScheduler &ee = env.runtime.eeScheduler();
++            env.ctx.pc = 0x123400u;
++            env.ctx.cop0_epc = 0x456700u;
++            env.ctx.branch_pc = 0x1233fcu;
++            env.ctx.in_delay_slot = true;
++            SET_GPR_U32(&env.ctx, 31, 0x987600u);
++            SET_GPR_U32(&env.ctx, 29, 0x20000u);
++            ee.bindMainContextForSyscall(env.ctx, env.rdram.data());
++            for (unsigned i = 0; i < 20; ++i)
++            {
++                GuestInvocation invocation{};
++                invocation.kind = GuestInvocationKind::Interrupt;
++                invocation.context.pc = 0x300000u + i * 4u;
++                SET_GPR_U32(&invocation.context, 29, 0x40000u);
++                try { ee.invokeCurrent(std::move(invocation)); }
++                catch (const EeDispatcherTransfer &) {}
++            }
++            const auto dump = [&]() {
++                FILE *file = std::tmpfile();
++                if (!file) throw std::runtime_error("context history test tmpfile failed");
++                ee.dumpContextHistory(file);
++                std::rewind(file);
++                std::string text;
++                std::array<char, 512> buffer{};
++                while (std::fgets(buffer.data(), buffer.size(), file)) text += buffer.data();
++                std::fclose(file);
++                return text;
++            };
++            const std::string history = dump();
++            t.IsTrue(history.find("events=32") != std::string::npos,
++                     "history must retain only the last 32 transition records");
++            t.IsTrue(history.find("#10 thread=1 reason=invocation-save depth=4") != std::string::npos &&
++                     history.find("#41 thread=1 reason=invocation-enter depth=20") != std::string::npos &&
++                     history.find("#9 thread=") == std::string::npos,
++                     "wrapped records must be emitted oldest first with invocation identity");
++            t.IsTrue(history.find("depth=0 pc=0x123400 ra=0x987600 sp=0x20000 epc=0x456700 branch=0x1233fc delay=1") != std::string::npos,
++                     "fault dump must include suspended base registers and delay-slot state");
++            t.IsTrue(history.find("depth=20 kind=0 pc=0x30004c") != std::string::npos,
++                     "nested IRQ entry must retain its own PC and kind");
++            ee.reset(env.rdram.data(), env.ctx);
++            const std::string reset = dump();
++            t.IsTrue(reset.find("events=1") != std::string::npos && reset.find("reason=invocation-enter") == std::string::npos,
++                     "reset must discard history from the previous runtime");
++        });
++
+         tc.Run("unsigned loads and ABI word writes extend independently", [](TestCase &t)
+         {
+             constexpr uint64_t kUpper = 0x1122334455667788ull;
