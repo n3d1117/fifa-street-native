@@ -96,7 +96,7 @@ VU0 runs interpreted. VU1 native code comes from disc-derived programs; the inte
 
 `tools/probe/probe.py` reads macOS `proc_pid_rusage` RUSAGE_INFO_V4 around the bounded run when available. `energy_per_s` is billed energy in nJ/s; `wakeups_per_s` is package-idle plus interrupt wakeups per second. Both are null when the API or either sample is unavailable. They are process counters, not whole-system power readings.
 
-One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `videoMode` (`pal` default or `ntsc`), `renderScale` (1..4, native by default), `sharperImage`, and `displayAspect` (`auto`, `4:3`, or `16:9`). Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
+One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `videoMode` (`pal` default or `ntsc`), `renderScale` (1..4, native by default), `anisotropy` (0, 2, 4, 8 or 16; off by default), `sharperImage`, and `displayAspect` (`auto`, `4:3`, or `16:9`). Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
 
 `host/metal-host.mm` derives bridge variables from `Settings`.
 
@@ -110,7 +110,7 @@ Display aspect also controls the window's content ratio and the letterboxed full
 | `PS2X_CHEAT_UNLOCK_VENUES=1` | the game's own venue cheat flag (Settings checkbox; off by default) |
 | `PS2X_VIDEO_MODE=pal\|ntsc` | original PAL 50 Hz / opt-in game NTSC 60 Hz with 448-line render height (Settings; restart to apply) |
 | `PS2X_ASPECT=auto|4:3|16:9` | display aspect override (Settings menu; defaults to `auto`) |
-| `PS2X_SCALE=1..4`, `PS2X_SHARP=1` | override render scale and sharpening for this process |
+| `PS2X_SCALE=1..4`, `PS2X_ANISO=0|2|4|8|16`, `PS2X_SHARP=1` | override render scale, anisotropic filtering and sharpening for this process |
 | `PS2X_DIAGNOSTIC_INPUT_FIFO=<fifo>` | process-local scripted input |
 | `PS2X_TRACE_FAULTS=1`, `PS2X_TRACE_SPU2=1`, `PS2X_TRACE_CD_IO=1` | fault, audio-health and disc-read traces |
 | `PS2X_TRACE_AUDIO_RING=1` | once-per-second SPU2 ring depth, mix rate, pulls and under/overruns without per-event SPU2 tracing |

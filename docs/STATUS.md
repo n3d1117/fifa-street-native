@@ -11,7 +11,7 @@
 | Graphics | PCSX2 upstream master; Metal renderer. The dashed-texel grid is fixed upstream; user confirmation is pending. |
 | Skill-move crash | Fixed: the recompiler had split the return delay slot at `0x1E8480` into another function, leaving `sp` unrestored. 9 minutes of manual skill moves after the fix ran without a fault. Optional `PS2X_WATCH_RA_STOMP=1` checks RA/SP. |
 | Controller | DualSense via SDL3 HIDAPI (type `ps5`); DualShock 2 pressure order L1, R1, L2, R2. Rumble not forwarded yet. |
-| Display | Display aspect setting Auto / 4:3 / 16:9; the game's own Options 16:9 is anamorphic and needs Display aspect 16:9 until Auto follows the game flag. Render scale 1-4x. |
+| Display | Display aspect setting Auto / 4:3 / 16:9; the game's own Options 16:9 is anamorphic and needs Display aspect 16:9 until Auto follows the game flag. Render scale 1-4x. Anisotropic filtering Off/2x/4x/8x/16x (opt-in); at 2x scale, measured per-field GPU mean 1.98 ms at 16x and 1.36 ms Off (`RRV_GATE4_GS_COUNTERS`, clean-quit `python3 tools/probe/probe.py --route match --quit-at-end --app <bundle>`). |
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
 | Unverified | Directional input response, memory-card saves, other stadiums and modes, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
 | Platforms | macOS arm64 |
@@ -30,15 +30,14 @@ Work these in order. **Every task updates this file in the same commit that comp
 
 **Modern feel (all opt-in, off by default)**
 
-5. Anisotropic filtering: Settings Off/2x/4x/8x/16x mapped to PCSX2 `MaxAnisotropy` (already env-wired in `bridge/gs/bridge.cpp`). Verify with matched pitch captures and GPU ms.
-6. True 4K and anti-aliasing: allow 5x/6x render scale (6x = 3840 px wide; clamp to PCSX2's device max), add an FXAA checkbox beside the existing CAS sharpening. Measure per-vsync GPU ms (`RRV_PCSX2_GS_DIAG`) and memory pressure on the 8 GB M1 at 4x/5x/6x.
-7. Frame pacing and input latency: an opt-in "Synchronize presentation" setting that routes presents through PCSX2's existing Metal present-at-time pacer (FIFO). Measure frame-interval variance and input-to-photon latency on 60/120/144 Hz displays. Guest timing is untouched.
-8. Rumble: decode `scePadSetActAlign`/`scePadSetActDirect` in the pad HLE (currently dropped), forward the motor values to `SDL_RumbleGamepad` (DualSense), with a rumble on/off setting and intensity.
-9. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
-10. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
-11. Sharper 2D at high render scale: menu text and UI look soft and pixelated at 4x because they are low-resolution PS2 textures. Try PCSX2's upscaling fixes for 2D first (round sprite, align sprite, texture filtering for sprites) as opt-in settings. Compare matched menu captures (language screen, team select) at 4x.
-12. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
-13. Better movie scaling: replace bilinear stretching of the MPEG-2 intro movies with a high-quality scaler (bicubic or Lanczos) plus optional light sharpening, opt-in. The source detail is limited to the disc's PS2-resolution video.
+5. True 4K and anti-aliasing: allow 5x/6x render scale (6x = 3840 px wide; clamp to PCSX2's device max), add an FXAA checkbox beside the existing CAS sharpening. Measure per-vsync GPU ms (`RRV_PCSX2_GS_DIAG`) and memory pressure on the 8 GB M1 at 4x/5x/6x.
+6. Frame pacing and input latency: an opt-in "Synchronize presentation" setting that routes presents through PCSX2's existing Metal present-at-time pacer (FIFO). Measure frame-interval variance and input-to-photon latency on 60/120/144 Hz displays. Guest timing is untouched.
+7. Rumble: decode `scePadSetActAlign`/`scePadSetActDirect` in the pad HLE (currently dropped), forward the motor values to `SDL_RumbleGamepad` (DualSense), with a rumble on/off setting and intensity.
+8. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
+9. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
+10. Sharper 2D at high render scale: menu text and UI look soft and pixelated at 4x because they are low-resolution PS2 textures. Try PCSX2's upscaling fixes for 2D first (round sprite, align sprite, texture filtering for sprites) as opt-in settings. Compare matched menu captures (language screen, team select) at 4x.
+11. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
+12. Better movie scaling: replace bilinear stretching of the MPEG-2 intro movies with a high-quality scaler (bicubic or Lanczos) plus optional light sharpening, opt-in. The source detail is limited to the disc's PS2-resolution video.
 
 ## Backlog
 

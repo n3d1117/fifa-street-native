@@ -172,6 +172,10 @@ extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t
             const char scaleValue[] = {static_cast<char>('0' + settings.renderScale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
         }
+        if (settings.anisotropy > 0) {
+            const std::string anisoValue = std::to_string(settings.anisotropy);
+            setenv("RRV_PCSX2_GS_ANISO", anisoValue.c_str(), 1);
+        }
 
         NSApplication* app = [NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];

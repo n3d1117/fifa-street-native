@@ -23,6 +23,12 @@ int valid_render_scale(id value) {
         if ([value compare:@(scale)] == NSOrderedSame) return scale;
     return 0;
 }
+int valid_anisotropy(id value) {
+    if (!is_integer_number(value)) return -1;
+    for (int level : {0, 2, 4, 8, 16})
+        if ([value compare:@(level)] == NSOrderedSame) return level;
+    return -1;
+}
 DisplayAspect display_aspect(id value) {
     if (![value isKindOfClass:[NSString class]]) return DisplayAspect::Auto;
     if ([value isEqualToString:@"4:3"]) return DisplayAspect::FourThree;
@@ -57,6 +63,7 @@ Settings load_settings_file(const std::string& user_dir) {
             [plist[@"videoMode"] isEqualToString:@"ntsc"] ? VideoMode::NTSC : VideoMode::PAL;
         s.displayAspect = display_aspect(plist[@"displayAspect"]);
         if (const int scale = valid_render_scale(plist[@"renderScale"])) s.renderScale = scale;
+        if (const int aniso = valid_anisotropy(plist[@"anisotropy"]); aniso >= 0) s.anisotropy = aniso;
         return s;
     }
 }
@@ -68,6 +75,11 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
     };
     if (const char* scale = get("PS2X_SCALE"); scale && scale[0] >= '1' && scale[0] <= '4' && !scale[1])
         s.renderScale = scale[0] - '0';
+    if (const char* aniso = get("PS2X_ANISO")) {
+        const std::string value(aniso);
+        if (value == "0" || value == "2" || value == "4" || value == "8" || value == "16")
+            s.anisotropy = std::stoi(value);
+    }
     if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
     if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
     if (const char* venues = get("PS2X_CHEAT_UNLOCK_VENUES"); venues && std::string(venues) == "1") s.unlockAllVenues = true;
@@ -88,6 +100,7 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         if (user_dir.empty()) return false;
         NSMutableDictionary* plist = [NSMutableDictionary dictionaryWithDictionary:(read_dictionary(user_dir) ?: @{})];
         plist[@"renderScale"] = @(s.renderScale);
+        plist[@"anisotropy"] = @(s.anisotropy);
         plist[@"sharperImage"] = @(s.sharperImage);
         plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
         plist[@"videoMode"] = s.videoMode == VideoMode::NTSC ? @"ntsc" : @"pal";

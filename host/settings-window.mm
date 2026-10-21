@@ -13,6 +13,7 @@
 - (void)sharperImageChanged:(NSButton*)sender;
 - (void)unlockAllVenuesChanged:(NSButton*)sender;
 - (void)renderScaleChanged:(NSPopUpButton*)sender;
+- (void)anisotropyChanged:(NSPopUpButton*)sender;
 - (void)displayAspectChanged:(NSPopUpButton*)sender;
 - (void)videoModeChanged:(NSPopUpButton*)sender;
 - (void)saveSettings:(id)sender;
@@ -30,6 +31,7 @@ NSWindow* s_window;
 NSButton* s_sharperImageButton;
 NSButton* s_unlockAllVenuesButton;
 NSPopUpButton* s_renderScalePopup;
+NSPopUpButton* s_anisotropyPopup;
 NSPopUpButton* s_displayAspectPopup;
 NSPopUpButton* s_videoModePopup;
 NSTextField* s_status;
@@ -52,6 +54,7 @@ NSTextField* detailLabel(NSString* text, NSRect frame) {
 void refreshControls() {
     [s_sharperImageButton setState:s_pending.sharperImage ? NSControlStateValueOn : NSControlStateValueOff];
     [s_renderScalePopup selectItemWithTag:s_pending.renderScale];
+    [s_anisotropyPopup selectItemWithTag:s_pending.anisotropy];
     [s_unlockAllVenuesButton setState:s_pending.unlockAllVenues ? NSControlStateValueOn : NSControlStateValueOff];
     [s_videoModePopup selectItemWithTag:static_cast<NSInteger>(s_pending.videoMode)];
     [s_displayAspectPopup selectItemWithTag:static_cast<NSInteger>(s_pending.displayAspect)];
@@ -66,7 +69,7 @@ void showWindowOnMain() {
         return;
     }
     const CGFloat width = 520;
-    const CGFloat height = 450;
+    const CGFloat height = 510;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -77,9 +80,9 @@ void showWindowOnMain() {
     NSView* content = [s_window contentView];
 
     NSTextField* modeLabel = [NSTextField labelWithString:@"Video mode"];
-    [modeLabel setFrame:NSMakeRect(22, 404, 210, 22)];
+    [modeLabel setFrame:NSMakeRect(22, 464, 210, 22)];
     [content addSubview:modeLabel];
-    s_videoModePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 400, 248, 28) pullsDown:NO];
+    s_videoModePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 460, 248, 28) pullsDown:NO];
     [s_videoModePopup addItemWithTitle:@"PAL 50 Hz (original, default)"];
     [[s_videoModePopup lastItem] setTag:static_cast<NSInteger>(host::VideoMode::PAL)];
     [s_videoModePopup addItemWithTitle:@"NTSC 60 Hz"];
@@ -88,12 +91,12 @@ void showWindowOnMain() {
     [s_videoModePopup setAction:@selector(videoModeChanged:)];
     [content addSubview:s_videoModePopup];
     [content addSubview:detailLabel(@"NTSC 60 Hz uses the game's own 60 Hz mode.",
-                                    NSMakeRect(22, 368, width - 44, 24))];
+                                    NSMakeRect(22, 428, width - 44, 24))];
 
     NSTextField* aspectLabel = [NSTextField labelWithString:@"Display aspect"];
-    [aspectLabel setFrame:NSMakeRect(22, 324, 210, 22)];
+    [aspectLabel setFrame:NSMakeRect(22, 384, 210, 22)];
     [content addSubview:aspectLabel];
-    s_displayAspectPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 320, 220, 28) pullsDown:NO];
+    s_displayAspectPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 380, 220, 28) pullsDown:NO];
     const char* aspectTitles[] = {"Auto (follow game option)", "4:3", "16:9"};
     for (NSInteger aspect = 0; aspect < 3; ++aspect) {
         [s_displayAspectPopup addItemWithTitle:[NSString stringWithUTF8String:aspectTitles[aspect]]];
@@ -104,9 +107,9 @@ void showWindowOnMain() {
     [content addSubview:s_displayAspectPopup];
 
     NSTextField* scaleLabel = [NSTextField labelWithString:@"Internal render scale"];
-    [scaleLabel setFrame:NSMakeRect(22, 274, 210, 22)];
+    [scaleLabel setFrame:NSMakeRect(22, 334, 210, 22)];
     [content addSubview:scaleLabel];
-    s_renderScalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 270, 180, 28) pullsDown:NO];
+    s_renderScalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 330, 180, 28) pullsDown:NO];
     const char* scaleTitles[] = {"Native (1×)", "2×", "3×", "4×"};
     for (int scale = 1; scale <= 4; ++scale) {
         [s_renderScalePopup addItemWithTitle:[NSString stringWithUTF8String:scaleTitles[scale - 1]]];
@@ -116,7 +119,21 @@ void showWindowOnMain() {
     [s_renderScalePopup setAction:@selector(renderScaleChanged:)];
     [content addSubview:s_renderScalePopup];
     [content addSubview:detailLabel(@"Higher scales sharpen 3D geometry; textures and movies keep their original resolution.",
-                                    NSMakeRect(22, 228, width - 44, 36))];
+                                    NSMakeRect(22, 288, width - 44, 36))];
+
+    NSTextField* anisoLabel = [NSTextField labelWithString:@"Anisotropic filtering"];
+    [anisoLabel setFrame:NSMakeRect(22, 244, 210, 22)];
+    [content addSubview:anisoLabel];
+    s_anisotropyPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 240, 180, 28) pullsDown:NO];
+    const char* anisoTitles[] = {"Off", "2x", "4x", "8x", "16x"};
+    const NSInteger anisoValues[] = {0, 2, 4, 8, 16};
+    for (NSInteger index = 0; index < 5; ++index) {
+        [s_anisotropyPopup addItemWithTitle:[NSString stringWithUTF8String:anisoTitles[index]]];
+        [[s_anisotropyPopup lastItem] setTag:anisoValues[index]];
+    }
+    [s_anisotropyPopup setTarget:s_actions];
+    [s_anisotropyPopup setAction:@selector(anisotropyChanged:)];
+    [content addSubview:s_anisotropyPopup];
 
     s_sharperImageButton = [NSButton checkboxWithTitle:@"Sharper image" target:s_actions
                                                 action:@selector(sharperImageChanged:)];
@@ -164,6 +181,12 @@ void showWindowOnMain() {
     if (selected >= 1 && selected <= 4) s_pending.renderScale = static_cast<int>(selected);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
+- (void)anisotropyChanged:(NSPopUpButton*)sender {
+    const NSInteger selected = [[sender selectedItem] tag];
+    if (selected == 0 || selected == 2 || selected == 4 || selected == 8 || selected == 16)
+        s_pending.anisotropy = static_cast<int>(selected);
+    setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
+}
 - (void)displayAspectChanged:(NSPopUpButton*)sender {
     const NSInteger selected = [[sender selectedItem] tag];
     if (selected >= 0 && selected <= 2) s_pending.displayAspect = static_cast<host::DisplayAspect>(selected);
@@ -191,8 +214,8 @@ void configure_settings(const char* userDirectory) {
     apply_env_overrides(settings, [](const char* name) -> const char* { return std::getenv(name); });
     s_active = settings;
     s_pending = settings;
-    std::fprintf(stderr, "[settings] scale=%d sharp=%d wallClock=%d unlockAllVenues=%d\n",
-                 settings.renderScale, settings.sharperImage, settings.wallClock, settings.unlockAllVenues);
+    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d wallClock=%d unlockAllVenues=%d\n",
+                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.wallClock, settings.unlockAllVenues);
 }
 
 const Settings& active_settings() { return s_active; }
