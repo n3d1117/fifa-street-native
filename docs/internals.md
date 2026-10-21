@@ -141,6 +141,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 
 ## Tried and rejected
 
+- `PS2X_VIDEO_MODE=ntsc` (retail selector hook) stayed at 50.0 fps in both runs, versus 50.0 PAL; HUD clock was 0.983/1.0003 seconds per wall second in NTSC (PAL 0.9815/1.0017), so the game's NTSC branch did not yield the expected 59.9 fps.
 - FPU direction-index overflow and unaligned SQ are not needed to explain this skill-move fault: the missed `0x1E8480` stack restoration predicts both epilogue dispatches and v0; quadword macros already mask the low four address bits, as PCSX2 does.
 - Treating scheduler `source=target=0x3` as evidence of a missing translated function: both fields come from the same saved PC; the preceding guest epilogue can return an unchecked stack-loaded RA.
 
