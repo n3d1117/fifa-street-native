@@ -52,9 +52,20 @@ Ops: `Vif`, `GifPacket` (packets over 1 MiB are read in place while the EE waits
 
 The ring uses monotonic head/tail byte counters (seq-cst). The worker never waits on the EE. Every EE-to-worker blocking edge has a 2 s watchdog that prints the stuck op and aborts. A worker exception is rethrown on the EE at its next enqueue or drain.
 
-The EE waits only at: GS CSR/SIGLBLID access with packets outstanding; any EE load or store to VU1 code or data (`mapVuMemory`); the VBlank vsync with CSR readback; GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; and `PS2Memory::initialize` and shutdown. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
+The EE waits only at: GS CSR/SIGLBLID access with packets outstanding; any EE load or store to VU1 code or data (`mapVuMemory`); the VBlank vsync with CSR readback; GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; VIF1 FLUSH-family commands when selected deferred VU1/GIF work is pending; and `PS2Memory::initialize` and shutdown. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
 
-Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity across wraps with random barriers, exception propagation, and identical VU1 memory, MSCAL sequence and GIF packet order versus inline.
+VIF1 FLUSHE waits for queued VU1 jobs; FLUSH also drains deferred PATH1/PATH2 GIF packets; FLUSHA drains PATH1/PATH2/PATH3. The arbiter retains unselected paths across a selective drain. The PCSX2 reference is `Vif_Codes.cpp::vifFlush`, `vifCode_Flush/A/E`, and `Vif1_Dma.cpp::vif1FLUSH`.
+
+Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity across wraps with random barriers, exception propagation, identical VU1 memory, MSCAL sequence and GIF packet order versus inline, plus VIF1 FLUSH waits and selective GIF path draining.
+
+Measured on `./rx run --match` and `./rx run --route match` with temporary runtime counters:
+
+- Runtime does not synthesize GIF_STAT FIFO depth or active path fields; both routes read GIF_STAT twice and got `0x4`, so active-transfer FQC/APATH status is not exercised by FIFA Street (measured).
+- Runtime SIGNAL/FINISH IRQ timing differs from PCSX2; no GS SIGNAL/FINISH/LABEL writes or EE CSR/IMR reads occurred, so this behavior is not exercised by FIFA Street (measured).
+- Runtime PATH3 mask handling was not invoked; no MSKPATH3 set/clear commands occurred, so this difference is not exercised by FIFA Street (measured).
+- Runtime D_CTRL STS/STD handling differs in supported nonzero stall modes; all 24,455 D_CTRL writes used zero STS/STD, so nonzero stall control is not exercised by FIFA Street (measured).
+- Runtime does not model PCSX2's per-scanline HBlank timer gating; the probe's HBlank predicate did not cover all gate modes, so whether FIFA uses that path remains unresolved.
+- EE COUNT/MODE reads occurred on T1/T2, but the probe did not collect register values or compare them with PCSX2; cycle-accounting impact on those reads is not established by these measurements.
 
 ## VU
 
