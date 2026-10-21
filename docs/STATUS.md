@@ -30,10 +30,9 @@ Work these in order. **Every task updates this file in the same commit that comp
 
 **Modern feel (all opt-in, off by default)**
 
-5. Frame pacing and input latency: an opt-in "Synchronize presentation" setting that routes presents through PCSX2's existing Metal present-at-time pacer (FIFO). Measure frame-interval variance and input-to-photon latency on 60/120/144 Hz displays. Guest timing is untouched.
-6. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
-7. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
-8. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
+5. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
+6. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
+7. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
 
 ## Backlog
 

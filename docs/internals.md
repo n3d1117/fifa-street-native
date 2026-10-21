@@ -144,6 +144,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 
 ## Tried and rejected
 
+- PAL Metal present pacing (opt-in FIFO, 50 Hz): `./rx ab --control PS2X_PRESENT_SYNC=0 --candidate PS2X_PRESENT_SYNC=1 --pairs 2 --match` measured 50.0 FPS control vs 49.1 median candidate (48.2–50.0), with zero underruns in both; it missed the 50 FPS acceptance threshold. The bounded runner did not flush the requested exit-time present traces.
 - Selector-only NTSC startup: keeps the PAL constructor’s 512-line height, expands GS reservations and sends an invalid pitch TEX0 to the GS. Mode selection must pair selector `0` with the 448-line NTSC height. PAL is unchanged.
 - Goal/replay peaks above 1.0 come from the upstream DC blocker overshooting a clamped near-full-scale SPU2 mix (measured raw peak 32,766); the host adds no gain and matches PCSX2's output stage.
 - FPU direction-index overflow and unaligned SQ are not needed to explain this skill-move fault: the missed `0x1E8480` stack restoration predicts both epilogue dispatches and v0; quadword macros already mask the low four address bits, as PCSX2 does.
