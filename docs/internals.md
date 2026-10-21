@@ -102,7 +102,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 
 Display aspect also controls the window's content ratio and the letterboxed full-screen viewport; the GS bridge uses PCSX2's aspect draw rectangle. `auto` selects PCSX2's automatic GS mode detection. The FIFA widescreen option is stored in guest state that the host does not currently read, so use `16:9` after enabling the game's own 16:9 option; `4:3` preserves the original host presentation.
 
-Tried and rejected: Auto widescreen guest-state sampling; the ELF string table contains `gWidescreenMode`, but `./rx where gWidescreenMode` finds no symbol, the generated hit at `0x414138` is only a function return path, and no installed MIPS disassembler was available to identify and verify the option handler or its flag value.
+Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C` resolves to `gWidescreenMode` (`0x513138`), and the Audio / Video menu was driven through WIDESCREEN OFF → ON → OFF with RDRAM snapshots. The proposed heap word `0x00ACA500` changed `0/1` repeatedly on front-end frames while a capture still showed WIDESCREEN OFF; its adjacent `AUDI` page signature also disappears when that UI allocation is reused. This does not identify a stable guest option word, so the host continues to require an explicit 16:9 aspect after enabling the game option.
 
 | Variable | Effect |
 |---|---|
