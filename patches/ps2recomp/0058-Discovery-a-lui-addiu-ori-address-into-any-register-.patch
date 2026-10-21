@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:56:00 +0200
-Subject: [PATCH 58/86] Discovery: a lui/addiu|ori address into any register
+Subject: [PATCH 58/87] Discovery: a lui/addiu|ori address into any register
  within 16 instructions is a code pointer (leaf functions start with any
  instruction)
 

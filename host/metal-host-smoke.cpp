@@ -128,6 +128,20 @@ int main() {
                         std::cerr << std::dec << '\n';
                         result.store(7, std::memory_order_relaxed);
                     }
+                    if (!ps2x_metal_gs_submit(3, reinterpret_cast<const uint8_t*>(download_setup.data()),
+                                                sizeof(download_setup))) {
+                        result.store(7, std::memory_order_relaxed);
+                    } else {
+                        pixels.fill(0);
+                        const uint32_t first = ps2x_metal_gs_read_fifo(pixels.data(), 16);
+                        const uint32_t second = ps2x_metal_gs_read_fifo(pixels.data() + 16, 16);
+                        const uint32_t exhausted = ps2x_metal_gs_read_fifo(pixels.data(), 16);
+                        if (first != 16 || second != 16 || exhausted != 0 ||
+                            std::memcmp(pixels.data(), expected_pixels.data(), pixels.size()) != 0) {
+                            std::cerr << "PCSX2 Metal GS incremental VIF1 FIFO download differs from fixture\n";
+                            result.store(7, std::memory_order_relaxed);
+                        }
+                    }
                 }
             }
             // Mirror sceGsExecStoreImage's packed A+D setup for a 1x1 CT32

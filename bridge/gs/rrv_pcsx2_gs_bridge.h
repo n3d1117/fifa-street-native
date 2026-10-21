@@ -215,6 +215,9 @@ RRV_PCSX2_GS_BRIDGE_API int rrv_pcsx2_gs_bridge_write_csr(
 // count; the bridge pads its internal FIFO read to QWC and never writes those
 // padding bytes to `dst`. The ABI retains the three descriptors for caller
 // provenance/trace identity; this function never submits or acknowledges them.
+RRV_PCSX2_GS_BRIDGE_API uint32_t rrv_pcsx2_gs_bridge_read_fifo(
+    RrvPcsx2GsBridge* bridge, uint8_t* dst, uint32_t byte_count);
+
 RRV_PCSX2_GS_BRIDGE_API int rrv_pcsx2_gs_bridge_read_local_memory(
     RrvPcsx2GsBridge* bridge, uint8_t* dst, uint32_t byte_count,
     uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg,

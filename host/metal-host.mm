@@ -379,6 +379,10 @@ extern "C" int ps2x_metal_gs_readback(uint64_t* csr, uint64_t* siglblid) {
     try { const auto r=s_gs->readback(); *csr=r.csr; *siglblid=r.siglblid; return 1; }
     catch (const std::exception& e) { NSLog(@"Metal GS readback failed: %s", e.what()); return 0; }
 }
+extern "C" uint32_t ps2x_metal_gs_read_fifo(uint8_t* dst, uint32_t byte_count) {
+    if (!s_gs || !dst || byte_count == 0) return 0;
+    return s_gs->read_fifo(std::span<uint8_t>(dst, byte_count));
+}
 extern "C" int ps2x_metal_gs_read_local_memory(uint8_t* dst, uint32_t byte_count,
                                                   uint64_t bitbltbuf, uint64_t trxpos,
                                                   uint64_t trxreg) {

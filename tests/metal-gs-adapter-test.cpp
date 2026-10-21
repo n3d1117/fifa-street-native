@@ -64,6 +64,11 @@ int rrv_pcsx2_gs_bridge_write_csr(RrvPcsx2GsBridge*, uint64_t csr, uint32_t mask
     return 1;
 }
 int rrv_pcsx2_gs_bridge_readback(RrvPcsx2GsBridge*, uint64_t* csr, uint64_t* sig, char*, uint32_t) { ++g_readbacks; *csr = 11; *sig = 22; return 1; }
+uint32_t rrv_pcsx2_gs_bridge_read_fifo(RrvPcsx2GsBridge*, uint8_t* dst, uint32_t bytes) {
+    const uint32_t copied = bytes < 16u ? bytes : 16u;
+    std::memset(dst, 0x5a, copied);
+    return copied;
+}
 int rrv_pcsx2_gs_bridge_read_local_memory(RrvPcsx2GsBridge*, uint8_t* dst, uint32_t bytes,
     uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg, char* error, uint32_t error_size) {
     g_read_bytes = bytes; g_read_bitbltbuf = bitbltbuf; g_read_trxpos = trxpos; g_read_trxreg = trxreg;
@@ -128,6 +133,9 @@ int main() {
         assert((local == std::array<uint8_t, 4>{0x5a, 0x5a, 0x5a, 0x5a}));
         assert(g_read_bytes == local.size() && g_read_bitbltbuf == 0x11 &&
                g_read_trxpos == 0x22 && g_read_trxreg == 0x33);
+        std::array<uint8_t, 32> fifo{};
+        assert(adapter.read_fifo(fifo) == 16);
+        assert(fifo[0] == 0x5a && fifo[15] == 0x5a && fifo[16] == 0);
         adapter.close();
     }
     assert(g_destroys == 1);

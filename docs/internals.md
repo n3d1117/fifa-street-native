@@ -68,6 +68,8 @@ Measured on `./rx run --match` and `./rx run --route match` with temporary runti
 - EE COUNT/MODE reads occurred on T1/T2, but the probe did not collect register values or compare them with PCSX2; cycle-accounting impact on those reads is not established by these measurements.
 - The REWIND freeze trace rejected a stopped EE timer as its cause: game tick `0x495348` advanced about 60/s, VBlank about 50/s, T1/T2 counts and active callback thresholds advanced, and no timer IRQ was pending; the waiting task's completion word stayed zero.
 
+Replay frame capture queues two 0x34-byte records (`sub_0029D2F8`); `sub_0029DD38` waits on record+8, written to 1 at `0x3BF3E0` by the VIF1 DMA handler after a GS download. Like PCSX2 `Vif1_Dma.cpp`, reverse VIF1 DMA (`DIR=0`, retail `CHCR=0x184`) ignores MOD, preserves TADR, consumes the native GS FIFO on its owner thread, advances MADR/QWC and raises DMAC1. Tests: `ps2_memory_tests.cpp` and `metalHostSmoke`; replay/match-clock evidence: `./rx run --match --seconds 150`.
+
 ## VU
 
 VU0 runs interpreted. VU1 native code comes from disc-derived programs; the interpreter handles anything else, and `PS2X_VU1_INTERPRETER=1` forces it. `PS2X_VU1_DIFF=1` compares native state, data, timing and packets with interpretation; `./rx run` reports the counts and fails on a mismatch, budget stop or missing differential coverage. Differential agreement establishes interpreter agreement only. Strict floating-point flags apply to both paths. Native state, data and GIF packets commit only after successful completion.

@@ -2072,6 +2072,19 @@ extern "C" RRV_PCSX2_GS_BRIDGE_API int rrv_pcsx2_gs_bridge_write_csr(
     return 1;
 }
 
+extern "C" uint32_t rrv_pcsx2_gs_bridge_read_fifo(
+    RrvPcsx2GsBridge* bridge, uint8_t* dst, uint32_t byte_count)
+{
+    if (!bridge || !bridge->open || !dst || byte_count == 0 || (byte_count & 15u) ||
+        byte_count > RRV_PCSX2_GS_BRIDGE_LOCAL_MEMORY_BYTES)
+        return 0;
+    const ScopedBridgeGsFpcr fpcr_guard(bridge->fp_isolated);
+    std::vector<uint8_t> fifo(byte_count);
+    const uint32_t copied = GSReadCurrentFIFO(fifo.data(), byte_count);
+    if (copied) std::memcpy(dst, fifo.data(), copied);
+    return copied;
+}
+
 extern "C" int rrv_pcsx2_gs_bridge_read_local_memory(
     RrvPcsx2GsBridge* bridge, uint8_t* dst, uint32_t byte_count,
     uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg,

@@ -6,6 +6,7 @@
 |---|---|
 | Boot | Logos, language menu, EA intro movies with audio, front end, team and stadium selection |
 | Match | Live play at full speed: HUD clock 1.0 s per wall s, native VU1 from the disc, zero interpreter fallbacks (`./rx run --match`) |
+| Replay | Post-goal REWIND sequences animate and return to live play on the match route; direct VIF1 framebuffer downloads complete through the native GS FIFO (`./rx run --match --seconds 150`) |
 | Frame rate | Measured: 50 game frames/s steady during live play on the match route (`./rx run --match`, `fps_game`, series in `summary.json` `fps_game_series`; one new image per vsync, never DISPFB changes). Menus and loads run lower |
 | Audio | Movies and match usually run with zero underruns (`./rx run --match`), but some runs show bursts (0 to about 8000 across six measured runs; cause not yet known) |
 | Graphics | PCSX2 HW renderer at PCSX2 defaults (no per-game hacks); Metal shaders compiled at start from `deps/pcsx2`. Pitch, flags, headshots and venue preview render correctly on the match route |

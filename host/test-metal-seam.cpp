@@ -18,5 +18,6 @@ int ps2x_metal_gs_submit(uint32_t, const uint8_t *, uint32_t) { return 1; }
 int ps2x_metal_gs_readback(uint64_t *csr, uint64_t *siglblid) { *csr = 0; *siglblid = 0; return 1; }
 int ps2x_metal_gs_write_csr(uint64_t, uint32_t, int) { return 1; }
 int ps2x_metal_gs_vsync(const uint64_t *, uint64_t, uint32_t) { return 1; }
+uint32_t ps2x_metal_gs_read_fifo(uint8_t *, uint32_t bytes) { return bytes; }
 int ps2x_metal_gs_read_local_memory(uint8_t *, uint32_t, uint64_t, uint64_t, uint64_t) { return 1; }
 }

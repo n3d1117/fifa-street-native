@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 22:28:46 +0200
-Subject: [PATCH 33/86] Protect VI0 in every integer VU0 macro destination
+Subject: [PATCH 33/87] Protect VI0 in every integer VU0 macro destination
 
 Each of VIADD/VISUB/VIADDI/VIAND/VIOR/VMTIR/VILWR emitted a write to VI0. The new regression failed for all seven emitters. Drop these writes at translation time while preserving nonzero destinations. Reference: PCSX2 VUops.cpp integer/MTIR/ILWR guards and ps2autotests vu0_macro/integer.expected writes to $0 returning 0000. ./tz test passes 54/54; full replay and route validation follow in the batch export.
 

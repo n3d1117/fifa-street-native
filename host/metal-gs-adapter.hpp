@@ -40,6 +40,7 @@ public:
                uint64_t field_index, uint32_t field_parity);
     struct Readback { uint64_t csr; uint64_t siglblid; };
     Readback readback();
+    uint32_t read_fifo(std::span<uint8_t> destination);
     void read_local_memory(std::span<uint8_t> destination, uint64_t bitbltbuf,
                            uint64_t trxpos, uint64_t trxreg);
     void snapshot_local_memory(std::span<uint8_t> destination);

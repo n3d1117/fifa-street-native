@@ -19,6 +19,7 @@ int ps2x_metal_gs_write_csr(uint64_t authoritative_csr, uint32_t high_word_write
                               int write_high_word);
 int ps2x_metal_gs_vsync(const uint64_t* regs19, uint64_t tick, uint32_t parity);
 int ps2x_metal_gs_readback(uint64_t* csr, uint64_t* siglblid);
+uint32_t ps2x_metal_gs_read_fifo(uint8_t* dst, uint32_t byte_count);
 int ps2x_metal_gs_read_local_memory(uint8_t* dst, uint32_t byte_count,
                                      uint64_t bitbltbuf, uint64_t trxpos, uint64_t trxreg);
 int ps2x_metal_gs_capabilities(uint32_t* renderer_kind, uint32_t* flags);

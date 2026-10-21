@@ -637,6 +637,7 @@ def main():
                                       fflags=select.KQ_NOTE_EXIT)], 0, 0)
     route = ROUTES.get(args.route)
     cap = Capture(out, preserve=bool(route), started=started)
+    requested_seconds = args.seconds
     if route:
         args.seconds = max(args.seconds, route.get("timeout", 0))
     deadline = started + args.seconds
@@ -685,7 +686,7 @@ def main():
             if route:
                 if gameplay_at is None and cap.gameplay_confirmed:
                     gameplay_at = now
-                    deadline = min(route_deadline, gameplay_at + route["tail"])
+                    deadline = min(route_deadline, max(started + requested_seconds, gameplay_at + route["tail"]))
                     state_asked = False
                     request_state()
                 if play_steps and play_step_at is None and cap.gameplay_confirmed:

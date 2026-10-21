@@ -323,6 +323,11 @@ MetalGsAdapter::Readback MetalGsAdapter::readback() {
           "readback", error);
     return result;
 }
+uint32_t MetalGsAdapter::read_fifo(std::span<uint8_t> dst) {
+    if (!handle_) throw std::logic_error("PCSX2 Metal GS FIFO read after close");
+    if (dst.size() > UINT32_MAX) throw std::length_error("FIFO read exceeds bridge ABI size limit");
+    return rrv_pcsx2_gs_bridge_read_fifo(handle_, dst.data(), static_cast<uint32_t>(dst.size()));
+}
 void MetalGsAdapter::read_local_memory(std::span<uint8_t> dst, uint64_t bitbltbuf,
                                        uint64_t trxpos, uint64_t trxreg) {
     if (!handle_) throw std::logic_error("PCSX2 Metal GS local-memory read after close");
