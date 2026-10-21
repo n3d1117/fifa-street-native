@@ -29,8 +29,7 @@ Work these in order. **Every task updates this file in the same commit that comp
 **Modern feel (all opt-in, off by default)**
 
 4. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
-5. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
-6. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
+5. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
 
 ## Backlog
 

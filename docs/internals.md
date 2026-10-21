@@ -102,6 +102,8 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 
 Display aspect also controls the window's content ratio and the letterboxed full-screen viewport; the GS bridge uses PCSX2's aspect draw rectangle. `auto` selects PCSX2's automatic GS mode detection. The FIFA widescreen option is stored in guest state that the host does not currently read, so use `16:9` after enabling the game's own 16:9 option; `4:3` preserves the original host presentation.
 
+Tried and rejected: Auto widescreen guest-state sampling; the ELF string table contains `gWidescreenMode`, but `./rx where gWidescreenMode` finds no symbol, the generated hit at `0x414138` is only a function return path, and no installed MIPS disassembler was available to identify and verify the option handler or its flag value.
+
 | Variable | Effect |
 |---|---|
 | `PS2X_WALLCLOCK=0` | deterministic estimated-cycle timing |
