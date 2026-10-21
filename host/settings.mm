@@ -38,6 +38,7 @@ Settings load_settings_file(const std::string& user_dir) {
         Settings s;
         NSDictionary* plist = read_dictionary(user_dir);
         s.sharperImage = flag(plist, @"sharperImage");
+        s.unlockAllVenues = flag(plist, @"unlockAllVenues");
         if (const int scale = valid_render_scale(plist[@"renderScale"])) s.renderScale = scale;
         return s;
     }
@@ -52,6 +53,7 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
         s.renderScale = scale[0] - '0';
     if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
     if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
+    if (const char* venues = get("PS2X_CHEAT_UNLOCK_VENUES"); venues && std::string(venues) == "1") s.unlockAllVenues = true;
 }
 
 bool save_settings_file(const std::string& user_dir, const Settings& s) {
@@ -60,6 +62,7 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         NSMutableDictionary* plist = [NSMutableDictionary dictionaryWithDictionary:(read_dictionary(user_dir) ?: @{})];
         plist[@"renderScale"] = @(s.renderScale);
         plist[@"sharperImage"] = @(s.sharperImage);
+        plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
         NSError* error = nil;
         NSData* data = [NSPropertyListSerialization dataWithPropertyList:plist
             format:NSPropertyListXMLFormat_v1_0 options:0 error:&error];

@@ -22,6 +22,8 @@ PS2Recomp has no mid-function override. Config `[[hooks]]` (address, `before`/`a
 
 **Vblank poll** (`host/poll-idle.cpp`, hook `0x3C1994`): `sub_003C18D0` spins on the word at `s1+0xBC` (callback slot `s1+0xCC`) until the VBlank-start interrupt handler `sub_003C4ED0` (INTC cause 2) clears it. While the word is non-zero, no callback is registered and timing is wall-clock, the hook sets `$v0`/`pc` as the taken back-edge leaves them and calls `idlePoll`, which wakes at the VBlank deadline. `PS2X_POLL_IDLE=0` spins, `verify` checks the loop registers and that the wait only advances Count; deterministic timing never sleeps. Test: `poll_idle`.
 
+**Cheats** (`host/cheats.cpp`, Settings "Cheat: unlock all venues", `PS2X_CHEAT_UNLOCK_VENUES=1`, off by default): FIFA Street's cCheatCodeManager venue handler (`0x1E8CC8`) only stores 1 to `0x480684` and shows "All venues unlocked!"; venue select reads it (`0x2CD248`, `0x2D320C`). The front-end update (`0x2ECA38`) is wrapped and raises that word after the original runs; ELF words are verified first. The kits/tournaments/players handlers store `0x480688`/`0x48068C`/`0x480690` the same way. With it on, Roma plays through the menus; `PS2X_BOOT_MATCH=venue=5` still faults on a NULL `0x48EBC8` callback because the hook skips the front-end venue path.
+
 Removing a config stub alone cannot restore guest execution: PS2Recomp also auto-binds names in `ps2_call_list.h`, so both lists must change together.
 
 ## Boot to match (diagnostic)
@@ -91,6 +93,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 |---|---|
 | `PS2X_WALLCLOCK=0` | deterministic estimated-cycle timing |
 | `PS2X_POLL_IDLE=0` / `verify` | spin in the vblank poll / check its loop registers and wait context (never measure verify mode) |
+| `PS2X_CHEAT_UNLOCK_VENUES=1` | the game's own venue cheat flag (Settings checkbox; off by default) |
 | `PS2X_SCALE=1..4`, `PS2X_SHARP=1` | override render scale and sharpening for this process |
 | `PS2X_DIAGNOSTIC_INPUT_FIFO=<fifo>` | process-local scripted input |
 | `PS2X_TRACE_FAULTS=1`, `PS2X_TRACE_SPU2=1`, `PS2X_TRACE_CD_IO=1` | fault, audio-health and disc-read traces |

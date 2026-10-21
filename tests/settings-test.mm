@@ -32,6 +32,7 @@ int main() {
         Settings all;
         all.renderScale = 3;
         all.sharperImage = true;
+        all.unlockAllVenues = true;
         assert(host::save_settings_file(dir, all));
         assert(host::load_settings_file(dir) == all);
 
@@ -50,11 +51,11 @@ int main() {
 
         // Debug overrides apply on top of the file.
         Settings s;
-        g_env = {{"PS2X_SCALE", "4"}, {"PS2X_SHARP", "1"}, {"PS2X_WALLCLOCK", "0"}};
+        g_env = {{"PS2X_SCALE", "4"}, {"PS2X_SHARP", "1"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}};
         host::apply_env_overrides(s, fake_env);
-        assert(s.renderScale == 4 && s.sharperImage && !s.wallClock);
+        assert(s.renderScale == 4 && s.sharperImage && !s.wallClock && s.unlockAllVenues);
         Settings invalid;
-        g_env = {{"PS2X_SCALE", "7"}, {"PS2X_SHARP", "yes"}, {"PS2X_WALLCLOCK", "1"}};
+        g_env = {{"PS2X_SCALE", "7"}, {"PS2X_SHARP", "yes"}, {"PS2X_WALLCLOCK", "1"}, {"PS2X_CHEAT_UNLOCK_VENUES", "yes"}};
         host::apply_env_overrides(invalid, fake_env);
         assert(invalid == Settings{});
 
