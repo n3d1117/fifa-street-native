@@ -561,6 +561,9 @@ def cmd_run(args):
         if s["save_dir_changed"]:
             run.failed.append("save dir changed")
             run.notes.append("FAIL: the real save dir changed during the run")
+        if s.get("scene") == "match_play" and (s.get("fps_game") or 0) < 49.5:
+            run.failed.append("gameplay fps")  # measured: the match renders a new frame every PAL vsync
+            run.notes.append(f"FAIL: gameplay fps_game {s.get('fps_game')} (median of play windows) below 50")
         if s["audio_underruns"]:
             run.failed.append("audio underruns")
             run.notes.append(f"FAIL: {s['audio_underruns']} steady-state audio underruns")

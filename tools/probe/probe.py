@@ -103,7 +103,7 @@ def parse_log(text):
     game = re.findall(r"\[gs-game\] frames=\d+ over=[0-9.]+s game_fps=([0-9.]+)", text)
     if game:
         out["fps_game_series"] = [float(g) for g in game]  # one value per 5 s window
-        out["fps_game"] = max(out["fps_game_series"])  # best window: menus and loads are lower
+        out["fps_game"] = max(out["fps_game_series"])  # best window; replaced by the gameplay median once play is confirmed
     native = re.findall(r"\[vu1rec\] \w+: mscal=(\d+) native=(\d+) fallback=(\d+) \(noprogram=(\d+)\) "
                         r"forced=(\d+) mscnt=(\d+) nativeFail=(\d+) \| diff calls=(\d+) "
                         r"mismatch=(\d+) interpBudget=(\d+)", text)
@@ -798,9 +798,16 @@ def main():
         scene = "match_play" if cap.gameplay_confirmed else ("commentary_open" if commentary_open else f"menus ({len(route['steps']) - len(steps)} of {len(route['steps'])} steps sent)")
         if crash or fault_stop:
             scene = "crash"
+    fps_game = metrics.get("fps_game")
+    series = metrics.get("fps_game_series") or []
+    if gameplay_at is not None:
+        # Windows fully after confirmed play; goal replays draw elsewhere and read low, so take the median.
+        play = series[int((gameplay_at - started) // 5) + 1:]
+        if play:
+            fps_game = sorted(play)[len(play) // 2]
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
-        "fps_game": metrics.get("fps_game"),
+        "fps_game": fps_game,
         "fps_game_series": metrics.get("fps_game_series"),
         "gpu_presents_per_sec": metrics.get("gpu_presents_per_sec"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
