@@ -9,6 +9,7 @@
 | Audio | Warm match runs can have zero underruns, with occasional small bursts. A cold Metal shader cache causes underrun bursts: about 7k on a cold run and about 53k on first launch (`./rx run --match`). |
 | Graphics | PCSX2 upstream master; Metal renderer. The dashed-texel grid is fixed upstream; user confirmation is pending. |
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
+| Unverified | Directional input response, memory-card saves, other stadiums and modes, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
 | Platforms | macOS arm64 |
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
@@ -19,7 +20,6 @@
 2. Reproduce and reduce the residual warm-run audio-underrun flake.
 3. Add an offline VU1 benchmark and savestate workflow; SloppyWyn's PS2Recomp fork has snapshot work to evaluate.
 4. Evaluate lean code generation and build-time effects against SloppyWyn's fork.
-5. Check GIF FIFO behavior, EE cycle rate and VIF1 CYCLE CL=0 against PCSX2.
 
 ## Backlog
 
