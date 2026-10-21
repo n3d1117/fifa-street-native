@@ -28,17 +28,16 @@ Work these in order. **Every task updates this file in the same commit that comp
 3. Audio clipping on goals and replays: peaks reach 1.1-1.6x full scale with up to 446 clipped samples/s. Match PCSX2's SPU2 output stage (gain, core mix, final clamp) in `bridge/spu2` and `host/spu2-host.cpp`; no limiter.
 4. Boot hook for any venue: `PS2X_BOOT_MATCH=venue=5` (Roma) faults on a NULL `0x48EBC8` callback because the hook skips the front-end venue path. `setvenuebyid` (`0x2E64C0`) maps ids differently (id 5 loaded Amsterdam). Follow the menu path for every venue, and have `--match` honour `PS2X_BOOT_MATCH`.
 5. Re-verify the warm-run audio fix: 8 consecutive `./rx run --match --seconds 120 --button-spam` runs on a clean build with 0 underruns, and an A/B against `PS2X_EE_IOP_IDLE=0`.
-6. Faster test loop: offline VU1 benchmark (Tarzan `61b10ca`) and save states/determinism hashes (evaluate SloppyWyn's PS2Recomp fork); trim `--match`.
-7. Lean code generation evaluation (SloppyWyn's fork `docs/LEAN-CODEGEN.md`): build time and binary size behind a generator kill-switch.
+6. Lean code generation evaluation (SloppyWyn's fork `docs/LEAN-CODEGEN.md`): build time and binary size behind a generator kill-switch.
 
 **Modern feel (all opt-in, off by default)**
 
-8. Anisotropic filtering: Settings Off/2x/4x/8x/16x mapped to PCSX2 `MaxAnisotropy` (already env-wired in `bridge/gs/bridge.cpp`). Verify with matched pitch captures and GPU ms.
-9. True 4K and anti-aliasing: allow 5x/6x render scale (6x = 3840 px wide; clamp to PCSX2's device max), add an FXAA checkbox beside the existing CAS sharpening. Measure per-vsync GPU ms (`RRV_PCSX2_GS_DIAG`) and memory pressure on the 8 GB M1 at 4x/5x/6x.
-10. Frame pacing and input latency: an opt-in "Synchronize presentation" setting that routes presents through PCSX2's existing Metal present-at-time pacer (FIFO). Measure frame-interval variance and input-to-photon latency on 60/120/144 Hz displays. Guest timing is untouched.
-11. Rumble: decode `scePadSetActAlign`/`scePadSetActDirect` in the pad HLE (currently dropped), forward the motor values to `SDL_RumbleGamepad` (DualSense), with a rumble on/off setting and intensity.
-12. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
-13. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
+7. Anisotropic filtering: Settings Off/2x/4x/8x/16x mapped to PCSX2 `MaxAnisotropy` (already env-wired in `bridge/gs/bridge.cpp`). Verify with matched pitch captures and GPU ms.
+8. True 4K and anti-aliasing: allow 5x/6x render scale (6x = 3840 px wide; clamp to PCSX2's device max), add an FXAA checkbox beside the existing CAS sharpening. Measure per-vsync GPU ms (`RRV_PCSX2_GS_DIAG`) and memory pressure on the 8 GB M1 at 4x/5x/6x.
+9. Frame pacing and input latency: an opt-in "Synchronize presentation" setting that routes presents through PCSX2's existing Metal present-at-time pacer (FIFO). Measure frame-interval variance and input-to-photon latency on 60/120/144 Hz displays. Guest timing is untouched.
+10. Rumble: decode `scePadSetActAlign`/`scePadSetActDirect` in the pad HLE (currently dropped), forward the motor values to `SDL_RumbleGamepad` (DualSense), with a rumble on/off setting and intensity.
+11. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
+12. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
 
 ## Backlog
 
