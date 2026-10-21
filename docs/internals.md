@@ -137,6 +137,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Texture dashes as EE-side corruption (MMI ops, DMA, uploads, refpack): uploads and GS local memory match the disc byte for byte; the error was PCSX2 v2.8.2's Metal FBMask truncating RT alpha.
 - Sampling `SDL_GetAudioStreamQueued` at the health interval: callback-driven playback drains the stream immediately, so it does not report device or OS queue depth.
 - EE alarm host-deadline waits as the cause of startup audio gaps: tracing observed no long waits in `processDueDeadlines` during those gaps.
+- `PS2X_THREAD_QOS=1` (`USER_INTERACTIVE` on GameThread and stream worker): rejected after `./rx ab --control PS2X_THREAD_QOS=0 --candidate PS2X_THREAD_QOS=1 --pairs 2 --match --profile`; fps stayed 50, but candidate wakeups rose 15% (1,133 to 1,303/s), worker CPU rose 6.5%, and one candidate had 16,217 audio underruns.
 
 - Metal pipeline or shader compilation as the cause of audio underrun bursts: `newRenderPipelineStateWithDescriptor` took at most 0.6 ms and `newFunctionWithName` under 3 ms in bursting runs; the stall was `[CAMetalLayer nextDrawable]` blocking the GS worker (EE waits for it in the `GS vsync` drain) after a catch-up burst of presents.
 - The upstream `RRV_PCSX2_GS_PRESENT_THROTTLE`/`ShouldSkipPresentingFrame` as the fix: it only acts with FIFO vsync, which the host does not enable, so it was a no-op (6 of 6 runs still burst).
