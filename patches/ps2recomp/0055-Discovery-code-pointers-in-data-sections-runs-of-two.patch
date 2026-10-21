@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:32:19 +0200
-Subject: [PATCH 55/89] Discovery: code pointers in data sections (runs of two
+Subject: [PATCH 55/90] Discovery: code pointers in data sections (runs of two
  or more, or a lone pointer at a prologue) and lui/addiu address pairs are
  entry points
 
