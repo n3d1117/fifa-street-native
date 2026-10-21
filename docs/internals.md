@@ -66,6 +66,7 @@ Measured on `./rx run --match` and `./rx run --route match` with temporary runti
 - Runtime D_CTRL STS/STD handling differs in supported nonzero stall modes; all 24,455 D_CTRL writes used zero STS/STD, so nonzero stall control is not exercised by FIFA Street (measured).
 - Runtime does not model PCSX2's per-scanline HBlank timer gating; the probe's HBlank predicate did not cover all gate modes, so whether FIFA uses that path remains unresolved.
 - EE COUNT/MODE reads occurred on T1/T2, but the probe did not collect register values or compare them with PCSX2; cycle-accounting impact on those reads is not established by these measurements.
+- The REWIND freeze trace rejected a stopped EE timer as its cause: game tick `0x495348` advanced about 60/s, VBlank about 50/s, T1/T2 counts and active callback thresholds advanced, and no timer IRQ was pending; the waiting task's completion word stayed zero.
 
 ## VU
 
