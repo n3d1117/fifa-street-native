@@ -137,7 +137,7 @@ def extract(iso_path: Path, dest: Path, report_path: Path) -> None:
     try:
         got = hashlib.sha1(read_boot_elf(iso)).hexdigest()
         if got != GAME["elf_sha1"]:
-            raise Fail(f"{GAME['elf']} SHA-1 mismatch: got {got}, expected {GAME['elf_sha1']}")
+            raise Fail(f"{GAME['elf']} SHA-1 mismatch: got {got}, expected {GAME['elf_sha1']}; use the supported PAL disc and rerun ./rx disc <path-to-iso>")
         records, seen = [], set()
         for dirpath, _dirs, files in iso.walk(iso_path="/"):
             for filename in files:

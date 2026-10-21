@@ -13,6 +13,7 @@
 | Controller | DualSense via SDL3 HIDAPI (type `ps5`); DualShock 2 pressure order L1, R1, L2, R2. Rumble is opt-in and off by default; libpad actuator alignment/direct bytes map the small motor bit to SDL high frequency and the large byte to low frequency, scaled by the 25–100% intensity setting. A traced Marseille match showed guest values forwarded to SDL. With rumble enabled and tracing off, `./rx run --match --seconds 60` measured 50.0 gameplay FPS and zero audio underruns. Physical vibration was not confirmed by touch. |
 | Display | Aspect Auto/4:3/16:9; Auto does not follow the game WIDESCREEN option, so select 16:9 manually. Runtime menu-toggle snapshots did not establish a stable guest flag (`docs/internals.md`). Scale 1–6×; 5×/6× captures are correct. At 4×/5×/6×: 50.0 FPS, zero underruns; median GPU 2.75/4.00/5.54 ms. FXAA at 4×: 50.0 FPS, 4.44 ms; one run had 1,086 audio underruns (diagnostic: 3,356). On this 8 GB M1, 5× added 17,831 swapout pages (~279 MiB); 6× added none. FXAA is off. FPS: `./rx run --match --seconds 60`; GPU: clean-quit `./rx run --route match --seconds 60 --app 'build/dist/FIFA Street PS2.app' --quit-cycles 1` with `RRV_GATE4_GS_COUNTERS`; memory: sampled `memory_pressure`, `vm_stat`, and `ps -o rss`. |
 | UI texture upscaling | Settings checkbox “Smooth UI textures (xBRZ)”, off by default; only small paletted sprite/quad textures (up to 64×64) at 2×–6×. 4× language-screen capture comparison showed sharper menu text; flags remained intact. Match probe: 50.0 FPS and 0 audio underruns with filter off and on. Enabled run processed 205 textures in 124 ms cumulative elapsed processing time; peak reported cache allocation was 7.62 MiB. `./rx run --match --seconds 60`; cache statistics are in the run log. Other venues remain unverified. |
+| Release polish | Package-time generated original icon, sectioned Settings window, launch alerts for missing or mismatched game data, and user setup/troubleshooting docs. `./rx package` audit clean; `./rx run --match --seconds 60` measured 50.0 gameplay FPS and 0 audio underruns. |
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
 | Unverified | Directional input response, memory-card saves, other stadiums and modes, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
 | Platforms | macOS arm64 |
@@ -21,4 +22,4 @@
 
 ## Backlog
 
-Architecture and CPU-efficiency reviews, release polish, iOS/tvOS.
+Architecture and CPU-efficiency reviews, iOS/tvOS.

@@ -28,6 +28,25 @@ cd fifa-street-native
 ./rx package --install        # optional: /Applications/FIFA Street PS2.app
 ```
 
+## Play
+
+Open **FIFA Street PS2.app** from Applications. A supported PAL disc must be verified with `./rx disc` before packaging; the app bundle contains the extracted game data. If building from this checkout, `./rx disc <path-to-iso>`, `./rx build`, then `./rx package --install`.
+
+Use a gamepad or the default keyboard bindings: arrows move; Cross X/Space, Circle C/Escape, Square Z/keypad 0, Triangle V/keypad 1, L1 Q, R1 W, L2 E, R2 R, Start Return, Select Tab. Open **Controls** from the app menu to view or rebind keys.
+
+Open **Settings** from the app menu, then Save and restart the game to apply changes:
+
+- Video mode: PAL 50 Hz (default) or the game's NTSC 60 Hz mode. Aspect: Auto (default), 4:3 or 16:9.
+- Enhancements: internal scale 1× (default) to 6×; anisotropic filtering off by default; sharper image, FXAA and Smooth UI textures (xBRZ) off by default. These affect presentation; larger scales use more memory.
+- Controller: rumble off by default; intensity defaults to 100% and matters when rumble is enabled.
+- Cheats: unlock all venues off by default; enabling it sets the game's own venue cheat flag.
+
+## Troubleshooting
+
+- **Game data missing or unsupported:** verify your own PAL disc with `./rx disc <path-to-iso>`, rebuild, and package again. The installed app looks for `SLES_530.64` in its bundled `Contents/Resources/game` folder.
+- **App does not open:** build with `./rx build`, then create or install the bundle with `./rx package` or `./rx package --install`. Check `~/Library/Application Support/FIFAStreetPS2/Logs/native.log` for a detached launch error.
+- **Settings do not change the current session:** save in Settings and restart the game; settings are read at launch.
+
 Saves and settings: `~/Library/Application Support/FIFAStreetPS2`.
 
 License: GPL-3.0-or-later. See `LICENSE` and `THIRD_PARTY.md`.

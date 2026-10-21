@@ -19,6 +19,20 @@
 #include <cstdlib>
 #include <cstring>
 
+extern "C" void ps2x_show_error_alert(const char* message) {
+    @autoreleasepool {
+        NSApplication* app = [NSApplication sharedApplication];
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        if (![app isRunning]) [app finishLaunching];
+        [app activateIgnoringOtherApps:YES];
+        NSAlert* alert = [NSAlert new];
+        [alert setMessageText:@"FIFA Street could not start"];
+        [alert setInformativeText:[NSString stringWithUTF8String:message ? message : "Unknown launch error"]];
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    }
+}
+
 namespace {
 NSWindow* s_window;
 NSView* s_view;

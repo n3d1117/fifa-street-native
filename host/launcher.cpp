@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <mach-o/dyld.h>
+#include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -27,11 +28,13 @@ bool ps2x_ra_watch_install(PS2Runtime &runtime, const std::filesystem::path &elf
 bool ps2x_poll_idle_install(PS2Runtime &runtime, const std::filesystem::path &elfPath);
 bool ps2x_video_mode_install(PS2Runtime&, const std::filesystem::path&, host::VideoMode);
 bool ps2x_cheats_install(PS2Runtime &runtime, const std::filesystem::path &elfPath, bool unlockAllVenues);
+extern "C" void ps2x_show_error_alert(const char* message);
 
 namespace
 {
-// When this executable is Contents/MacOS/<name> of an app bundle, the game
-// data ships in Contents/Resources/game. Empty path when not in a bundle.
+// When this executable is Contents/MacOS/<name> of an app bundle, keep lookup
+// inside Contents/Resources/game even when the ELF is missing so validation
+// can explain how to repair the bundle instead of finding a checkout copy.
 std::filesystem::path bundledGameElf()
 {
     uint32_t size = 0;
@@ -42,8 +45,8 @@ std::filesystem::path bundledGameElf()
     const std::filesystem::path macos = std::filesystem::path(exe.c_str()).lexically_normal().parent_path();
     const std::filesystem::path elf = macos.parent_path() / "Resources" / "game" /
         std::filesystem::path(PS2X_DEFAULT_BOOT_ELF).filename();
-    std::error_code ec;
-    if (macos.filename() == "MacOS" && std::filesystem::exists(elf, ec))
+    if (macos.filename() == "MacOS" && macos.parent_path().filename() == "Contents" &&
+        macos.parent_path().parent_path().extension() == ".app")
         return elf;
     return {};
 }
@@ -65,6 +68,61 @@ void redirectLogsIfDetached(const std::filesystem::path &userDirectory)
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     close(fd);
+}
+
+bool isDetachedLaunch()
+{
+    struct stat devNull{}, err{};
+    return stat("/dev/null", &devNull) == 0 && fstat(STDERR_FILENO, &err) == 0 &&
+        S_ISCHR(err.st_mode) && err.st_rdev == devNull.st_rdev;
+}
+
+std::string sha1(const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    CC_SHA1_CTX context;
+    CC_SHA1_Init(&context);
+    char buffer[64 * 1024];
+    while (input) {
+        input.read(buffer, sizeof(buffer));
+        const auto count = input.gcount();
+        if (count > 0) CC_SHA1_Update(&context, buffer, static_cast<CC_LONG>(count));
+    }
+    if (!input.eof()) return {};
+    unsigned char digest[CC_SHA1_DIGEST_LENGTH];
+    CC_SHA1_Final(digest, &context);
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(CC_SHA1_DIGEST_LENGTH * 2);
+    for (unsigned char byte : digest) { result.push_back(hex[byte >> 4]); result.push_back(hex[byte & 15]); }
+    return result;
+}
+
+bool isBundledApp()
+{
+    uint32_t size = 0;
+    _NSGetExecutablePath(nullptr, &size);
+    std::string exe(size, '\0');
+    if (size == 0 || _NSGetExecutablePath(exe.data(), &size) != 0) return false;
+    const auto macos = std::filesystem::path(exe.c_str()).lexically_normal().parent_path();
+    return macos.filename() == "MacOS" && macos.parent_path().filename() == "Contents" &&
+        macos.parent_path().parent_path().extension() == ".app";
+}
+
+void validateGameElf(const std::filesystem::path& elf)
+{
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(elf, ec)) {
+        if (isBundledApp())
+            throw std::runtime_error("Game data is missing. This app expects your verified game files at Contents/Resources/game/SLES_530.64. Rebuild the app after running ./rx disc <path-to-iso>.");
+        throw std::runtime_error("Game ELF is missing at " + elf.string() + ". Run ./rx disc <path-to-iso> to verify and extract your disc.");
+    }
+    const std::string actual = sha1(elf);
+    if (actual != PS2X_GAME_ELF_SHA1) {
+        if (isBundledApp())
+            throw std::runtime_error("The bundled game ELF does not match the supported PAL disc. Rebuild the app after running ./rx disc <path-to-iso> with your FIFA Street PAL disc.");
+        throw std::runtime_error("Game ELF SHA-1 mismatch at " + elf.string() + ". Run ./rx disc <path-to-iso> with the supported FIFA Street PAL disc.");
+    }
 }
 
 struct LaunchOptions
@@ -234,6 +292,7 @@ void setupTerminateLogger()
 
 int ps2x_app_run(const Ps2xAppConfig *config)
 {
+    const bool detachedLaunch = isDetachedLaunch();
     try
     {
         if (!config || !config->elf_path || !config->user_dir)
@@ -249,6 +308,7 @@ int ps2x_app_run(const Ps2xAppConfig *config)
             throw std::runtime_error("Unable to resolve user directory: " + error.message());
 
         redirectLogsIfDetached(userDirectory);
+        validateGameElf(elfPath);
         // Settings: the user's file plus the documented debug overrides, loaded once.
         host::configure_settings(userDirectory.c_str());
         const auto pipelineCache = userDirectory / "gs-metal-pipelines.txt";
@@ -275,7 +335,9 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         }
         if (!runtime.loadELF(elfPath.string()))
         {
-            std::cerr << "Failed to load game ELF: " << elfPath << std::endl;
+            const std::string message = "Could not load the verified game ELF at " + elfPath.string() + ". Rebuild the app from your extracted disc files.";
+            std::cerr << message << std::endl;
+            if (detachedLaunch) ps2x_show_error_alert(message.c_str());
             return 1;
         }
 
@@ -310,6 +372,7 @@ int ps2x_app_run(const Ps2xAppConfig *config)
     catch (const std::exception &error)
     {
         std::cerr << "[launcher] " << error.what() << std::endl;
+        if (detachedLaunch) ps2x_show_error_alert(error.what());
     }
     catch (...)
     {
