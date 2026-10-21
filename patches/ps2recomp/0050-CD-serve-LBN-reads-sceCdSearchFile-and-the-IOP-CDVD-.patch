@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 19:33:37 +0200
-Subject: [PATCH 50/92] CD: serve LBN reads, sceCdSearchFile and the IOP CDVD
+Subject: [PATCH 50/93] CD: serve LBN reads, sceCdSearchFile and the IOP CDVD
  from the disc's real LBN map (lbn_map.h); remove pseudo LBNs, leaf/loose
  indexes and the cdImage read path on the EE side
 

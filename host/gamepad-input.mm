@@ -3,6 +3,9 @@
 #include <SDL3/SDL.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 
 namespace {
@@ -11,6 +14,10 @@ Ps2xGamepadSnapshot s_snapshot{};
 SDL_Gamepad* s_gamepad = nullptr;
 bool s_initialized = false;
 bool s_active = true;
+std::atomic<uint8_t> s_rumble_small{0};
+std::atomic<uint8_t> s_rumble_large{0};
+std::atomic<bool> s_rumble_enabled{false};
+std::atomic<uint8_t> s_rumble_intensity{100};
 
 void publish_empty(bool connected = false)
 {
@@ -22,6 +29,7 @@ void publish_empty(bool connected = false)
 void close_gamepad()
 {
     if (s_gamepad) {
+        (void)SDL_RumbleGamepad(s_gamepad, 0, 0, 0);
         SDL_CloseGamepad(s_gamepad);
         s_gamepad = nullptr;
     }
@@ -94,6 +102,7 @@ extern "C" void ps2x_gamepad_poll(void)
     discard_input_events(SDL_EVENT_GAMEPAD_AXIS_MOTION,
                          SDL_EVENT_GAMEPAD_STEAM_HANDLE_UPDATED);
     if (!s_active) {
+        if (s_gamepad) (void)SDL_RumbleGamepad(s_gamepad, 0, 0, 0);
         publish_empty();
         return;
     }
@@ -102,6 +111,30 @@ extern "C" void ps2x_gamepad_poll(void)
         publish_empty();
     }
     open_first_gamepad();
+
+    {
+        const uint8_t small = s_rumble_small.load(std::memory_order_relaxed);
+        const uint8_t large = s_rumble_large.load(std::memory_order_relaxed);
+        const uint8_t intensity = s_rumble_intensity.load(std::memory_order_relaxed);
+        const bool enabled = s_rumble_enabled.load(std::memory_order_relaxed);
+        const uint16_t low = enabled
+            ? static_cast<uint16_t>(static_cast<unsigned>(large) * 257u * static_cast<unsigned>(intensity) / 100u)
+            : 0u;
+        const uint16_t high = enabled && small ? static_cast<uint16_t>(65535u * static_cast<unsigned>(intensity) / 100u) : 0u;
+        if (s_gamepad) (void)SDL_RumbleGamepad(s_gamepad, low, high, 200);
+        static const bool traceRumble = [] {
+            const char* value = std::getenv("PS2X_TRACE_RUMBLE");
+            return value && value[0] == '1';
+        }();
+        static int lastRumble = -1;
+        const int currentRumble = (static_cast<int>(small) << 8) | static_cast<int>(large) |
+            (enabled ? (1 << 16) : 0) | (s_gamepad ? (1 << 17) : 0);
+        if (traceRumble && currentRumble != lastRumble)
+            std::fprintf(stderr, "[rumble-host] small=%u large=%u low=%u high=%u intensity=%u%% device=%s\n", small, large,
+                         static_cast<unsigned>(low), static_cast<unsigned>(high), intensity,
+                         s_gamepad ? "connected" : "none");
+        lastRumble = currentRumble;
+    }
 
     Ps2xGamepadSnapshot next{};
     next.connected = s_gamepad ? 1 : 0;
@@ -135,9 +168,12 @@ extern "C" void ps2x_gamepad_poll(void)
 extern "C" void ps2x_gamepad_set_active(int active)
 {
     s_active = active != 0;
-    if (!s_active)
+    if (!s_active) {
+        s_rumble_small.store(0, std::memory_order_relaxed);
+        s_rumble_large.store(0, std::memory_order_relaxed);
+        if (s_gamepad) (void)SDL_RumbleGamepad(s_gamepad, 0, 0, 0);
         publish_empty();
-    else if (s_initialized)
+    } else if (s_initialized)
         open_first_gamepad();
 }
 
@@ -157,4 +193,16 @@ extern "C" void ps2x_gamepad_read(Ps2xGamepadSnapshot* out_snapshot)
         return;
     std::lock_guard<std::mutex> lock(s_snapshot_mutex);
     *out_snapshot = s_snapshot;
+}
+
+extern "C" void ps2x_gamepad_set_rumble(uint8_t small_on, uint8_t large)
+{
+    s_rumble_small.store(small_on ? 1u : 0u, std::memory_order_relaxed);
+    s_rumble_large.store(large, std::memory_order_relaxed);
+}
+
+extern "C" void ps2x_gamepad_set_rumble_settings(int enabled, uint8_t intensity_percent)
+{
+    s_rumble_enabled.store(enabled != 0, std::memory_order_relaxed);
+    s_rumble_intensity.store(std::clamp<uint8_t>(intensity_percent, 25u, 100u), std::memory_order_relaxed);
 }

@@ -154,6 +154,13 @@ target_link_options(settingsTest PRIVATE -stdlib=libc++)
 target_link_libraries(settingsTest PRIVATE "-framework Foundation")
 add_test(NAME settings COMMAND settingsTest)
 
+add_executable(padRumbleTest "${RX_ROOT}/tests/pad-rumble-test.cpp")
+target_include_directories(padRumbleTest PRIVATE
+    "${RX_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/src/lib/Kernel/Stubs")
+target_compile_features(padRumbleTest PRIVATE cxx_std_20)
+target_compile_options(padRumbleTest PRIVATE -UNDEBUG)
+add_test(NAME pad_rumble COMMAND padRumbleTest)
+
 add_executable(metalGsAdapterTest
     "${RX_ROOT}/tests/metal-gs-adapter-test.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp")

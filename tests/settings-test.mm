@@ -34,6 +34,8 @@ int main() {
         all.renderScale = 3;
         all.anisotropy = 8;
         all.sharperImage = true;
+        all.rumble = true;
+        all.rumbleIntensity = 75;
         all.fxaa = true;
         all.unlockAllVenues = true;
         all.displayAspect = host::DisplayAspect::SixteenNine;
@@ -62,14 +64,14 @@ int main() {
 
         // Debug overrides apply on top of the file.
         Settings s;
-        g_env = {{"PS2X_VIDEO_MODE", "ntsc"}, {"PS2X_SCALE", "6"}, {"PS2X_ANISO", "16"}, {"PS2X_SHARP", "1"}, {"PS2X_FXAA", "1"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}, {"PS2X_ASPECT", "16:9"}};
+        g_env = {{"PS2X_VIDEO_MODE", "ntsc"}, {"PS2X_SCALE", "6"}, {"PS2X_ANISO", "16"}, {"PS2X_SHARP", "1"}, {"PS2X_FXAA", "1"}, {"PS2X_RUMBLE", "1"}, {"PS2X_RUMBLE_INTENSITY", "75"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}, {"PS2X_ASPECT", "16:9"}};
         host::apply_env_overrides(s, fake_env);
         assert(s.videoMode == host::VideoMode::NTSC && s.renderScale == 6 && s.anisotropy == 16 && s.sharperImage && s.fxaa && !s.wallClock && s.unlockAllVenues &&
-               s.displayAspect == host::DisplayAspect::SixteenNine);
+               s.displayAspect == host::DisplayAspect::SixteenNine && s.rumble && s.rumbleIntensity == 75);
         Settings explicitOff = all;
-        g_env = {{"PS2X_ANISO", "0"}};
+        g_env = {{"PS2X_ANISO", "0"}, {"PS2X_RUMBLE", "0"}};
         host::apply_env_overrides(explicitOff, fake_env);
-        assert(explicitOff.anisotropy == 0);
+        assert(explicitOff.anisotropy == 0 && !explicitOff.rumble);
         Settings invalid;
         g_env = {{"PS2X_VIDEO_MODE", "NTSC"}, {"PS2X_SCALE", "7"}, {"PS2X_ANISO", "3"}, {"PS2X_SHARP", "yes"}, {"PS2X_FXAA", "yes"}, {"PS2X_WALLCLOCK", "1"}, {"PS2X_CHEAT_UNLOCK_VENUES", "yes"}, {"PS2X_ASPECT", "squash"}};
         host::apply_env_overrides(invalid, fake_env);

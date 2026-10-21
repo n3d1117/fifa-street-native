@@ -36,4 +36,6 @@ void ps2x_gamepad_poll(void);         // Cocoa main thread, once per host poll
 void ps2x_gamepad_set_active(int active); // clear state while app is unfocused
 void ps2x_gamepad_shutdown(void);     // Cocoa main thread
 void ps2x_gamepad_read(Ps2xGamepadSnapshot* out_snapshot); // any thread
+void ps2x_gamepad_set_rumble(uint8_t small_on, uint8_t large); // any thread
+void ps2x_gamepad_set_rumble_settings(int enabled, uint8_t intensity_percent); // Cocoa main thread, before polling
 }

@@ -11,6 +11,8 @@ int ps2x_metal_host_should_close() { return 0; }
 void ps2x_metal_host_stop() {}
 int ps2x_metal_key_down(uint32_t) { return 0; }
 void ps2x_gamepad_read(Ps2xGamepadSnapshot *out) { *out = Ps2xGamepadSnapshot{}; }
+void ps2x_gamepad_set_rumble(uint8_t, uint8_t) {}
+void ps2x_gamepad_set_rumble_settings(int, uint8_t) {}
 int ps2x_metal_gs_create() { return 1; }
 void ps2x_metal_gs_destroy() {}
 int ps2x_metal_gs_reset() { return 1; }

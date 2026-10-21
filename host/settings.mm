@@ -29,6 +29,11 @@ int valid_anisotropy(id value) {
         if ([value compare:@(level)] == NSOrderedSame) return level;
     return -1;
 }
+int valid_rumble_intensity(id value) {
+    if (!is_integer_number(value)) return -1;
+    const NSInteger level = [value integerValue];
+    return level >= 25 && level <= 100 ? static_cast<int>(level) : -1;
+}
 DisplayAspect display_aspect(id value) {
     if (![value isKindOfClass:[NSString class]]) return DisplayAspect::Auto;
     if ([value isEqualToString:@"4:3"]) return DisplayAspect::FourThree;
@@ -58,6 +63,7 @@ Settings load_settings_file(const std::string& user_dir) {
         Settings s;
         NSDictionary* plist = read_dictionary(user_dir);
         s.sharperImage = flag(plist, @"sharperImage");
+        s.rumble = flag(plist, @"rumble");
         s.fxaa = flag(plist, @"fxaa");
         s.unlockAllVenues = flag(plist, @"unlockAllVenues");
         s.videoMode = [plist[@"videoMode"] isKindOfClass:[NSString class]] &&
@@ -65,6 +71,7 @@ Settings load_settings_file(const std::string& user_dir) {
         s.displayAspect = display_aspect(plist[@"displayAspect"]);
         if (const int scale = valid_render_scale(plist[@"renderScale"])) s.renderScale = scale;
         if (const int aniso = valid_anisotropy(plist[@"anisotropy"]); aniso >= 0) s.anisotropy = aniso;
+        if (const int intensity = valid_rumble_intensity(plist[@"rumbleIntensity"]); intensity >= 0) s.rumbleIntensity = intensity;
         return s;
     }
 }
@@ -83,6 +90,17 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
     }
     if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
     if (const char* fxaa = get("PS2X_FXAA"); fxaa && std::string(fxaa) == "1") s.fxaa = true;
+    if (const char* rumble = get("PS2X_RUMBLE")) {
+        if (std::string(rumble) == "0") s.rumble = false;
+        else if (std::string(rumble) == "1") s.rumble = true;
+    }
+    if (const char* intensity = get("PS2X_RUMBLE_INTENSITY")) {
+        const std::string value(intensity);
+        try {
+            const int level = std::stoi(value);
+            if (level >= 25 && level <= 100 && std::to_string(level) == value) s.rumbleIntensity = level;
+        } catch (...) {}
+    }
     if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
     if (const char* venues = get("PS2X_CHEAT_UNLOCK_VENUES"); venues && std::string(venues) == "1") s.unlockAllVenues = true;
     if (const char* mode = get("PS2X_VIDEO_MODE")) {
@@ -104,6 +122,8 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         plist[@"renderScale"] = @(s.renderScale);
         plist[@"anisotropy"] = @(s.anisotropy);
         plist[@"sharperImage"] = @(s.sharperImage);
+        plist[@"rumble"] = @(s.rumble);
+        plist[@"rumbleIntensity"] = @(s.rumbleIntensity);
         plist[@"fxaa"] = @(s.fxaa);
         plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
         plist[@"videoMode"] = s.videoMode == VideoMode::NTSC ? @"ntsc" : @"pal";

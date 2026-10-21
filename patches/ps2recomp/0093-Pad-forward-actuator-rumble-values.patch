@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Wed, 21 Oct 2026 21:41:56 +0200
+Subject: [PATCH 93/93] Pad: forward actuator rumble values
+
+Decode the six-byte libpad actuator alignment and direct data in the Pad HLE, preserving the small motor LSB and full-byte large motor semantics. Forward the decoded values through the host gamepad API when built for Metal.
+
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index b627fb13d91bba6bbc9f54209c665e75c5a4558c..3181b4b98881c1dd620f6742125585a72be7702f 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -1,5 +1,10 @@
+ #include "Common.h"
+ #include "Pad.h"
++#include "PadRumble.h"
++#include <atomic>
++#if defined(PS2X_USE_METAL)
++extern "C" void ps2x_gamepad_set_rumble(uint8_t small_on, uint8_t large);
++#endif
+ 
+ namespace ps2_stubs
+ {
+@@ -59,6 +64,7 @@ namespace ps2_stubs
+             uint8_t lastData[32]{};
+             uint32_t readCount = 0u;
+             uint32_t lastReadDataAddr = 0u;
++            uint8_t actuatorAlign[6] = {0u, 1u, 0xFFu, 0xFFu, 0xFFu, 0xFFu};
+         };
+ 
+         std::mutex g_padOverrideMutex;
+@@ -708,15 +714,54 @@ namespace ps2_stubs
+ 
+     void scePadSetActAlign(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+         (void)runtime;
++        const int port = static_cast<int>(getRegU32(ctx, 4));
++        const int slot = static_cast<int>(getRegU32(ctx, 5));
++        const uint32_t alignAddr = getRegU32(ctx, 6);
++        const uint8_t *align = getMemPtr(rdram, alignAddr);
++        if (align)
++        {
++            std::lock_guard<std::mutex> lock(g_padStateMutex);
++            PadPortState *portState = lookupPadPortStateLocked(port, slot);
++            if (portState)
++                std::memcpy(portState->actuatorAlign, align, sizeof(portState->actuatorAlign));
++        }
+         setReturnS32(ctx, 1);
+     }
+ 
+     void scePadSetActDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        (void)rdram;
+         (void)runtime;
++        const int port = static_cast<int>(getRegU32(ctx, 4));
++        const int slot = static_cast<int>(getRegU32(ctx, 5));
++        const uint32_t dataAddr = getRegU32(ctx, 6);
++        const uint8_t *data = getMemPtr(rdram, dataAddr);
++        uint8_t align[6];
++        if (data)
++        {
++            {
++                std::lock_guard<std::mutex> lock(g_padStateMutex);
++                const PadPortState *portState = lookupPadPortStateLocked(port, slot);
++                if (portState)
++                    std::memcpy(align, portState->actuatorAlign, sizeof(align));
++                else
++                    std::fill(std::begin(align), std::end(align), 0xFFu);
++            }
++            uint8_t small = 0u;
++            uint8_t large = 0u;
++            ps2x_decode_pad_actuators(align, data, small, large);
++#if defined(PS2X_USE_METAL)
++            static const bool traceRumble = [] {
++                const char *value = std::getenv("PS2X_TRACE_RUMBLE");
++                return value && value[0] == '1';
++            }();
++            static std::atomic<int> lastRumble{-1};
++            const int currentRumble = (static_cast<int>(small) << 8) | static_cast<int>(large);
++            if (traceRumble && lastRumble.exchange(currentRumble, std::memory_order_relaxed) != currentRumble)
++                std::fprintf(stderr, "[rumble-hle] port=%d slot=%d small=%u large=%u pc=0x%x\n", port, slot, small, large, ctx->pc);
++            ps2x_gamepad_set_rumble(small, large);
++#endif
++        }
+         setReturnS32(ctx, 1);
+     }
+ 
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/PadRumble.h b/ps2xRuntime/src/lib/Kernel/Stubs/PadRumble.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..8284dcb6db303d6b686855ac4322335dda93b8af
+--- /dev/null
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/PadRumble.h
+@@ -0,0 +1,16 @@
++#pragma once
++
++#include <cstdint>
++
++inline void ps2x_decode_pad_actuators(const uint8_t align[6], const uint8_t data[6], uint8_t& small, uint8_t& large)
++{
++    small = 0u;
++    large = 0u;
++    for (unsigned i = 0; i < 6; ++i)
++    {
++        if (align[i] == 0u)
++            small = static_cast<uint8_t>(data[i] & 1u);
++        else if (align[i] == 1u)
++            large = data[i];
++    }
++}

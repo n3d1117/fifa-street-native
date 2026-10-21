@@ -11,10 +11,12 @@
 
 @interface HostSettingsActions : NSObject <NSWindowDelegate>
 - (void)sharperImageChanged:(NSButton*)sender;
+- (void)rumbleChanged:(NSButton*)sender;
 - (void)fxaaChanged:(NSButton*)sender;
 - (void)unlockAllVenuesChanged:(NSButton*)sender;
 - (void)renderScaleChanged:(NSPopUpButton*)sender;
 - (void)anisotropyChanged:(NSPopUpButton*)sender;
+- (void)rumbleIntensityChanged:(NSPopUpButton*)sender;
 - (void)displayAspectChanged:(NSPopUpButton*)sender;
 - (void)videoModeChanged:(NSPopUpButton*)sender;
 - (void)saveSettings:(id)sender;
@@ -30,10 +32,12 @@ std::atomic<bool> s_configured{false};
 std::string s_userDirectory;
 NSWindow* s_window;
 NSButton* s_sharperImageButton;
+NSButton* s_rumbleButton;
 NSButton* s_fxaaButton;
 NSButton* s_unlockAllVenuesButton;
 NSPopUpButton* s_renderScalePopup;
 NSPopUpButton* s_anisotropyPopup;
+NSPopUpButton* s_rumbleIntensityPopup;
 NSPopUpButton* s_displayAspectPopup;
 NSPopUpButton* s_videoModePopup;
 NSTextField* s_status;
@@ -55,9 +59,11 @@ NSTextField* detailLabel(NSString* text, NSRect frame) {
 
 void refreshControls() {
     [s_sharperImageButton setState:s_pending.sharperImage ? NSControlStateValueOn : NSControlStateValueOff];
+    [s_rumbleButton setState:s_pending.rumble ? NSControlStateValueOn : NSControlStateValueOff];
     [s_fxaaButton setState:s_pending.fxaa ? NSControlStateValueOn : NSControlStateValueOff];
     [s_renderScalePopup selectItemWithTag:s_pending.renderScale];
     [s_anisotropyPopup selectItemWithTag:s_pending.anisotropy];
+    [s_rumbleIntensityPopup selectItemWithTag:s_pending.rumbleIntensity];
     [s_unlockAllVenuesButton setState:s_pending.unlockAllVenues ? NSControlStateValueOn : NSControlStateValueOff];
     [s_videoModePopup selectItemWithTag:static_cast<NSInteger>(s_pending.videoMode)];
     [s_displayAspectPopup selectItemWithTag:static_cast<NSInteger>(s_pending.displayAspect)];
@@ -72,7 +78,7 @@ void showWindowOnMain() {
         return;
     }
     const CGFloat width = 520;
-    const CGFloat height = 510;
+    const CGFloat height = 570;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -150,19 +156,35 @@ void showWindowOnMain() {
     [s_fxaaButton setFrame:NSMakeRect(22, 148, width - 44, 24)];
     [content addSubview:s_fxaaButton];
 
+    s_rumbleButton = [NSButton checkboxWithTitle:@"Controller rumble" target:s_actions
+                                            action:@selector(rumbleChanged:)];
+    [s_rumbleButton setFrame:NSMakeRect(22, 112, 200, 24)];
+    [content addSubview:s_rumbleButton];
+    NSTextField* rumbleLabel = [NSTextField labelWithString:@"Rumble intensity"];
+    [rumbleLabel setFrame:NSMakeRect(250, 112, 140, 22)];
+    [content addSubview:rumbleLabel];
+    s_rumbleIntensityPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(375, 108, 123, 28) pullsDown:NO];
+    for (NSInteger intensity : {25, 50, 75, 100}) {
+        [s_rumbleIntensityPopup addItemWithTitle:[NSString stringWithFormat:@"%ld%%", (long)intensity]];
+        [[s_rumbleIntensityPopup lastItem] setTag:intensity];
+    }
+    [s_rumbleIntensityPopup setTarget:s_actions];
+    [s_rumbleIntensityPopup setAction:@selector(rumbleIntensityChanged:)];
+    [content addSubview:s_rumbleIntensityPopup];
+
     s_unlockAllVenuesButton = [NSButton checkboxWithTitle:@"Cheat: unlock all venues" target:s_actions
                                                    action:@selector(unlockAllVenuesChanged:)];
-    [s_unlockAllVenuesButton setFrame:NSMakeRect(22, 102, width - 44, 24)];
+    [s_unlockAllVenuesButton setFrame:NSMakeRect(22, 76, width - 44, 24)];
     [content addSubview:s_unlockAllVenuesButton];
     [content addSubview:detailLabel(@"The game's own venue cheat. Off plays the game as shipped.",
-                                    NSMakeRect(46, 76, width - 68, 24))];
+                                    NSMakeRect(46, 50, width - 68, 24))];
 
     s_status = [NSTextField labelWithString:@"Changes apply after restarting the game."];
-    [s_status setFrame:NSMakeRect(22, 52, width - 44, 20)];
+    [s_status setFrame:NSMakeRect(22, 30, width - 44, 20)];
     [s_status setTextColor:[NSColor secondaryLabelColor]];
     [content addSubview:s_status];
     NSButton* save = [NSButton buttonWithTitle:@"Save" target:s_actions action:@selector(saveSettings:)];
-    [save setFrame:NSMakeRect(width - 112, 12, 90, 30)];
+    [save setFrame:NSMakeRect(width - 112, 4, 90, 30)];
     [save setKeyEquivalent:@"\r"];
     [content addSubview:save];
     refreshControls();
@@ -178,6 +200,10 @@ void showWindowOnMain() {
 }
 - (void)sharperImageChanged:(NSButton*)sender {
     s_pending.sharperImage = [sender state] == NSControlStateValueOn;
+    setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
+}
+- (void)rumbleChanged:(NSButton*)sender {
+    s_pending.rumble = [sender state] == NSControlStateValueOn;
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 - (void)fxaaChanged:(NSButton*)sender {
@@ -197,6 +223,12 @@ void showWindowOnMain() {
     const NSInteger selected = [[sender selectedItem] tag];
     if (selected == 0 || selected == 2 || selected == 4 || selected == 8 || selected == 16)
         s_pending.anisotropy = static_cast<int>(selected);
+    setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
+}
+- (void)rumbleIntensityChanged:(NSPopUpButton*)sender {
+    const NSInteger selected = [[sender selectedItem] tag];
+    if (selected >= 25 && selected <= 100 && selected % 25 == 0)
+        s_pending.rumbleIntensity = static_cast<int>(selected);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 - (void)displayAspectChanged:(NSPopUpButton*)sender {
@@ -226,8 +258,8 @@ void configure_settings(const char* userDirectory) {
     apply_env_overrides(settings, [](const char* name) -> const char* { return std::getenv(name); });
     s_active = settings;
     s_pending = settings;
-    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d wallClock=%d unlockAllVenues=%d\n",
-                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.wallClock, settings.unlockAllVenues);
+    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
+                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
 }
 
 const Settings& active_settings() { return s_active; }

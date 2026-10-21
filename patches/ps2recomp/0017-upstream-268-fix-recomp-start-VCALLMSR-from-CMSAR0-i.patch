@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:13:39 +0200
-Subject: [PATCH 17/92] upstream #268: fix(recomp): start VCALLMSR from CMSAR0
+Subject: [PATCH 17/93] upstream #268: fix(recomp): start VCALLMSR from CMSAR0
  instead of indexing vi[]
 
 Kept our equivalent local emission (also sets vu0_tpc).
