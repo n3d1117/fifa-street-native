@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 23:37:45 +0200
-Subject: [PATCH 85/87] vif1: retain pending input capacity
+Subject: [PATCH 85/86] vif1: retain pending input capacity
 
 Match route, GameThread CPU/s: 0.528 baseline to 0.651 median after (+23%). _platform_memmove share: 12.46% baseline to 1.4% after; second after sample below top 12. Test reference models legacy append and swap on STC resume.
 

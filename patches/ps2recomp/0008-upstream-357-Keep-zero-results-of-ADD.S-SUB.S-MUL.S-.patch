@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 16:52:47 +0200
-Subject: [PATCH 08/87] upstream #357: Keep zero results of ADD.S/SUB.S/MUL.S
+Subject: [PATCH 08/86] upstream #357: Keep zero results of ADD.S/SUB.S/MUL.S
  on the fast path
 
 

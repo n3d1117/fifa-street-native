@@ -52,11 +52,11 @@ Ops: `Vif`, `GifPacket` (packets over 1 MiB are read in place while the EE waits
 
 The ring uses monotonic head/tail byte counters (seq-cst). The worker never waits on the EE. Every EE-to-worker blocking edge has a 2 s watchdog that prints the stuck op and aborts. A worker exception is rethrown on the EE at its next enqueue or drain.
 
-The EE waits only at: GS CSR/SIGLBLID access with packets outstanding; any EE load or store to VU1 code or data (`mapVuMemory`); the VBlank vsync with CSR readback; GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; VIF1 FLUSH-family commands when selected deferred VU1/GIF work is pending; and `PS2Memory::initialize` and shutdown. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
+The EE waits only at: GS CSR/SIGLBLID access with packets outstanding; any EE load or store to VU1 code or data (`mapVuMemory`); the VBlank vsync with CSR readback; GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; and `PS2Memory::initialize` and shutdown. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
 
-VIF1 FLUSHE waits for queued VU1 jobs; FLUSH also drains deferred PATH1/PATH2 GIF packets; FLUSHA drains PATH1/PATH2/PATH3. The arbiter retains unselected paths across a selective drain. The PCSX2 reference is `Vif_Codes.cpp::vifFlush`, `vifCode_Flush/A/E`, and `Vif1_Dma.cpp::vif1FLUSH`.
+VIF1 FLUSH/FLUSHE/FLUSHA do not wait for queued VU1 work or GIF paths, unlike PCSX2 `Vif_Codes.cpp`. FIFA Street issues them about a million times per match (measured); making them wait blocks the EE on the worker thread (see Tried and rejected).
 
-Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity across wraps with random barriers, exception propagation, identical VU1 memory, MSCAL sequence and GIF packet order versus inline, plus VIF1 FLUSH waits and selective GIF path draining.
+Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity across wraps with random barriers, exception propagation, and identical VU1 memory, MSCAL sequence and GIF packet order versus inline.
 
 Measured on `./rx run --match` and `./rx run --route match` with temporary runtime counters:
 
@@ -139,6 +139,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Metal pipeline or shader compilation as the cause of audio underrun bursts: `newRenderPipelineStateWithDescriptor` took at most 0.6 ms and `newFunctionWithName` under 3 ms in bursting runs; the stall was `[CAMetalLayer nextDrawable]` blocking the GS worker (EE waits for it in the `GS vsync` drain) after a catch-up burst of presents.
 - The upstream `RRV_PCSX2_GS_PRESENT_THROTTLE`/`ShouldSkipPresentingFrame` as the fix: it only acts with FIFO vsync, which the host does not enable, so it was a no-op (6 of 6 runs still burst).
 - CD reads and VU1/GS command traffic as the burst cause: `[cd-io]` reads take about 100 us and no stream-ring op exceeded 5 ms apart from `GsVsync`.
+- VIF1 FLUSH waits as in PCSX2: gameplay `fps_game` fell from a steady 50 to 26-39 (`./rx run --match`, 2 runs); the wait crosses to the VU1/GS worker thread instead of hardware's microsecond drain.
 
 ## Function discovery and SDK binding (stripped ELF)
 
