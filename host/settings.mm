@@ -53,6 +53,8 @@ Settings load_settings_file(const std::string& user_dir) {
         NSDictionary* plist = read_dictionary(user_dir);
         s.sharperImage = flag(plist, @"sharperImage");
         s.unlockAllVenues = flag(plist, @"unlockAllVenues");
+        s.videoMode = [plist[@"videoMode"] isKindOfClass:[NSString class]] &&
+            [plist[@"videoMode"] isEqualToString:@"ntsc"] ? VideoMode::NTSC : VideoMode::PAL;
         s.displayAspect = display_aspect(plist[@"displayAspect"]);
         if (const int scale = valid_render_scale(plist[@"renderScale"])) s.renderScale = scale;
         return s;
@@ -69,6 +71,10 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
     if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
     if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
     if (const char* venues = get("PS2X_CHEAT_UNLOCK_VENUES"); venues && std::string(venues) == "1") s.unlockAllVenues = true;
+    if (const char* mode = get("PS2X_VIDEO_MODE")) {
+        if (std::string(mode) == "pal") s.videoMode = VideoMode::PAL;
+        else if (std::string(mode) == "ntsc") s.videoMode = VideoMode::NTSC;
+    }
     if (const char* aspect = get("PS2X_ASPECT")) {
         const std::string value(aspect);
         if (value == "auto") s.displayAspect = DisplayAspect::Auto;
@@ -84,6 +90,7 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         plist[@"renderScale"] = @(s.renderScale);
         plist[@"sharperImage"] = @(s.sharperImage);
         plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
+        plist[@"videoMode"] = s.videoMode == VideoMode::NTSC ? @"ntsc" : @"pal";
         plist[@"displayAspect"] = display_aspect_name(s.displayAspect);
         NSError* error = nil;
         NSData* data = [NSPropertyListSerialization dataWithPropertyList:plist

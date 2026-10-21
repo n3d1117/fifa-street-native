@@ -30,6 +30,7 @@ int main() {
 
         // Every field survives save -> load.
         Settings all;
+        all.videoMode = host::VideoMode::NTSC;
         all.renderScale = 3;
         all.sharperImage = true;
         all.unlockAllVenues = true;
@@ -46,20 +47,37 @@ int main() {
         assert([after[@"futureOption"] isEqual:@"keep me"]);
 
         // Invalid values fall back to defaults.
-        NSDictionary* bad = @{@"renderScale": @9, @"sharperImage": @1, @"displayAspect": @"stretch"};
+        NSDictionary* bad = @{@"renderScale": @9, @"sharperImage": @1, @"displayAspect": @"stretch", @"videoMode": @"invalid"};
         assert([bad writeToFile:path atomically:YES]);
         assert(host::load_settings_file(dir) == Settings{});
 
         // Debug overrides apply on top of the file.
         Settings s;
-        g_env = {{"PS2X_SCALE", "4"}, {"PS2X_SHARP", "1"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}, {"PS2X_ASPECT", "16:9"}};
+        g_env = {{"PS2X_VIDEO_MODE", "ntsc"}, {"PS2X_SCALE", "4"}, {"PS2X_SHARP", "1"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}, {"PS2X_ASPECT", "16:9"}};
         host::apply_env_overrides(s, fake_env);
-        assert(s.renderScale == 4 && s.sharperImage && !s.wallClock && s.unlockAllVenues &&
+        assert(s.videoMode == host::VideoMode::NTSC && s.renderScale == 4 && s.sharperImage && !s.wallClock && s.unlockAllVenues &&
                s.displayAspect == host::DisplayAspect::SixteenNine);
         Settings invalid;
-        g_env = {{"PS2X_SCALE", "7"}, {"PS2X_SHARP", "yes"}, {"PS2X_WALLCLOCK", "1"}, {"PS2X_CHEAT_UNLOCK_VENUES", "yes"}, {"PS2X_ASPECT", "squash"}};
+        g_env = {{"PS2X_VIDEO_MODE", "NTSC"}, {"PS2X_SCALE", "7"}, {"PS2X_SHARP", "yes"}, {"PS2X_WALLCLOCK", "1"}, {"PS2X_CHEAT_UNLOCK_VENUES", "yes"}, {"PS2X_ASPECT", "squash"}};
         host::apply_env_overrides(invalid, fake_env);
         assert(invalid == Settings{});
+
+        Settings ntsc = all;
+        g_env = {{"PS2X_VIDEO_MODE", "pal"}};
+        host::apply_env_overrides(ntsc, fake_env);
+        assert(ntsc.videoMode == host::VideoMode::PAL);
+        assert(host::save_settings_file(dir, ntsc));
+        assert(host::load_settings_file(dir) == ntsc);
+        ntsc.videoMode = host::VideoMode::NTSC;
+        for (const char* value : {"", "invalid", "NTSC", "60"}) {
+            g_env = {{"PS2X_VIDEO_MODE", value}};
+            host::apply_env_overrides(ntsc, fake_env);
+            assert(ntsc.videoMode == host::VideoMode::NTSC);
+        }
+        for (id value in @[@YES, @60, @[], @{}]) {
+            assert([@{@"videoMode": value} writeToFile:path atomically:YES]);
+            assert(host::load_settings_file(dir).videoMode == host::VideoMode::PAL);
+        }
 
         [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
     }

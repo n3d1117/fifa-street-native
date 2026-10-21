@@ -14,6 +14,7 @@
 - (void)unlockAllVenuesChanged:(NSButton*)sender;
 - (void)renderScaleChanged:(NSPopUpButton*)sender;
 - (void)displayAspectChanged:(NSPopUpButton*)sender;
+- (void)videoModeChanged:(NSPopUpButton*)sender;
 - (void)saveSettings:(id)sender;
 @end
 
@@ -30,6 +31,7 @@ NSButton* s_sharperImageButton;
 NSButton* s_unlockAllVenuesButton;
 NSPopUpButton* s_renderScalePopup;
 NSPopUpButton* s_displayAspectPopup;
+NSPopUpButton* s_videoModePopup;
 NSTextField* s_status;
 HostSettingsActions* s_actions;
 
@@ -51,6 +53,7 @@ void refreshControls() {
     [s_sharperImageButton setState:s_pending.sharperImage ? NSControlStateValueOn : NSControlStateValueOff];
     [s_renderScalePopup selectItemWithTag:s_pending.renderScale];
     [s_unlockAllVenuesButton setState:s_pending.unlockAllVenues ? NSControlStateValueOn : NSControlStateValueOff];
+    [s_videoModePopup selectItemWithTag:static_cast<NSInteger>(s_pending.videoMode)];
     [s_displayAspectPopup selectItemWithTag:static_cast<NSInteger>(s_pending.displayAspect)];
 }
 
@@ -63,7 +66,7 @@ void showWindowOnMain() {
         return;
     }
     const CGFloat width = 520;
-    const CGFloat height = 370;
+    const CGFloat height = 450;
     s_window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, width, height)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -72,6 +75,20 @@ void showWindowOnMain() {
     [s_window setDelegate:s_actions];
     [s_window center];
     NSView* content = [s_window contentView];
+
+    NSTextField* modeLabel = [NSTextField labelWithString:@"Video mode"];
+    [modeLabel setFrame:NSMakeRect(22, 404, 210, 22)];
+    [content addSubview:modeLabel];
+    s_videoModePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 400, 248, 28) pullsDown:NO];
+    [s_videoModePopup addItemWithTitle:@"PAL 50 Hz (original, default)"];
+    [[s_videoModePopup lastItem] setTag:static_cast<NSInteger>(host::VideoMode::PAL)];
+    [s_videoModePopup addItemWithTitle:@"NTSC 60 Hz"];
+    [[s_videoModePopup lastItem] setTag:static_cast<NSInteger>(host::VideoMode::NTSC)];
+    [s_videoModePopup setTarget:s_actions];
+    [s_videoModePopup setAction:@selector(videoModeChanged:)];
+    [content addSubview:s_videoModePopup];
+    [content addSubview:detailLabel(@"NTSC 60 Hz uses the game's own 60 Hz mode.",
+                                    NSMakeRect(22, 368, width - 44, 24))];
 
     NSTextField* aspectLabel = [NSTextField labelWithString:@"Display aspect"];
     [aspectLabel setFrame:NSMakeRect(22, 324, 210, 22)];
@@ -150,6 +167,11 @@ void showWindowOnMain() {
 - (void)displayAspectChanged:(NSPopUpButton*)sender {
     const NSInteger selected = [[sender selectedItem] tag];
     if (selected >= 0 && selected <= 2) s_pending.displayAspect = static_cast<host::DisplayAspect>(selected);
+    setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
+}
+- (void)videoModeChanged:(NSPopUpButton*)sender {
+    const NSInteger selected = [[sender selectedItem] tag];
+    if (selected >= 0 && selected <= 1) s_pending.videoMode = static_cast<host::VideoMode>(selected);
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
 - (void)saveSettings:(id)sender {
