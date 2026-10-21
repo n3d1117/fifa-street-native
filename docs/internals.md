@@ -38,7 +38,7 @@ The `match-boot` route repeats Cross while the language screen remains visible b
 
 ## GS bridge interface
 
-`DataStream` (`ps2_data_stream.{h,cpp}`) is the one interface to the GS bridge: `gifSubmit`, `gsReset`, `gsWriteCsr`, `gsVsync`, `gsReadLocal`. GS CSR and SIGLBLID are a pure function of the packets processed, so `gifSubmit` only marks them stale; `observeGs()` reads them back at drain points: EE CSR/SIGLBLID observations and CSR writes; the worker snapshots bridge results in order at VBlank. `PS2X_GS_VERIFY=1` reads back after every packet and aborts if the lazy value differs. The bridge is owned by the thread that created it (thread-local `s_gs` in `host/metal-host.mm`).
+`DataStream` (`ps2_data_stream.{h,cpp}`) is the one interface to the GS bridge: `gifSubmit`, `gsReset`, `gsWriteCsr`, `gsVsync`, `gsReadLocal`. GS CSR and SIGLBLID are a pure function of the packets processed, so `gifSubmit` only marks them stale; `observeGs()` reads them back at drain points: any EE access to a GS privileged register, CSR writes, and the VBlank snapshot. `PS2X_GS_VERIFY=1` reads back after every packet and aborts if the lazy value differs. The bridge is owned by the thread that created it (thread-local `s_gs` in `host/metal-host.mm`).
 
 PCSX2's Metal shaders are compiled at bridge start from `deps/pcsx2` (`GSMTLDeviceInfo.mm`, `newLibraryWithSource`, Metal 2.3, fast math as PCSX2's own metallib build): the bridge build inlines every `.metal` file into `resources/pcsx2-metal-shaders.metal`. No Xcode `metal` compiler is needed, and shader patches in the stack take effect.
 
@@ -52,7 +52,7 @@ Ops: `Vif`, `GifPacket` (packets over 1 MiB are read in place while the EE waits
 
 The ring uses monotonic head/tail byte counters (seq-cst). The worker never waits on the EE. Every EE-to-worker blocking edge has a 2 s watchdog that prints the stuck op and aborts. A worker exception is rethrown on the EE at its next enqueue or drain.
 
-The EE waits only at: GS CSR/SIGLBLID access with packets outstanding (including pending SIGNAL/FINISH/LABEL); any EE load or store to VU1 code or data (`mapVuMemory`); the oldest excess vsync when more than two are outstanding (PCSX2 MTGS `VsyncQueueSize` default; `PS2X_GS_VSYNC_QUEUE=0` restores draining every vsync); GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; and `PS2Memory::initialize` and shutdown. Vsync snapshots stay ordered; FIELD stays authoritative on the EE across delayed readbacks, and `PS2X_GS_VSYNC_VERIFY=1` compares the snapshot-derived CSR/SIGLBLID with actual bridge results plus eager/lazy packet readbacks, aborting on mismatch. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
+The EE waits only at: GS CSR/SIGLBLID access with packets outstanding; any EE load or store to VU1 code or data (`mapVuMemory`); the VBlank vsync with CSR readback; GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; and `PS2Memory::initialize` and shutdown. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
 
 VIF1 FLUSH/FLUSHE/FLUSHA do not wait for queued VU1 work or GIF paths, unlike PCSX2 `Vif_Codes.cpp`. FIFA Street issues them about a million times per match (measured); making them wait blocks the EE on the worker thread (see Tried and rejected).
 
@@ -131,10 +131,11 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - EE alarm host-deadline waits did not explain startup audio gaps; tracing found no long waits in `processDueDeadlines`.
 - Raising thread QoS and blocking immediately in stream-ring waits did not improve the measured route and increased wakeups; see `./rx ab` for repeatable comparisons.
 - A last-placement VU1 program cache was not validated because a run lost gameplay progress. `PacketCapture` must stage VU packets until native execution succeeds; the stream ring copies only its op header.
-- Warm-cache Metal pipeline and function creation were too short to explain audio bursts; cold-cache dynamic specialization bursts can exceed the two-PAL-vsync queue allowance, while fixed pipelines already compile at device setup. The observed warm-cache stall was `CAMetalLayer nextDrawable` on the GS worker during catch-up presents, while the EE waited at the GS vsync drain.
+- Metal pipeline and function creation were too short to explain audio bursts. The observed stall was `CAMetalLayer nextDrawable` on the GS worker during catch-up presents, while the EE waited at the GS vsync drain.
 - PCSX2's present throttle is inactive without FIFO vsync. CD reads and ordinary VU1/GS traffic did not explain the stalls.
 - Waiting for queued VU1 work on each VIF1 FLUSH blocks the EE on the worker and violates the hardware's short drain semantics.
 - `MTLBinaryArchive` prewarming did not resolve cold-launch shader-cache underrun bursts; cold-cache stalls remain open.
+- Bounded GS vsync backlog (EE up to 2 vsyncs ahead of the worker, as PCSX2 MTGS VsyncQueueSize): cold-cache underruns only 5.6k -> 4.9k, warm still 1 in 6 runs, energy +177% and one 49.2 fps run in the A/B. Cold-cache stalls are bursts of about 15 dynamic ps_main/HW pipeline compiles of 5-7 ms each (about 170 ms), longer than the queue.
 
 ## Function discovery and SDK binding (stripped ELF)
 

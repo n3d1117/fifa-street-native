@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 13:23:45 +0200
-Subject: [PATCH 01/88] Tarzan runtime, Metal host and test changes
+Subject: [PATCH 01/87] Tarzan runtime, Metal host and test changes
 
 
 diff --git a/ps2xIOP/include/ps2x/iop/iop_host_spu2.h b/ps2xIOP/include/ps2x/iop/iop_host_spu2.h
