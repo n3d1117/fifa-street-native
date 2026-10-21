@@ -16,7 +16,7 @@
 
 ## Next
 
-1. Reduce cold-shader-cache stalls: assess build-time metallib compilation if supported by the toolchain, then asynchronous compilation or boot prewarming.
+1. Shader pre-warm at boot: ship FIFA's measured pipeline-key list (tagged by GPU feature set, checked against the PCSX2 pin) plus a per-device learned list in Application Support; precompile at GS device creation; kill-switch `RRV_PCSX2_GS_PIPELINE_PREWARM=0`. Measured with a prototype: about 250 keys, 1.5 s cold / 12 ms warm, 0 runtime compiles and 0 underruns on a cold run. Ubershaders were measured and rejected (Tried and rejected).
 2. Add an offline VU1 benchmark and savestate workflow; SloppyWyn's PS2Recomp fork has snapshot work to evaluate.
 3. Evaluate lean code generation and build-time effects against SloppyWyn's fork.
 
