@@ -175,6 +175,7 @@ extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t
             setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
         }
         setenv("RRV_PCSX2_GS_FXAA", settings.fxaa ? "1" : "0", 1);
+        setenv("RRV_PCSX2_GS_UI_UPSCALE", settings.smoothUiTextures && settings.renderScale > 1 ? "1" : "0", 1);
         if (settings.renderScale > 1) {
             const char scaleValue[] = {static_cast<char>('0' + settings.renderScale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);

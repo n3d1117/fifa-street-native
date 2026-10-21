@@ -13,6 +13,7 @@
 - (void)sharperImageChanged:(NSButton*)sender;
 - (void)rumbleChanged:(NSButton*)sender;
 - (void)fxaaChanged:(NSButton*)sender;
+- (void)smoothUiTexturesChanged:(NSButton*)sender;
 - (void)unlockAllVenuesChanged:(NSButton*)sender;
 - (void)renderScaleChanged:(NSPopUpButton*)sender;
 - (void)anisotropyChanged:(NSPopUpButton*)sender;
@@ -34,6 +35,7 @@ NSWindow* s_window;
 NSButton* s_sharperImageButton;
 NSButton* s_rumbleButton;
 NSButton* s_fxaaButton;
+NSButton* s_smoothUiTexturesButton;
 NSButton* s_unlockAllVenuesButton;
 NSPopUpButton* s_renderScalePopup;
 NSPopUpButton* s_anisotropyPopup;
@@ -61,6 +63,7 @@ void refreshControls() {
     [s_sharperImageButton setState:s_pending.sharperImage ? NSControlStateValueOn : NSControlStateValueOff];
     [s_rumbleButton setState:s_pending.rumble ? NSControlStateValueOn : NSControlStateValueOff];
     [s_fxaaButton setState:s_pending.fxaa ? NSControlStateValueOn : NSControlStateValueOff];
+    [s_smoothUiTexturesButton setState:s_pending.smoothUiTextures ? NSControlStateValueOn : NSControlStateValueOff];
     [s_renderScalePopup selectItemWithTag:s_pending.renderScale];
     [s_anisotropyPopup selectItemWithTag:s_pending.anisotropy];
     [s_rumbleIntensityPopup selectItemWithTag:s_pending.rumbleIntensity];
@@ -146,8 +149,12 @@ void showWindowOnMain() {
 
     s_sharperImageButton = [NSButton checkboxWithTitle:@"Sharper image" target:s_actions
                                                 action:@selector(sharperImageChanged:)];
-    [s_sharperImageButton setFrame:NSMakeRect(22, 202, width - 44, 24)];
+    [s_sharperImageButton setFrame:NSMakeRect(22, 202, 210, 24)];
     [content addSubview:s_sharperImageButton];
+    s_smoothUiTexturesButton = [NSButton checkboxWithTitle:@"Smooth UI textures (xBRZ)" target:s_actions
+                                                     action:@selector(smoothUiTexturesChanged:)];
+    [s_smoothUiTexturesButton setFrame:NSMakeRect(250, 202, width - 272, 24)];
+    [content addSubview:s_smoothUiTexturesButton];
     [content addSubview:detailLabel(@"Contrast-adaptive sharpening and sharper display scaling.",
                                     NSMakeRect(46, 180, width - 68, 24))];
 
@@ -210,6 +217,10 @@ void showWindowOnMain() {
     s_pending.fxaa = [sender state] == NSControlStateValueOn;
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
 }
+- (void)smoothUiTexturesChanged:(NSButton*)sender {
+    s_pending.smoothUiTextures = [sender state] == NSControlStateValueOn;
+    setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
+}
 - (void)unlockAllVenuesChanged:(NSButton*)sender {
     s_pending.unlockAllVenues = [sender state] == NSControlStateValueOn;
     setStatus(@"Unsaved changes. Save them, then restart the game to apply.");
@@ -258,8 +269,8 @@ void configure_settings(const char* userDirectory) {
     apply_env_overrides(settings, [](const char* name) -> const char* { return std::getenv(name); });
     s_active = settings;
     s_pending = settings;
-    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
-                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
+    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d uiUpscale=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
+                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.smoothUiTextures, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
 }
 
 const Settings& active_settings() { return s_active; }

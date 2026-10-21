@@ -65,6 +65,7 @@ Settings load_settings_file(const std::string& user_dir) {
         s.sharperImage = flag(plist, @"sharperImage");
         s.rumble = flag(plist, @"rumble");
         s.fxaa = flag(plist, @"fxaa");
+        s.smoothUiTextures = flag(plist, @"smoothUiTextures");
         s.unlockAllVenues = flag(plist, @"unlockAllVenues");
         s.videoMode = [plist[@"videoMode"] isKindOfClass:[NSString class]] &&
             [plist[@"videoMode"] isEqualToString:@"ntsc"] ? VideoMode::NTSC : VideoMode::PAL;
@@ -90,6 +91,10 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
     }
     if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
     if (const char* fxaa = get("PS2X_FXAA"); fxaa && std::string(fxaa) == "1") s.fxaa = true;
+    if (const char* ui = get("PS2X_UI_UPSCALE")) {
+        if (std::string(ui) == "0") s.smoothUiTextures = false;
+        else if (std::string(ui) == "1") s.smoothUiTextures = true;
+    }
     if (const char* rumble = get("PS2X_RUMBLE")) {
         if (std::string(rumble) == "0") s.rumble = false;
         else if (std::string(rumble) == "1") s.rumble = true;
@@ -125,6 +130,7 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         plist[@"rumble"] = @(s.rumble);
         plist[@"rumbleIntensity"] = @(s.rumbleIntensity);
         plist[@"fxaa"] = @(s.fxaa);
+        plist[@"smoothUiTextures"] = @(s.smoothUiTextures);
         plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
         plist[@"videoMode"] = s.videoMode == VideoMode::NTSC ? @"ntsc" : @"pal";
         plist[@"displayAspect"] = display_aspect_name(s.displayAspect);
