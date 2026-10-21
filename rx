@@ -531,6 +531,8 @@ def cmd_run(args):
             cmd += ["--route", args.route]
         if args.match:
             cmd.append("--match")
+        if args.button_spam:
+            cmd.append("--button-spam")
         rc = run.sh(cmd)
         if rc == 2:
             raise Missing(run.last_message())
@@ -619,6 +621,8 @@ def cmd_ab(args):
                 if args.profile:
                     cmd.append("--profile")
                 cmd.append("--match")
+                if args.button_spam:
+                    cmd.append("--button-spam")
                 env = os.environ.copy()
                 env.update(overrides)
                 rc = run.sh(cmd, env=env)
@@ -660,7 +664,8 @@ def cmd_ab(args):
             names += ["GameThread cpu_per_s", "worker cpu_per_s"]
         names += ["energy_per_s", "wakeups_per_s", "audio_underruns", "crash", "reached"]
         report = {"order": order, "pairs": args.pairs, "control_env": control_env,
-                  "candidate_env": candidate_env, "options": {"seconds": args.seconds, "match": True, "profile": args.profile},
+                  "candidate_env": candidate_env, "options": {"seconds": args.seconds, "match": True, "profile": args.profile,
+                                                                 "button_spam": args.button_spam},
                   "summaries": summaries, "metrics": {}}
         rows = []
         for name in names:
@@ -746,6 +751,8 @@ def main():
     r.add_argument("--route", choices=["match"], help="scripted input from the language menu to a quick match; fails unless the match scene opens")
     r.add_argument("--match", action="store_true",
                    help="diagnostic: boot straight into live match play in an isolated user dir (PS2X_BOOT_MATCH hook); reports time_to_play_s")
+    r.add_argument("--button-spam", action="store_true",
+                   help="alternate Cross/Square/Circle/Triangle/L1/R1 during confirmed match play")
     r.add_argument("--app")
     r.add_argument("--quit-cycles", type=int, metavar="N",
                    help="with --app: N launch -> AppleEvent quit cycles; fails on non-zero exit or new crash report")
@@ -757,6 +764,8 @@ def main():
     a.add_argument("--seconds", type=int)
     a.add_argument("--profile", action="store_true")
     a.add_argument("--match", action="store_true", default=True)
+    a.add_argument("--button-spam", action="store_true",
+                   help="alternate Cross/Square/Circle/Triangle/L1/R1 during confirmed match play")
     a.set_defaults(fn=cmd_ab)
     k = sp.add_parser("package")
     k.add_argument("--install", action="store_true")

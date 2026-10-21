@@ -554,6 +554,8 @@ def main():
     ap.add_argument("--route", choices=sorted(ROUTES), help="scripted input: language menu -> front end -> quick match")
     ap.add_argument("--match", action="store_true",
                     help="boot straight into live match play (PS2X_BOOT_MATCH hook, isolated user dir only); implies --route match-boot")
+    ap.add_argument("--button-spam", action="store_true",
+                    help="alternate Cross/Square/Circle/Triangle/L1/R1 during confirmed match play")
     args = ap.parse_args()
     if args.quit_at_end and not args.app:
         ap.error("--quit-at-end needs --app")
@@ -655,6 +657,9 @@ def main():
     profile_thread = None
     profile_result = {}
     gameplay_input_key = None
+    spam_keys = (5, 9, 7, 11, 13, 14)
+    spam_index = 0
+    spam_next_at = None
     route_inputs = []
     intro_skip_at = None
     next_black = started + ((route or {}).get("sample_start", BLACK_SAMPLE_START))
@@ -689,6 +694,8 @@ def main():
                     deadline = min(route_deadline, max(started + requested_seconds, gameplay_at + route["tail"]))
                     state_asked = False
                     request_state()
+                if args.button_spam and cap.gameplay_confirmed and spam_next_at is None:
+                    spam_next_at = now
                 if play_steps and play_step_at is None and cap.gameplay_confirmed:
                     play_step_at = now + play_steps[0][0]
                 if fifo_fd is None:
@@ -722,6 +729,7 @@ def main():
                     release_at = now + repeat[2]
                     repeat = (repeat[0], repeat[1], repeat[2], now, cap.samples)
                 elif (fifo_fd is not None and not steps and not release_at and cap.match_clock is None and
+                      not (args.button_spam and cap.gameplay_confirmed) and
                       route["scene_marker"] in text_now and
                       re.search(r"MAR[5S]E[I1].*L", "\n".join(cap.labels)) and
                       (intro_skip_at is None or now >= intro_skip_at + route.get("intro_every", 5))):
@@ -730,7 +738,16 @@ def main():
                     intro_skip_at = now
                     route_inputs.append({"wall_seconds": round(now - started, 3), "key_bit": 5,
                                          "guard": "match intro MARSEILLE + commentary data open"})
-                elif fifo_fd is not None and play_steps and play_step_at is not None and now >= play_step_at and not release_at:
+                elif (fifo_fd is not None and args.button_spam and spam_next_at is not None and
+                      now >= spam_next_at and not release_at):
+                    key = spam_keys[spam_index % len(spam_keys)]
+                    spam_index += 1
+                    os.write(fifo_fd, struct.pack("<I", 1 << key))
+                    release_at = now + 0.08
+                    spam_next_at = now + 0.12
+                    route_inputs.append({"wall_seconds": round(now - started, 3), "key_bit": key,
+                                         "guard": "button-spam during confirmed match play"})
+                elif fifo_fd is not None and not args.button_spam and play_steps and play_step_at is not None and now >= play_step_at and not release_at:
                     step = play_steps.pop(0)
                     _, key, hold = step
                     os.write(fifo_fd, struct.pack("<I", 1 << key))

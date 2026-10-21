@@ -10,6 +10,7 @@ Mechanisms, invariants and constants that the code relies on. Commands are in `A
 - Synchronous guest IOP RPCs must not advance the SPU timeline on top of the EE-issued IOP budget. The scheduler keeps an absolute issued target and credits work already executed; reset clears the target and the fractional 1:8 carry; the SPU epoch stays monotonic. With live host audio, outside-thread delay, semaphore and event-flag waits pace IOP progress against elapsed host time so a wait cannot overflow the output ring before EE accounting catches up. Without a playback device, pacing is disabled.
 - Movie presentation epoch is fixed. Late frames present promptly without shifting the PTS epoch or dropping decoded frames. PTS-less intervals use the effective VBlank period.
 - `EeScheduler::idlePoll` yields a guest poll loop to the earliest event (EE timer or IOP/SPU2 idle deadline); pending SPU2 IRQs invalidate the IOP bound and wall-clock sampling accounts slept time. Its one caller is the vblank poll below.
+- When every EE thread is blocked, `EeScheduler::run` also waits to the next IOP service deadline (using the same 1 ms wall-clock sample when the IOP cannot safely skip); omitting this deadline caused warm audio underruns during sound-heavy input. `PS2X_EE_IOP_IDLE=0` restores the old wait path.
 - Game frames, host presents and vsyncs are different metrics. FIFA Street never changes DISPFB, so DISPFB change rate is useless. `fps_game` in `./rx run` is the median of fully post-confirmation 5 s gameplay windows; `./rx run --match` fails below 49.5. It counts GS FRAME_1/2 writes that retarget a context onto the displayed (DISPFB) buffer (`m_game_frames` in `deps/pcsx2` GSState, logged as `[gs-game]` every 5 s). `gpu_presents_per_sec` is the vsync rate. The probe reports bridge presents, HUD-clock observations and approximate state-dump VBlank/EE progress separately. Route profiling starts after gameplay confirmation; a successful route finishes after its gameplay observation tail. Menu inputs wait for OCR scene labels; movie skip waits for `INTRO.MPC` to open, and match-intro Cross requires the Marseille title plus commentary data.
 
 ## Generated guest ABI
@@ -93,6 +94,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 |---|---|
 | `PS2X_WALLCLOCK=0` | deterministic estimated-cycle timing |
 | `PS2X_POLL_IDLE=0` / `verify` | spin in the vblank poll / check its loop registers and wait context (never measure verify mode) |
+| `PS2X_EE_IOP_IDLE=0` | disable the IOP service deadline in the all-EE-threads-blocked wait path |
 | `PS2X_CHEAT_UNLOCK_VENUES=1` | the game's own venue cheat flag (Settings checkbox; off by default) |
 | `PS2X_SCALE=1..4`, `PS2X_SHARP=1` | override render scale and sharpening for this process |
 | `PS2X_DIAGNOSTIC_INPUT_FIFO=<fifo>` | process-local scripted input |
