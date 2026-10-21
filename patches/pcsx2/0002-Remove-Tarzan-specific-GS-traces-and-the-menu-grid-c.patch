@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 17:07:24 +0200
-Subject: [PATCH 2/7] Remove Tarzan-specific GS traces and the menu-grid
+Subject: [PATCH 2/6] Remove Tarzan-specific GS traces and the menu-grid
  coverage hack
 
 The UI half-pixel coverage correction matched one game's menu quads; a faithful
@@ -9,10 +9,10 @@ port keeps upstream rasterization. The scanout and UI-draw traces were
 one-off evidence for that game.
 
 diff --git a/pcsx2/GS/Renderers/Common/GSRenderer.cpp b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
-index 86dacd652961c59e21b084a94f6046849f95332c..1d770409636d2c8cfd0c414a18baa949ebfb7b84 100644
+index 4c91ee21812b17785ce6b28f9fbf350e4ac54817..b5c7cc6554c823e518b566dfe22574cd20d31739 100644
 --- a/pcsx2/GS/Renderers/Common/GSRenderer.cpp
 +++ b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
-@@ -631,17 +631,6 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
+@@ -632,17 +632,6 @@ void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
  	}
  
  	const bool blank_frame = !Merge(field);
@@ -31,7 +31,7 @@ index 86dacd652961c59e21b084a94f6046849f95332c..1d770409636d2c8cfd0c414a18baa949
  	m_last_draw_n = s_n;
  	m_last_transfer_n = s_transfer_n;
 diff --git a/pcsx2/GS/Renderers/HW/GSRendererHW.cpp b/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
-index 7b0e8f8994c30ce2f902d1d7a817325cc546c7c5..c4f540b90e7b7b1d1535a4c911c83dbb9a0aac48 100644
+index 7a528e430dbdc2c773fc832fab5613c2ee5462ed..837b1e00aad2f38a6b689b61ed6b92b1a2fcc4fa 100644
 --- a/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
 +++ b/pcsx2/GS/Renderers/HW/GSRendererHW.cpp
 @@ -11,9 +11,6 @@
@@ -89,7 +89,7 @@ index 7b0e8f8994c30ce2f902d1d7a817325cc546c7c5..c4f540b90e7b7b1d1535a4c911c83dbb
  	{
  		const u32 bp_adj = (TEX0.TBP0 < rt->m_TEX0.TBP0 && rt->UnwrappedEndBlock() > GS_MAX_BLOCKS) ? (TEX0.TBP0 + GS_MAX_BLOCKS) : TEX0.TBP0;
  		rt->Update();
-@@ -2822,66 +2794,6 @@ void GSRendererHW::Draw()
+@@ -2841,66 +2813,6 @@ void GSRendererHW::Draw()
  	m_cached_ctx.TEST = context->TEST;
  	m_cached_ctx.FRAME = context->FRAME;
  	m_cached_ctx.ZBUF = context->ZBUF;

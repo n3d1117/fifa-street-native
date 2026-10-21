@@ -1,12 +1,12 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 22:30:26 +0200
-Subject: [PATCH 5/7] GS: count completed game frames (FRAME retarget onto the
+Subject: [PATCH 4/6] GS: count completed game frames (FRAME retarget onto the
  displayed buffer) and log game_fps
 
 
 diff --git a/pcsx2/GS/GSState.cpp b/pcsx2/GS/GSState.cpp
-index ca7a11a1f28e3dfd842c20bea927a585d5f2d898..51f4828f01f3e695942242361fc571a9cc5701c9 100644
+index ae280edc595d2d82e02d0048a71e2e6cd20e2bf1..a5d275a122bfaacd0144678d92b1e45412ea3796 100644
 --- a/pcsx2/GS/GSState.cpp
 +++ b/pcsx2/GS/GSState.cpp
 @@ -2177,6 +2177,12 @@ void GSState::GIFRegHandlerFRAME(const GIFReg* RESTRICT r)
@@ -23,10 +23,10 @@ index ca7a11a1f28e3dfd842c20bea927a585d5f2d898..51f4828f01f3e695942242361fc571a9
  	{
  		m_env.CTXT[i].offset.fb = m_mem.GetOffset(NewFrame.Block(), NewFrame.FBW, NewFrame.PSM);
 diff --git a/pcsx2/GS/GSState.h b/pcsx2/GS/GSState.h
-index 1c73d155230af6adac8b6d8a715586323162a8f4..9d9900cc705fc0a00f0337e9d936f2c03a9ee4ed 100644
+index 909beeedc91025f676f4e9153e2a4a6898f7580a..24c6284696f5b59a499408077c399b81a7961b7b 100644
 --- a/pcsx2/GS/GSState.h
 +++ b/pcsx2/GS/GSState.h
-@@ -284,6 +284,7 @@ public:
+@@ -285,6 +285,7 @@ public:
  	GIFPath m_path[4] = {};
  	const GIFRegPRIM* PRIM = nullptr;
  	GSPrivRegSet* m_regs = nullptr;
@@ -35,7 +35,7 @@ index 1c73d155230af6adac8b6d8a715586323162a8f4..9d9900cc705fc0a00f0337e9d936f2c0
  	GSDrawingEnvironment m_env = {};
  	GSDrawingEnvironment m_prev_env = {};
 diff --git a/pcsx2/GS/Renderers/Common/GSRenderer.cpp b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
-index 1d770409636d2c8cfd0c414a18baa949ebfb7b84..7bae17183db814a6bef1b4a81586971ebdc559c0 100644
+index b5c7cc6554c823e518b566dfe22574cd20d31739..2bb6edab21b463044b0b6abea419cc9016d01fc4 100644
 --- a/pcsx2/GS/Renderers/Common/GSRenderer.cpp
 +++ b/pcsx2/GS/Renderers/Common/GSRenderer.cpp
 @@ -4,6 +4,8 @@
@@ -47,7 +47,7 @@ index 1d770409636d2c8cfd0c414a18baa949ebfb7b84..7bae17183db814a6bef1b4a81586971e
  #include "GS/GSCapture.h"
  #include "GS/GSDump.h"
  #include "GS/GSGL.h"
-@@ -579,6 +581,20 @@ void GSRenderer::EndPresentFrame()
+@@ -580,6 +582,20 @@ void GSRenderer::EndPresentFrame()
  
  void GSRenderer::VSync(u32 field, bool registers_written, bool idle_frame)
  {

@@ -850,7 +850,7 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
         // triangles it had to rewrite (mode 2). Race captures move closer to
         // field mode in every changed field. RRV_PCSX2_GS_FULL_LARGE_ST=0 (no
         // rewrite) / 1 (rewrite only) / 2 (default) for A/B.
-        unsigned large_st = options.UserHacks_RewriteLargeST ? 2u : 0u;
+        unsigned large_st = options.UserHacks_RewriteLargeSTCoords ? 2u : 0u;
         if (const char* value = std::getenv("RRV_PCSX2_GS_FULL_LARGE_ST"); value && value[0] != '\0')
         {
             if ((value[0] < '0' || value[0] > '2') || value[1] != '\0')
@@ -861,7 +861,7 @@ extern "C" RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(
             large_st = static_cast<unsigned>(value[0] - '0');
             fixes_overridden = true;
         }
-        options.UserHacks_RewriteLargeST = large_st != 0u;
+        options.UserHacks_RewriteLargeSTCoords = large_st != 0u;
         GSRrvSetDropLargeSTTriangles(large_st == 2u);
         std::fprintf(stderr, "[pcsx2-gs-bridge] render mode=full: large-ST mode=%u\n", large_st);
         if (const char* value = std::getenv("RRV_PCSX2_GS_FULL_HPO"); value && value[0] != '\0')

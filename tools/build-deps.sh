@@ -157,6 +157,7 @@ build_bridge() {
   local pcsx2="$ROOT/deps/pcsx2" bridge="$ROOT/bridge/gs"
   local build="$ROOT/build/metal-bridge/pcsx2"
   local deps_prefix="$ROOT/tools/metal-deps/prefix"
+  local ffmpeg_prefix="$ROOT/tools/ffmpeg/arm64"
   [[ -d "$pcsx2/.git" && -d "$bridge" ]] || { echo 'Missing deps/; run python3 tools/deps.py sync' >&2; exit 1; }
   # The dylib carries a relative LLVM runtime rpath instead of an absolute one.
   local rel
@@ -168,6 +169,7 @@ build_bridge() {
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_PREFIX_PATH="$deps_prefix" \
+    -DFFMPEG_ROOT="$ffmpeg_prefix" \
     -DENABLE_QT_UI=OFF -DENABLE_TESTS=OFF -DENABLE_GSRUNNER=OFF \
     -DUSE_VULKAN=OFF -DSKIP_POSTPROCESS_BUNDLE=ON \
     -DRRV_PCSX2_GS_BRIDGE_SOURCE_DIR="$bridge" \

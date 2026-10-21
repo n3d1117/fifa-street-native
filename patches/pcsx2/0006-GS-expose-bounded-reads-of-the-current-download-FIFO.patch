@@ -1,17 +1,17 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 04:09:41 +0200
-Subject: [PATCH 7/7] GS: expose bounded reads of the current download FIFO
+Subject: [PATCH 6/6] GS: expose bounded reads of the current download FIFO
 
 Let VIF1 reverse DMA consume the native transfer cursor without rebuilding descriptors on the EE. Limit each request to the remaining image, use the checked native InitReadFIFO/ReadFIFO path and preserve incremental cursor state.
 
 Verified with the Metal host smoke fixture: two 16-byte downloads reproduce the uploaded pixels and an exhausted transfer returns zero.
 
 diff --git a/pcsx2/GS/GS.cpp b/pcsx2/GS/GS.cpp
-index dab64133d6e63893126ceae4faf714b63e18dfea..eac4ecd3060d9e62a6c42d9993f3c4f5e91f774a 100644
+index c005e070f78fcb4f9feb6ecd836c08b4ee9201a4..cbebc7ebea68e05ac18d9b8796e282ca6cf6d26e 100644
 --- a/pcsx2/GS/GS.cpp
 +++ b/pcsx2/GS/GS.cpp
-@@ -476,6 +476,14 @@ void GSSyncRasterizer()
+@@ -477,6 +477,14 @@ void GSSyncRasterizer()
  		g_gs_renderer->RrvSyncRasterizer();
  }
  
@@ -27,7 +27,7 @@ index dab64133d6e63893126ceae4faf714b63e18dfea..eac4ecd3060d9e62a6c42d9993f3c4f5
  {
  	if (!g_gs_renderer || !mem)
 diff --git a/pcsx2/GS/GS.h b/pcsx2/GS/GS.h
-index 30838bd5c42a3f35d9f24e0f073b542d9288d97e..2be0304973472be7ad99e16f198fa5ea50625045 100644
+index 166c3504ce3194732871534e35948f5bf51c7a0c..3c0aec0e02ff300ee7023c2fb038be6de2b21370 100644
 --- a/pcsx2/GS/GS.h
 +++ b/pcsx2/GS/GS.h
 @@ -69,6 +69,7 @@ void GSReadLocalMemoryUnsync(u8* mem, u32 qwc, u64 BITBLITBUF, u64 TRXPOS, u64 T
@@ -39,10 +39,10 @@ index 30838bd5c42a3f35d9f24e0f073b542d9288d97e..2be0304973472be7ad99e16f198fa5ea
  // Callers serialize these with all GIF/CRTC work; restoring invalidates cached
  // renderer surfaces before they can be sampled again.
 diff --git a/pcsx2/GS/GSState.cpp b/pcsx2/GS/GSState.cpp
-index 51f4828f01f3e695942242361fc571a9cc5701c9..e66f3b14e964c0adb63531978efbda395bcde425 100644
+index a5d275a122bfaacd0144678d92b1e45412ea3796..8de64eaac3382da2a1c2cd6da2071e914b35d4a3 100644
 --- a/pcsx2/GS/GSState.cpp
 +++ b/pcsx2/GS/GSState.cpp
-@@ -3067,6 +3067,20 @@ void GSState::Read(u8* mem, int len)
+@@ -3073,6 +3073,20 @@ void GSState::Read(u8* mem, int len)
  		m_env.TRXDIR.XDIR = 3;
  }
  
@@ -64,10 +64,10 @@ index 51f4828f01f3e695942242361fc571a9cc5701c9..e66f3b14e964c0adb63531978efbda39
  	GIFRegTRXPOS TRXPOS, GIFRegTRXREG TRXREG)
  {
 diff --git a/pcsx2/GS/GSState.h b/pcsx2/GS/GSState.h
-index 9d9900cc705fc0a00f0337e9d936f2c03a9ee4ed..3400c5051f944c05cfb172046c0811d99298ab2c 100644
+index 24c6284696f5b59a499408077c399b81a7961b7b..2559da7959395d0286fc54e04bd5f9823f79a70d 100644
 --- a/pcsx2/GS/GSState.h
 +++ b/pcsx2/GS/GSState.h
-@@ -539,6 +539,7 @@ public:
+@@ -542,6 +542,7 @@ public:
  	// transfer armed by GIFRegHandlerTRXDIR; it owns no bridge-side cursor.
  	bool RrvReadLocalMemoryChecked(u8* mem, u32 byte_count, GIFRegBITBLTBUF BITBLTBUF,
  		GIFRegTRXPOS TRXPOS, GIFRegTRXREG TRXREG);

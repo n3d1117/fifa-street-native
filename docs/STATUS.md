@@ -22,7 +22,6 @@ Loops: `./rx run --match` (live match, about 28 s), `./rx run --route match` (me
 3. Drop dead patches after an audit, and the Ridge Racer V-only paths still in `bridge/gs/bridge.cpp` (full-frame mode, HUD un-stretch, widescreen, Vulkan branches).
 4. Faithfulness checks against PCSX2: GIF FIFO, EE cycle rate, VIF1 CYCLE CL=0.
 5. Docs pass.
-6. PCSX2 to current master (pinned at the v2.8.2 stable tag; fixes such as the FBMask rounding landed only on master). Rework the PCSX2 and bridge patches, then compare `./rx run --match` and `--route match` captures before and after.
 
 ## Backlog
 
