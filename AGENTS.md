@@ -55,7 +55,7 @@ Judge a run by its summary: `reached`, `seconds`, `fps_game`, `cpu_user_s`, `cpu
 3. `deps/pcsx2` (GS, SPU2), `bridge/` (GS bridge `bridge/gs`, SPU2 backend `bridge/spu2`).
 4. `host/`: window, input, audio output, settings.
 
-Config `[[hooks]]` (instruction hooks) exist but none are used. Treat them as a last resort; each must be verified against the retail ELF words it depends on and must stay faithful.
+Config `[[hooks]]` (instruction hooks) exist; the FIFA template uses one for the verified VBlank poll. Treat additional hooks as a last resort; each must be verified against the retail ELF words it depends on and must stay faithful.
 
 ## Changing a dependency
 

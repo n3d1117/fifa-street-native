@@ -3,7 +3,7 @@
 # switch tables are resolved by the recompiler. Only Sony SDK entry points with runtime/HLE handlers are bound
 # (libm/libc run as guest code). Evidence per entry, both agreeing where they overlap (58 of 59):
 #  - ps2_analyzer (embedded Sony SDK signature database): Mpeg, Ipu, Mc, Cd, Pad, Sif, Fs, Deci2, Tty, GsResetGraph, threads.
-#  - byte-pattern match of the Tarzan port's SDK function bodies (same Sony libraries) against this ELF's .text, with
+#  - byte-pattern matches of known Sony SDK function bodies against this ELF's .text, with
 #    jal targets and non-stack immediates masked, accepted only when unique: kernel syscall wrappers
 #    (0x445d50-0x446540: threads, semaphores, interrupts, alarms, cache, OSD, SIF DMA), Cd/Ipu/Pad/Sif/Fs bodies.
 #    Where the two disagree (sceCdDiskReady) the pattern match wins (126-word body ends exactly at the analyzer address).

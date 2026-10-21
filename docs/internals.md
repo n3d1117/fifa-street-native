@@ -131,7 +131,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 
 ## Function discovery and SDK binding (stripped ELF)
 
-No symbol map exists: the recompiler discovers functions itself (entry, JAL targets, prologues) and `generate.py` requires processed == discovered. `./rx where` reads the map from generated file names. SDK stubs in `config/SLES-53064.template.toml` come from `ps2_analyzer`'s embedded SDK signatures plus unique masked byte-pattern matches of the Tarzan port's SDK bodies (jal targets and non-stack immediates masked); libm/libc stay guest code.
+No symbol map exists: the recompiler discovers functions itself (entry, JAL targets, prologues) and `generate.py` requires processed == discovered. `./rx where` reads the map from generated file names. SDK stubs in `config/SLES-53064.template.toml` come from `ps2_analyzer`'s embedded SDK signatures plus unique masked byte-pattern matches of known Sony SDK bodies (jal targets and non-stack immediates masked); libm/libc stay guest code.
 
 ## Disc access
 
