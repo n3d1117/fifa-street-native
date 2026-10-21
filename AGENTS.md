@@ -112,4 +112,4 @@ Search with `git grep -n <pattern> -- <path>`; for deps use `git -C deps/<x> gre
 
 - Maintain only `README.md`, this file, `docs/STATUS.md` and `docs/internals.md`. Keep them lean.
 - Write mechanisms and invariants, not session logs: no build numbers, run IDs, dates, or sample counts. Name the command that regenerates any quoted number.
-- Done work lives in git history; STATUS keeps current truth and the ordered next steps. Mention an outside project only as a one-line source for a constant the code depends on.
+- Done work lives in git history; STATUS keeps current truth and the ordered next steps. A commit that completes a STATUS "Next" item updates `docs/STATUS.md` in the same commit. Mention an outside project only as a one-line source for a constant the code depends on.
