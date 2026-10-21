@@ -15,9 +15,10 @@ enum class DisplayAspect { Auto, FourThree, SixteenNine };
 
 struct Settings {
     VideoMode videoMode = VideoMode::PAL;
-    int renderScale = 1;           // 1..4
+    int renderScale = 1;           // 1..6
     int anisotropy = 0;            // 0, 2, 4, 8 or 16
     bool sharperImage = false;
+    bool fxaa = false;
     bool wallClock = true;         // pace guest time from the host clock (PS2X_WALLCLOCK=0 turns it off)
     bool unlockAllVenues = false;  // cheat: raise the game's own venue cheat flag
     DisplayAspect displayAspect = DisplayAspect::Auto;
@@ -31,7 +32,7 @@ using EnvLookup = const char* (*)(const char* name);
 // default; unknown keys are ignored. Never throws.
 Settings load_settings_file(const std::string& user_dir);
 
-// Debug overrides, applied after the file: PS2X_SCALE=1..4, PS2X_ANISO=0|2|4|8|16, PS2X_SHARP=1, PS2X_WALLCLOCK=0,
+// Debug overrides, applied after the file: PS2X_SCALE=1..6, PS2X_ANISO=0|2|4|8|16, PS2X_SHARP=1, PS2X_FXAA=1, PS2X_WALLCLOCK=0,
 // PS2X_CHEAT_UNLOCK_VENUES=1, PS2X_ASPECT=auto|4:3|16:9, PS2X_VIDEO_MODE=pal|ntsc.
 void apply_env_overrides(Settings& settings, EnvLookup lookup);
 

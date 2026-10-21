@@ -19,7 +19,7 @@ bool flag(NSDictionary* plist, NSString* key) {
 }
 int valid_render_scale(id value) {
     if (!is_integer_number(value)) return 0;
-    for (int scale = 1; scale <= 4; ++scale)
+    for (int scale = 1; scale <= 6; ++scale)
         if ([value compare:@(scale)] == NSOrderedSame) return scale;
     return 0;
 }
@@ -58,6 +58,7 @@ Settings load_settings_file(const std::string& user_dir) {
         Settings s;
         NSDictionary* plist = read_dictionary(user_dir);
         s.sharperImage = flag(plist, @"sharperImage");
+        s.fxaa = flag(plist, @"fxaa");
         s.unlockAllVenues = flag(plist, @"unlockAllVenues");
         s.videoMode = [plist[@"videoMode"] isKindOfClass:[NSString class]] &&
             [plist[@"videoMode"] isEqualToString:@"ntsc"] ? VideoMode::NTSC : VideoMode::PAL;
@@ -73,7 +74,7 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
         const char* v = lookup(name);
         return v && v[0] ? v : nullptr;
     };
-    if (const char* scale = get("PS2X_SCALE"); scale && scale[0] >= '1' && scale[0] <= '4' && !scale[1])
+    if (const char* scale = get("PS2X_SCALE"); scale && scale[0] >= '1' && scale[0] <= '6' && !scale[1])
         s.renderScale = scale[0] - '0';
     if (const char* aniso = get("PS2X_ANISO")) {
         const std::string value(aniso);
@@ -81,6 +82,7 @@ void apply_env_overrides(Settings& s, EnvLookup lookup) {
             s.anisotropy = std::stoi(value);
     }
     if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
+    if (const char* fxaa = get("PS2X_FXAA"); fxaa && std::string(fxaa) == "1") s.fxaa = true;
     if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
     if (const char* venues = get("PS2X_CHEAT_UNLOCK_VENUES"); venues && std::string(venues) == "1") s.unlockAllVenues = true;
     if (const char* mode = get("PS2X_VIDEO_MODE")) {
@@ -102,6 +104,7 @@ bool save_settings_file(const std::string& user_dir, const Settings& s) {
         plist[@"renderScale"] = @(s.renderScale);
         plist[@"anisotropy"] = @(s.anisotropy);
         plist[@"sharperImage"] = @(s.sharperImage);
+        plist[@"fxaa"] = @(s.fxaa);
         plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
         plist[@"videoMode"] = s.videoMode == VideoMode::NTSC ? @"ntsc" : @"pal";
         plist[@"displayAspect"] = display_aspect_name(s.displayAspect);
