@@ -19,13 +19,6 @@
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
 
-## Next
-
-Work these in order. **Every task updates this file in the same commit that completes it:** move it to Current or remove it, and record what was measured.
-
-**Fixes and tooling**
-1. Lean code generation evaluation (SloppyWyn's fork `docs/LEAN-CODEGEN.md`): build time and binary size behind a generator kill-switch.
-
 ## Backlog
 
 Architecture and CPU-efficiency reviews, release polish, iOS/tvOS.
