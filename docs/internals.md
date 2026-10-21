@@ -164,6 +164,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Hybrid ubershaders for first-use pipeline stalls: a 25-field runtime ps_main compiled 7x slower (30.7 vs 4.5 ms), raised GPU time 155% when forced, still needed 64 fixed pipelines (blend/format), and upstream PCSX2 has no Metal version. Boot pre-warm of the measured key list is the chosen path.
 - MTLBinaryArchive pre-warm of recorded keys: cold runs still underran (about 7.5k).
 - 4× field-mode menu captures: HPO 0–5, Round Sprite 1/2, and Align Sprite alone and combined showed no visible text/UI improvement; forced bilinear including sprites corrupted team flags, while forced bilinear excluding sprites showed no visible change. Full-mode Merge Sprite and Native Scaling do not apply to the observed field mode.
+- Same-size Lanczos/full-chroma MPEG conversion at the decoded 640×512 frame size produced no visible improvement in matched intro captures; the visible stretch remains in GS presentation, so the conversion experiment was reverted.
 
 ## Function discovery and SDK binding (stripped ELF)
 
