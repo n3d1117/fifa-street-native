@@ -5,6 +5,7 @@
 | Area | State |
 |---|---|
 | Frame rate | Measured 50 game frames/s during confirmed play. `fps_game` is the median of fully post-confirmation 5 s windows (`./rx run --match --profile`). `--match` fails below 49.5. |
+| Video mode | PAL remains the default. Startup hardcodes the PAL selector before GS reset; no console-query-controlled NTSC boot path found. Generic NTSC code exists, but correct-speed NTSC gameplay is unverified; see `docs/internals.md`. |
 | CPU | Measured with `./rx run --match --profile`: GameThread about 0.43 cores plus worker about 0.49 cores. |
 | Audio | The warm-run underrun mechanism was the all-EE-threads-blocked wait omitting IOP service deadlines; rapid-button spam runs now pass with zero underruns, while the legacy wait produced underruns in A/B. Cold Metal shader-cache stalls remain. |
 | Graphics | PCSX2 upstream master; Metal renderer. The dashed-texel grid is fixed upstream; user confirmation is pending. |
