@@ -33,6 +33,7 @@ int main() {
         all.renderScale = 3;
         all.sharperImage = true;
         all.unlockAllVenues = true;
+        all.displayAspect = host::DisplayAspect::SixteenNine;
         assert(host::save_settings_file(dir, all));
         assert(host::load_settings_file(dir) == all);
 
@@ -45,17 +46,18 @@ int main() {
         assert([after[@"futureOption"] isEqual:@"keep me"]);
 
         // Invalid values fall back to defaults.
-        NSDictionary* bad = @{@"renderScale": @9, @"sharperImage": @1};
+        NSDictionary* bad = @{@"renderScale": @9, @"sharperImage": @1, @"displayAspect": @"stretch"};
         assert([bad writeToFile:path atomically:YES]);
         assert(host::load_settings_file(dir) == Settings{});
 
         // Debug overrides apply on top of the file.
         Settings s;
-        g_env = {{"PS2X_SCALE", "4"}, {"PS2X_SHARP", "1"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}};
+        g_env = {{"PS2X_SCALE", "4"}, {"PS2X_SHARP", "1"}, {"PS2X_WALLCLOCK", "0"}, {"PS2X_CHEAT_UNLOCK_VENUES", "1"}, {"PS2X_ASPECT", "16:9"}};
         host::apply_env_overrides(s, fake_env);
-        assert(s.renderScale == 4 && s.sharperImage && !s.wallClock && s.unlockAllVenues);
+        assert(s.renderScale == 4 && s.sharperImage && !s.wallClock && s.unlockAllVenues &&
+               s.displayAspect == host::DisplayAspect::SixteenNine);
         Settings invalid;
-        g_env = {{"PS2X_SCALE", "7"}, {"PS2X_SHARP", "yes"}, {"PS2X_WALLCLOCK", "1"}, {"PS2X_CHEAT_UNLOCK_VENUES", "yes"}};
+        g_env = {{"PS2X_SCALE", "7"}, {"PS2X_SHARP", "yes"}, {"PS2X_WALLCLOCK", "1"}, {"PS2X_CHEAT_UNLOCK_VENUES", "yes"}, {"PS2X_ASPECT", "squash"}};
         host::apply_env_overrides(invalid, fake_env);
         assert(invalid == Settings{});
 

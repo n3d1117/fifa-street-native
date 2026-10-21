@@ -92,9 +92,11 @@ VU0 runs interpreted. VU1 native code comes from disc-derived programs; the inte
 
 `tools/probe/probe.py` reads macOS `proc_pid_rusage` RUSAGE_INFO_V4 around the bounded run when available. `energy_per_s` is billed energy in nJ/s; `wakeups_per_s` is package-idle plus interrupt wakeups per second. Both are null when the API or either sample is unavailable. They are process counters, not whole-system power readings.
 
-One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `renderScale` (1..4, native by default) and `sharperImage`. Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
+One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `renderScale` (1..4, native by default), `sharperImage`, and `displayAspect` (`auto`, `4:3`, or `16:9`). Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
 
 `host/metal-host.mm` derives bridge variables from `Settings`.
+
+Display aspect also controls the window's content ratio and the letterboxed full-screen viewport; the GS bridge uses PCSX2's aspect draw rectangle. `auto` selects PCSX2's automatic GS mode detection. The FIFA widescreen option is stored in guest state that the host does not currently read, so use `16:9` after enabling the game's own 16:9 option; `4:3` preserves the original host presentation.
 
 | Variable | Effect |
 |---|---|
@@ -102,6 +104,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_POLL_IDLE=0` / `verify` | spin in the vblank poll / check its loop registers and wait context (never measure verify mode) |
 | `PS2X_EE_IOP_IDLE=0` | disable the IOP service deadline in the all-EE-threads-blocked wait path |
 | `PS2X_CHEAT_UNLOCK_VENUES=1` | the game's own venue cheat flag (Settings checkbox; off by default) |
+| `PS2X_ASPECT=auto|4:3|16:9` | display aspect override (Settings menu; defaults to `auto`) |
 | `PS2X_SCALE=1..4`, `PS2X_SHARP=1` | override render scale and sharpening for this process |
 | `PS2X_DIAGNOSTIC_INPUT_FIFO=<fifo>` | process-local scripted input |
 | `PS2X_TRACE_FAULTS=1`, `PS2X_TRACE_SPU2=1`, `PS2X_TRACE_CD_IO=1` | fault, audio-health and disc-read traces |

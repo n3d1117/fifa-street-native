@@ -9,11 +9,14 @@
 
 namespace host {
 
+enum class DisplayAspect { Auto, FourThree, SixteenNine };
+
 struct Settings {
     int renderScale = 1;           // 1..4
     bool sharperImage = false;
     bool wallClock = true;         // pace guest time from the host clock (PS2X_WALLCLOCK=0 turns it off)
     bool unlockAllVenues = false;  // cheat: raise the game's own venue cheat flag
+    DisplayAspect displayAspect = DisplayAspect::Auto;
 
     friend bool operator==(const Settings&, const Settings&) = default;
 };
@@ -25,7 +28,7 @@ using EnvLookup = const char* (*)(const char* name);
 Settings load_settings_file(const std::string& user_dir);
 
 // Debug overrides, applied after the file: PS2X_SCALE=1..4, PS2X_SHARP=1, PS2X_WALLCLOCK=0,
-// PS2X_CHEAT_UNLOCK_VENUES=1.
+// PS2X_CHEAT_UNLOCK_VENUES=1, PS2X_ASPECT=auto|4:3|16:9.
 void apply_env_overrides(Settings& settings, EnvLookup lookup);
 
 // Writes every user option, keeping keys this build does not know about. Atomic replace.

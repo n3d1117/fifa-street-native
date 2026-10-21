@@ -27,7 +27,7 @@ CAMetalLayer* s_layer;
 RrvPcsx2GsBridgeSurface s_surface{};
 std::atomic_bool s_should_close{false};
 bool s_fullscreen{};
-constexpr CGFloat kGameAspect = 4.0 / 3.0;
+CGFloat s_game_aspect = 4.0 / 3.0;
 thread_local std::unique_ptr<host::MetalGsAdapter> s_gs;
 std::array<std::atomic_bool, 19> s_keys{};
 std::atomic_bool s_lifecycle_pending{false};
@@ -60,10 +60,10 @@ void layout_game_view() {
         [s_view setFrame:bounds];
     } else {
         CGFloat width = bounds.size.width;
-        CGFloat height = width / kGameAspect;
+        CGFloat height = width / s_game_aspect;
         if (height > bounds.size.height) {
             height = bounds.size.height;
-            width = height * kGameAspect;
+            width = height * s_game_aspect;
         }
         [s_view setFrame:NSMakeRect(NSMidX(bounds) - width / 2.0,
                                     NSMidY(bounds) - height / 2.0, width, height)];
@@ -156,10 +156,14 @@ extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t
         // The launcher normally configured settings already; this is a no-op then.
         host::configure_settings(nullptr);
         const host::Settings& settings = host::active_settings();
+        s_game_aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? 16.0 / 9.0 : 4.0 / 3.0;
         keyboard_controls_configure(host::user_directory().empty() ? nullptr : host::user_directory().c_str());
         ps2x_diagnostic_input_configure(std::getenv("PS2X_DIAGNOSTIC_INPUT_FIFO"));
         // The GS bridge (a separate library) takes its options from RRV_* variables;
         // they are derived here from the Settings struct, never set by users.
+        const char* aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? "16:9" :
+            settings.displayAspect == host::DisplayAspect::FourThree ? "4:3" : "auto";
+        setenv("RRV_PCSX2_GS_ASPECT", aspect, 1);
         if (settings.sharperImage) {
             setenv("RRV_PCSX2_GS_CAS", "50", 1);
             setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
@@ -195,10 +199,10 @@ extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t
         // behind that reference; stop() closes first, then clears it explicitly.
         [s_window setReleasedWhenClosed:NO];
         [s_window setTitle:[NSString stringWithUTF8String:title ? title : PS2X_APP_NAME]];
-        [s_window setContentAspectRatio:NSMakeSize(kGameAspect, 1.0)];
-        [s_window setContentSize:NSMakeSize(std::max<CGFloat>(480.0, height * kGameAspect),
+        [s_window setContentAspectRatio:NSMakeSize(s_game_aspect, 1.0)];
+        [s_window setContentSize:NSMakeSize(std::max<CGFloat>(480.0, height * s_game_aspect),
                                              std::max<CGFloat>(360.0, height))];
-        [s_window setContentMinSize:NSMakeSize(360.0 * kGameAspect, 360.0)];
+        [s_window setContentMinSize:NSMakeSize(360.0 * s_game_aspect, 360.0)];
         [s_window setCollectionBehavior:[s_window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
         s_delegate = [HostWindowDelegate new];
         [s_window setDelegate:s_delegate];
