@@ -37,6 +37,9 @@ Work these in order. **Every task updates this file in the same commit that comp
 9. Rumble: decode `scePadSetActAlign`/`scePadSetActDirect` in the pad HLE (currently dropped), forward the motor values to `SDL_RumbleGamepad` (DualSense), with a rumble on/off setting and intensity.
 10. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
 11. Auto widescreen: locate the game's widescreen flag (`gWidescreenMode` / the Options 16:9 handler) and read it each frame to drive Display aspect Auto; explicit 4:3 and 16:9 override it.
+12. Sharper 2D at high render scale: menu text and UI look soft and pixelated at 4x because they are low-resolution PS2 textures. Try PCSX2's upscaling fixes for 2D first (round sprite, align sprite, texture filtering for sprites) as opt-in settings. Compare matched menu captures (language screen, team select) at 4x.
+13. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
+14. Better movie scaling: replace bilinear stretching of the MPEG-2 intro movies with a high-quality scaler (bicubic or Lanczos) plus optional light sharpening, opt-in. The source detail is limited to the disc's PS2-resolution video.
 
 ## Backlog
 
