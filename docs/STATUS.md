@@ -41,4 +41,4 @@ Work these in order. **Every task updates this file in the same commit that comp
 
 ## Backlog
 
-architecture and CPU-efficiency reviews, release polish, iOS/tvOS.
+Architecture and CPU-efficiency reviews, release polish, iOS/tvOS.
