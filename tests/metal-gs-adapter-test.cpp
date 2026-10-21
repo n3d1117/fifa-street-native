@@ -39,6 +39,7 @@ void reset_fake() {
 }
 
 extern "C" {
+void rrv_pcsx2_gs_bridge_set_host_present_callback(RrvPcsx2GsHostPresentCallback) {}
 void rrv_pcsx2_gs_bridge_owner_thread_init(void) { ++g_owner_inits; }
 RrvPcsx2GsBridge* rrv_pcsx2_gs_bridge_create(const RrvPcsx2GsBridgeConfig* c,
     RrvPcsx2GsBridgeCapabilities* caps, char*, uint32_t) {

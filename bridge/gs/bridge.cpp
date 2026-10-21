@@ -48,6 +48,8 @@
 
 namespace {
 
+std::atomic<RrvPcsx2GsHostPresentCallback> s_host_present_callback{nullptr};
+
 extern "C" void rrv_pcsx2_gs_bridge_initialize_host_console();
 extern "C" int rrv_pcsx2_gs_bridge_configure_native_surface(
     uint32_t kind, uint32_t flags, void* native_view, void* native_layer,
@@ -585,6 +587,18 @@ struct RrvPcsx2GsBridge {
 extern "C" uint32_t rrv_pcsx2_gs_bridge_version(void)
 {
     return RRV_PCSX2_GS_BRIDGE_ABI_VERSION;
+}
+
+extern "C" void rrv_pcsx2_gs_bridge_set_host_present_callback(
+    RrvPcsx2GsHostPresentCallback callback)
+{
+    s_host_present_callback.store(callback, std::memory_order_release);
+}
+
+extern "C" void rrv_pcsx2_gs_bridge_host_present(int active)
+{
+    if (const auto callback = s_host_present_callback.load(std::memory_order_acquire))
+        callback(active);
 }
 
 extern "C" void rrv_pcsx2_gs_bridge_owner_thread_init(void)

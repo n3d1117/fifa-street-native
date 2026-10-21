@@ -32,6 +32,7 @@ if(RX_GAME_READY)
         "${RX_ROOT}/bridge/gs"
         "${RX_ROOT}/bridge/spu2"
         "${RX_ROOT}/deps/pcsx2/3rdparty/soundtouch/soundtouch"
+        "${RX_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include"
         "${RX_PS2RECOMP_SOURCE_DIR}/ps2xIOP/include")
     target_compile_features(metalHost PRIVATE cxx_std_20)
     target_compile_options(metalHost PRIVATE
@@ -158,7 +159,8 @@ add_executable(metalGsAdapterTest
     "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp")
 target_include_directories(metalGsAdapterTest PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${RX_ROOT}/bridge/gs")
+    "${RX_ROOT}/bridge/gs"
+    "${RX_PS2RECOMP_SOURCE_DIR}/ps2xRuntime/include")
 target_compile_features(metalGsAdapterTest PRIVATE cxx_std_20)
 target_compile_options(metalGsAdapterTest PRIVATE -UNDEBUG)
 target_link_options(metalGsAdapterTest PRIVATE -stdlib=libc++)

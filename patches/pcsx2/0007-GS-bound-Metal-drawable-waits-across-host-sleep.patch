@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Wed, 21 Oct 2026 17:04:58 +0200
+Subject: [PATCH 7/7] GS: bound Metal drawable waits across host sleep
+
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index fb473b00d17a0b57f155bbc934cb7c33f5cce22c..d15ad8ffaed8b31823d59b97dfe819ab384c6e84 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -17,6 +17,8 @@
+ #include "imgui.h"
+ 
+ #include <thread>
++#include <atomic>
++#include <chrono>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <memory>
+@@ -26,6 +28,8 @@
+ #ifdef __APPLE__
+ #include "GSMTLSharedHeader.h"
+ 
++extern "C" void rrv_pcsx2_gs_bridge_host_present(int active);
++
+ static constexpr simd::float2 ToSimd(const GSVector2& vec)
+ {
+ 	return simd::make_float2(vec.x, vec.y);
+@@ -1771,6 +1775,24 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+ 
+ static bool s_capture_next = false;
+ 
++struct RrvHostPresentScope
++{
++	RrvHostPresentScope() { rrv_pcsx2_gs_bridge_host_present(1); }
++	~RrvHostPresentScope() { rrv_pcsx2_gs_bridge_host_present(0); }
++};
++
++static void RrvTestPresentStall()
++{
++	static std::atomic<bool> stalled{false};
++	static const unsigned duration_ms = [] {
++		const char* value = std::getenv("RRV_PCSX2_GS_TEST_PRESENT_STALL_MS");
++		return value && value[0] ? static_cast<unsigned>(std::strtoul(value, nullptr, 10)) : 0u;
++	}();
++	bool expected = false;
++	if (duration_ms && stalled.compare_exchange_strong(expected, true))
++		std::this_thread::sleep_for(std::chrono::milliseconds(duration_ms));
++}
++
+ // RRV: host presentation must not block the guest. After the guest stalls
+ // (a long load), its missed VBlanks are delivered back to back and each one
+ // reaches BeginPresent. With the drawable pool exhausted, nextDrawable then
+@@ -1806,7 +1828,11 @@ static bool RrvShouldSkipFloodedPresent()
+ 		return PresentResult::FrameSkipped;
+ 	}
+ 	id<MTLCommandBuffer> buf = GetRenderCmdBuf();
+-	m_current_drawable = MRCRetain([m_layer nextDrawable]);
++	{
++		RrvHostPresentScope host_present;
++		RrvTestPresentStall();
++		m_current_drawable = MRCRetain([m_layer nextDrawable]);
++	}
+ 	if (s_rrv_metal_lifetime.enabled())
+ 	{
+ 		const u64 diag_drawable = RrvMetalLifetimePointer(m_current_drawable);

@@ -105,6 +105,7 @@ One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<u
 | `PS2X_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture |
 | `PS2X_AUDIO_STRETCH=1` | enable adaptive audio time stretching (off by default) |
 | `RRV_PCSX2_GS_PRESENT_MIN_US=<us>` | minimum interval between host presents (default 8000, 0 disables); frames closer than this are skipped so a burst of catch-up VBlanks cannot block the EE on `nextDrawable` |
+| `RRV_PCSX2_GS_TEST_PRESENT_STALL_MS=<ms>` | inject one Metal present stall; the StreamRing watchdog excludes only this host drawable-acquisition interval |
 | `PS2X_VU1_WORKER=0\|sync` | inline or drained data side |
 | `PS2X_GS_VERIFY=1` | eager GS readback verify |
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |

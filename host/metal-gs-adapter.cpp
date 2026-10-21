@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "metal-gs-adapter.hpp"
+#include "runtime/ps2_host_present.h"
 
 #include <cmath>
 #include <charconv>
@@ -20,6 +21,10 @@ namespace host {
 namespace {
 constexpr uint32_t kRequiredCapabilities = RRV_PCSX2_GS_CAP_HARDWARE_GS |
     RRV_PCSX2_GS_CAP_METAL_BACKEND | RRV_PCSX2_GS_CAP_DIRECT_PRESENT;
+
+void host_present_changed(int active) {
+    ps2x::hostPresentInProgress.store(active != 0, std::memory_order_release);
+}
 
 [[noreturn]] void fail(const char* operation, const char* detail) {
     throw std::runtime_error(std::string("PCSX2 Metal GS ") + operation + ": " +
@@ -135,6 +140,7 @@ MetalGsAdapter MetalGsAdapter::create(const MetalGsSurface& surface) {
     config.surface.flags |= RRV_PCSX2_GS_SURFACE_FLAG_OWNER_THREAD;
     char error[1024]{};
     rrv_pcsx2_gs_bridge_owner_thread_init();
+    rrv_pcsx2_gs_bridge_set_host_present_callback(host_present_changed);
 
     RrvPcsx2GsBridgeCapabilities caps{};
     caps.struct_size = sizeof(caps);
@@ -164,6 +170,7 @@ void MetalGsAdapter::close() noexcept {
     if (handle_) {
         rrv_pcsx2_gs_bridge_destroy(handle_);
         handle_ = nullptr;
+        rrv_pcsx2_gs_bridge_set_host_present_callback(nullptr);
     }
 }
 void MetalGsAdapter::submit(uint32_t path, std::span<const uint8_t> packet) {

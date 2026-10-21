@@ -158,6 +158,10 @@ typedef struct RrvPcsx2GsBridgeStats {
 typedef uint64_t RrvPcsx2GsPrivRegs[RRV_PCSX2_GS_BRIDGE_PRIV_REG_COUNT];
 
 RRV_PCSX2_GS_BRIDGE_API uint32_t rrv_pcsx2_gs_bridge_version(void);
+typedef void (*RrvPcsx2GsHostPresentCallback)(int active);
+RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_set_host_present_callback(
+    RrvPcsx2GsHostPresentCallback callback);
+RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_host_present(int active);
 
 // Optional exports resolved by the dedicated-owner candidate. ABI 5 layouts
 // and the default inline path are unchanged. All GS calls including create,
