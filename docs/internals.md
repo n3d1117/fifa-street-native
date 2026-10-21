@@ -10,7 +10,7 @@ Mechanisms, invariants and constants that the code relies on. Commands are in `A
 - Synchronous guest IOP RPCs must not advance the SPU timeline on top of the EE-issued IOP budget. The scheduler keeps an absolute issued target and credits work already executed; reset clears the target and the fractional 1:8 carry; the SPU epoch stays monotonic. With live host audio, outside-thread delay, semaphore and event-flag waits pace IOP progress against elapsed host time so a wait cannot overflow the output ring before EE accounting catches up. Without a playback device, pacing is disabled.
 - Movie presentation epoch is fixed. Late frames present promptly without shifting the PTS epoch or dropping decoded frames. PTS-less intervals use the effective VBlank period.
 - `EeScheduler::idlePoll` yields a guest poll loop to the earliest event (EE timer or IOP/SPU2 idle deadline); pending SPU2 IRQs invalidate the IOP bound and wall-clock sampling accounts slept time. Its one caller is the vblank poll below.
-- Game frames, host presents and vsyncs are different metrics. FIFA Street never changes DISPFB, so DISPFB change rate is useless. `fps_game` in the `./rx run` summary is the rate of GS FRAME_1/2 writes that retarget a context onto the displayed (DISPFB) buffer (`m_game_frames` in `deps/pcsx2` GSState, logged as `[gs-game]` every 5 s); `gpu_presents_per_sec` is the vsync rate. The probe reports bridge presents, HUD-clock observations and approximate state-dump VBlank/EE progress separately. Route profiling starts after gameplay confirmation; a successful route finishes after its gameplay observation tail. Menu inputs wait for OCR scene labels; movie skip waits for `INTRO.MPC` to open, and match-intro Cross requires the Marseille title plus commentary data.
+- Game frames, host presents and vsyncs are different metrics. FIFA Street never changes DISPFB, so DISPFB change rate is useless. `fps_game` in `./rx run` is the median of fully post-confirmation 5 s gameplay windows; `./rx run --match` fails below 49.5. It counts GS FRAME_1/2 writes that retarget a context onto the displayed (DISPFB) buffer (`m_game_frames` in `deps/pcsx2` GSState, logged as `[gs-game]` every 5 s). `gpu_presents_per_sec` is the vsync rate. The probe reports bridge presents, HUD-clock observations and approximate state-dump VBlank/EE progress separately. Route profiling starts after gameplay confirmation; a successful route finishes after its gameplay observation tail. Menu inputs wait for OCR scene labels; movie skip waits for `INTRO.MPC` to open, and match-intro Cross requires the Marseille title plus commentary data.
 
 ## Generated guest ABI
 
@@ -28,7 +28,7 @@ Removing a config stub alone cannot restore guest execution: PS2Recomp also auto
 
 `./rx run --match` sets `PS2X_BOOT_MATCH` in a scratch user dir. `host/boot-match.cpp` replaces the front end's per-frame update (`0x2ECA38`) in the function table with a wrapper that runs the original, then once the front-end resource slot (`0x47EFEC`) is filled: stores venue 3 at `GameSetup+0xA0` as `setvenuebyid` (`0x2E64C0`) does, calls `GameSetup::SetControl` (`0x12AE00`) for side 1 to pad 0, and calls `Playgame` (`0x2E5220`). Inert without the variable, in the real save directory, or if a dependent ELF word differs. Test: `boot_match`.
 
-The probe's only input is Cross on the language screen. Rarely (2 of about 47 runs) the single press had no effect and the list stayed on screen, so the hook, whose trigger needs the front end's resources, never fired. Inferred cause: the screen starts reading the pad some time after it first renders and a press in that window is lost. The `match-boot` route therefore repeats Cross while a capture taken 2 s or more after the press still shows the language list. Simulating a lost first press (dropping it in the diagnostic FIFO reader) shows the repeat recovers.
+The `match-boot` route repeats Cross while the language screen remains visible because a single early press can be missed before pad polling begins.
 
 ## VIF1 front end and op stream
 
@@ -58,17 +58,7 @@ VIF1 FLUSH/FLUSHE/FLUSHA do not wait for queued VU1 work or GIF paths, unlike PC
 
 Tests: `ps2_data_stream_tests.cpp` covers ring ordering and payload integrity across wraps with random barriers, exception propagation, and identical VU1 memory, MSCAL sequence and GIF packet order versus inline.
 
-Measured on `./rx run --match` and `./rx run --route match` with temporary runtime counters:
-
-- Runtime does not synthesize GIF_STAT FIFO depth or active path fields; both routes read GIF_STAT twice and got `0x4`, so active-transfer FQC/APATH status is not exercised by FIFA Street (measured).
-- Runtime SIGNAL/FINISH IRQ timing differs from PCSX2; no GS SIGNAL/FINISH/LABEL writes or EE CSR/IMR reads occurred, so this behavior is not exercised by FIFA Street (measured).
-- Runtime PATH3 mask handling was not invoked; no MSKPATH3 set/clear commands occurred, so this difference is not exercised by FIFA Street (measured).
-- Runtime D_CTRL STS/STD handling differs in supported nonzero stall modes; all 24,455 D_CTRL writes used zero STS/STD, so nonzero stall control is not exercised by FIFA Street (measured).
-- Runtime does not model PCSX2's per-scanline HBlank timer gating; the probe's HBlank predicate did not cover all gate modes, so whether FIFA uses that path remains unresolved.
-- EE COUNT/MODE reads occurred on T1/T2, but the probe did not collect register values or compare them with PCSX2; cycle-accounting impact on those reads is not established by these measurements.
-- The REWIND freeze trace rejected a stopped EE timer as its cause: game tick `0x495348` advanced about 60/s, VBlank about 50/s, T1/T2 counts and active callback thresholds advanced, and no timer IRQ was pending; the waiting task's completion word stayed zero.
-
-Replay frame capture queues two 0x34-byte records (`sub_0029D2F8`); `sub_0029DD38` waits on record+8, written to 1 at `0x3BF3E0` by the VIF1 DMA handler after a GS download. Like PCSX2 `Vif1_Dma.cpp`, reverse VIF1 DMA (`DIR=0`, retail `CHCR=0x184`) ignores MOD, preserves TADR, consumes the native GS FIFO on its owner thread, advances MADR/QWC and raises DMAC1. Tests: `ps2_memory_tests.cpp` and `metalHostSmoke`; replay/match-clock evidence: `./rx run --match --seconds 150`.
+Replay frame capture queues two 0x34-byte records (`sub_0029D2F8`); `sub_0029DD38` waits on record+8, written to 1 at `0x3BF3E0` by the VIF1 DMA handler after a GS download. Reverse VIF1 DMA (`DIR=0`, retail `CHCR=0x184`) ignores MOD, preserves TADR, consumes the native GS FIFO on its owner thread, advances MADR/QWC and raises DMAC1. The REWIND freeze was traced to the completion word not being written; the game tick and VBlank continued advancing. Replay animation was fixed in `af239cd`.
 
 ## VU
 
@@ -95,7 +85,7 @@ VU0 runs interpreted. VU1 native code comes from disc-derived programs; the inte
 
 One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `renderScale` (1..4, native by default) and `sharperImage`. Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
 
-`host/metal-host.mm` derives the `RRV_PCSX2_GS_*` bridge variables from `Settings`.
+`host/metal-host.mm` derives bridge variables from `Settings`.
 
 | Variable | Effect |
 |---|---|
@@ -134,20 +124,17 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 
 ## Tried and rejected
 
-- Fast-math or FP contraction: breaks PS2 arithmetic.
-- Treating the `sub_003C18D0` spin as a lost DMA IRQ: `sub_003C4ED0` clears object+0x82C on VBlank after the VIF1 END tag and configured field count; the language-menu rejection was the pad packet ID.
-- FPCR.FZ around native VU calls: inexact (`FLT_MIN + FLT_MIN * 0.5` gives `0x00800000`, the PS2 result is `0x00C00000`).
-- Texture dashes as EE-side corruption (MMI ops, DMA, uploads, refpack): uploads and GS local memory match the disc byte for byte; the error was PCSX2 v2.8.2's Metal FBMask truncating RT alpha.
-- Sampling `SDL_GetAudioStreamQueued` at the health interval: callback-driven playback drains the stream immediately, so it does not report device or OS queue depth.
-- EE alarm host-deadline waits as the cause of startup audio gaps: tracing observed no long waits in `processDueDeadlines` during those gaps.
-- `PS2X_THREAD_QOS=1` (`USER_INTERACTIVE` on GameThread and stream worker): rejected after `./rx ab --control PS2X_THREAD_QOS=0 --candidate PS2X_THREAD_QOS=1 --pairs 2 --match --profile`; fps stayed 50, but candidate wakeups rose 15% (1,133 to 1,303/s), worker CPU rose 6.5%, and one candidate had 16,217 audio underruns.
-- `PS2X_STREAM_SPIN=0` (block immediately in stream-ring waits): rejected after `./rx ab --control PS2X_STREAM_SPIN=1 --candidate PS2X_STREAM_SPIN=0 --pairs 2 --match --profile`; candidate stayed 50 fps with 0 underruns, but energy fell 9.6%, within the 9.1% no-op energy noise, while wakeups rose 6.4% (above the 1.2% control spread). One control leg also reported 0 fps, weakening the apparent energy result.
-- Last-placement cache in `Vu1NativeDispatcher::findProgram`: rejected after `./rx ab --control PS2X_VU1_LAST_CACHE=0 --candidate PS2X_VU1_LAST_CACHE=1 --pairs 2 --match --profile`; one candidate had 1.2 fps followed by 0 fps windows, so the worker CPU reduction is invalid. The worker `memmove` samples came from `PacketCapture` staging VU packets until native execution succeeds; `StreamRing::consume` only copies its 16-byte op header, so no safe redundant copy was found.
-
-- Metal pipeline or shader compilation as the cause of audio underrun bursts: `newRenderPipelineStateWithDescriptor` took at most 0.6 ms and `newFunctionWithName` under 3 ms in bursting runs; the stall was `[CAMetalLayer nextDrawable]` blocking the GS worker (EE waits for it in the `GS vsync` drain) after a catch-up burst of presents.
-- The upstream `RRV_PCSX2_GS_PRESENT_THROTTLE`/`ShouldSkipPresentingFrame` as the fix: it only acts with FIFO vsync, which the host does not enable, so it was a no-op (6 of 6 runs still burst).
-- CD reads and VU1/GS command traffic as the burst cause: `[cd-io]` reads take about 100 us and no stream-ring op exceeded 5 ms apart from `GsVsync`.
-- VIF1 FLUSH waits as in PCSX2: gameplay `fps_game` fell from a steady 50 to 26-39 (`./rx run --match`, 2 runs); the wait crosses to the VU1/GS worker thread instead of hardware's microsecond drain.
+- Fast-math, FP contraction and FPCR flush-to-zero change PS2 arithmetic.
+- The VBlank poll is not a lost DMA IRQ: the VBlank handler clears the poll word after the VIF1 END tag and configured field count. A rejected language-menu input was a pad packet-ID mismatch.
+- EE-side texture upload corruption was ruled out by matching uploads and GS local memory; the dashed-texel issue was the upstream Metal FBMask alpha truncation, now fixed.
+- `SDL_GetAudioStreamQueued` does not measure device queue depth because callback playback drains it immediately.
+- EE alarm host-deadline waits did not explain startup audio gaps; tracing found no long waits in `processDueDeadlines`.
+- Raising thread QoS and blocking immediately in stream-ring waits did not improve the measured route and increased wakeups; see `./rx ab` for repeatable comparisons.
+- A last-placement VU1 program cache was not validated because a run lost gameplay progress. `PacketCapture` must stage VU packets until native execution succeeds; the stream ring copies only its op header.
+- Metal pipeline and function creation were too short to explain audio bursts. The observed stall was `CAMetalLayer nextDrawable` on the GS worker during catch-up presents, while the EE waited at the GS vsync drain.
+- PCSX2's present throttle is inactive without FIFO vsync. CD reads and ordinary VU1/GS traffic did not explain the stalls.
+- Waiting for queued VU1 work on each VIF1 FLUSH blocks the EE on the worker and violates the hardware's short drain semantics.
+- `MTLBinaryArchive` prewarming did not resolve cold-launch shader-cache underrun bursts; cold-cache stalls remain open.
 
 ## Function discovery and SDK binding (stripped ELF)
 

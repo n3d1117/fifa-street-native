@@ -3,7 +3,7 @@
 A static recompilation of *FIFA Street* (PS2, PAL, SLES-53064) into a native arm64 macOS app with Metal graphics.
 You supply your own disc. This repository contains no game code, data or assets.
 
-**Status:** engine only. The game is not recompiled yet. See [docs/STATUS.md](docs/STATUS.md).
+See [docs/STATUS.md](docs/STATUS.md) for verified game state and next steps.
 
 ## Requirements
 

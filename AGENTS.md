@@ -33,11 +33,11 @@ Driver: `./rx`. Every command is quiet: PASS/FAIL, time, a log path (`build/logs
 | `./rx test [--full]` | quick ctest tier, no disc; `--full` adds slow-labelled tests |
 | `./rx check [--tracked]` | hygiene checks |
 | `./rx run [--seconds N] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]` | bounded boot run with isolated saves and a summary |
-| `./rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match] [--seconds N] [--profile]` | alternating control/candidate probes with median, range and control noise |
+| `./rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match|--seconds N] [--profile]` | alternating control/candidate probes with median and control-noise table; `--match` selects the match route |
 | `./rx where <0xADDR\|name>`, `./rx where --unimplemented` | generated file, config entry or HLE handler; unimplemented stubs |
 | `./rx package [--install]` | app bundle `FIFA Street PS2.app` |
 
-Judge a run by its summary: `reached`, `seconds`, `fps_game`, `cpu_user_s`, `cpu_sys_s`, `audio_underruns`, `crash`, `stubs`. CPU seconds are the game child process only. Open the log only when the summary is wrong.
+`./rx run` prints `reached`, `seconds`, `fps_game`, `gpu_presents_per_sec`, `cpu_user_s`, `cpu_sys_s`, `energy_per_s`, `wakeups_per_s`, `vu_fallbacks`, `audio_underruns`, `crash`, and `stubs`; it may also print `scene`, `time_to_play_s`, `vu1_diff`, and `black_frames`. Energy and wakeup rates can be null when unavailable. CPU seconds are the game child process only; `fps_game` is the median of gameplay windows after confirmed play. Open the log only when the summary is wrong.
 
 **Verification scope.**
 
