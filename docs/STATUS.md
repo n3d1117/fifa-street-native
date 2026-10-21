@@ -5,7 +5,7 @@
 | Area | State |
 |---|---|
 | Frame rate | Measured 50 game frames/s during confirmed play. `fps_game` is the median of fully post-confirmation 5 s windows (`./rx run --match --profile`). `--match` fails below 49.5. |
-| Video mode | PAL remains the default. Startup hardcodes the PAL selector before GS reset; no console-query-controlled NTSC boot path found. Generic NTSC code exists, but correct-speed NTSC gameplay is unverified; see `docs/internals.md`. |
+| Video mode | PAL remains the only available mode. A verified temporary override reaches the retail NTSC branch and measures 60.0 fps with approximately real-time HUD clock progress, but window captures consistently show a black pitch surface. NTSC is not shipped; see `docs/internals.md`. |
 | CPU | Measured with `./rx run --match --profile`: GameThread about 0.43 cores plus worker about 0.49 cores. |
 | Audio | The warm-run underrun mechanism was the all-EE-threads-blocked wait omitting IOP service deadlines; rapid-button spam runs now pass with zero underruns, while the legacy wait produced underruns in A/B. Cold Metal shader-cache stalls remain. |
 | Graphics | PCSX2 upstream master; Metal renderer. The dashed-texel grid is fixed upstream; user confirmation is pending. |
@@ -23,7 +23,7 @@
 Work these in order. **Every task updates this file in the same commit that completes it:** move it to Current or remove it, and record what was measured.
 
 **Fixes and tooling**
-1. NTSC 60 Hz mode (in progress): the PAL build hardcodes selector 1 at constructor `0x29426C`; the setter `0x3C4FD8` has an NTSC branch (selector 0 writes OMode 2). Make the flip take effect, then ship Settings "Video mode: PAL 50 Hz / NTSC 60 Hz" only if the match clock stays about 1.0 s per wall second at about 60 fps.
+1. NTSC rendering prerequisite: the verified selector override reaches 60.0 fps with approximately real-time match-clock progress, but the pitch surface renders black. Diagnose that regression before exposing Settings "Video mode: PAL 50 Hz / NTSC 60 Hz"; preserve the game's clocks and selector branch.
 2. Shader pre-warm at boot: ship FIFA's measured pipeline-key list (tagged by GPU feature set, checked against the PCSX2 pin) plus a per-device learned list in Application Support; precompile at GS device creation; kill-switch `RRV_PCSX2_GS_PIPELINE_PREWARM=0`. A prototype measured about 250 keys, 1.5 s cold / 12 ms warm, and 0 runtime compiles and 0 underruns on a cold run. Ubershaders were measured and rejected.
 3. Audio clipping on goals and replays: peaks reach 1.1-1.6x full scale with up to 446 clipped samples/s. Match PCSX2's SPU2 output stage (gain, core mix, final clamp) in `bridge/spu2` and `host/spu2-host.cpp`; no limiter.
 4. Boot hook for any venue: `PS2X_BOOT_MATCH=venue=5` (Roma) faults on a NULL `0x48EBC8` callback because the hook skips the front-end venue path. `setvenuebyid` (`0x2E64C0`) maps ids differently (id 5 loaded Amsterdam). Follow the menu path for every venue, and have `--match` honour `PS2X_BOOT_MATCH`.
@@ -41,4 +41,4 @@ Work these in order. **Every task updates this file in the same commit that comp
 
 ## Backlog
 
-HD texture-pack support (deferred), all-stadium and mode coverage, architecture and CPU-efficiency reviews, release polish, iOS/tvOS.
+architecture and CPU-efficiency reviews, release polish, iOS/tvOS.
