@@ -24,8 +24,7 @@ Work these in order. **Every task updates this file in the same commit that comp
 
 **Fixes and tooling**
 1. Shader pre-warm at boot: ship FIFA's measured pipeline-key list (tagged by GPU feature set, checked against the PCSX2 pin) plus a per-device learned list in Application Support; precompile at GS device creation; kill-switch `RRV_PCSX2_GS_PIPELINE_PREWARM=0`. A prototype measured about 250 keys, 1.5 s cold / 12 ms warm, and 0 runtime compiles and 0 underruns on a cold run. Ubershaders were measured and rejected.
-2. Boot hook for any venue: `PS2X_BOOT_MATCH=venue=5` (Roma) faults on a NULL `0x48EBC8` callback because the hook skips the front-end venue path. `setvenuebyid` (`0x2E64C0`) maps ids differently (id 5 loaded Amsterdam). Follow the menu path for every venue, and have `--match` honour `PS2X_BOOT_MATCH`.
-3. Lean code generation evaluation (SloppyWyn's fork `docs/LEAN-CODEGEN.md`): build time and binary size behind a generator kill-switch.
+2. Lean code generation evaluation (SloppyWyn's fork `docs/LEAN-CODEGEN.md`): build time and binary size behind a generator kill-switch.
 
 **Modern feel (all opt-in, off by default)**
 
