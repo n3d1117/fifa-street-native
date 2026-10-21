@@ -598,6 +598,7 @@ def main():
     env = os.environ.copy()
     env.setdefault("PS2X_TRACE_FAULTS", "1")
     env.setdefault("PS2X_TRACE_SPU2", "1")
+    env.setdefault("RRV_PCSX2_GS_PIPELINE_MANIFEST", str(ROOT / "bridge/gs/pipelines-fifa.txt"))
     fifo_path = out / "input.fifo"
     if args.match:
         env["PS2X_BOOT_MATCH"] = "venue=3"

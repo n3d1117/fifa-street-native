@@ -152,6 +152,11 @@ static id s_resignObserver;
 static id s_becomeObserver;
 
 extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t height) {
+    if (!std::getenv("RRV_PCSX2_GS_PIPELINE_MANIFEST")) {
+        NSString* manifest = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Contents/Frameworks/PCSX2GSBridge/resources/pipelines-fifa.txt"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:manifest])
+            setenv("RRV_PCSX2_GS_PIPELINE_MANIFEST", [manifest fileSystemRepresentation], 0);
+    }
     @autoreleasepool {
         // The launcher normally configured settings already; this is a no-op then.
         host::configure_settings(nullptr);

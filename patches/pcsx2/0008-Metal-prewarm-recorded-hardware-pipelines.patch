@@ -1,0 +1,209 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Thu, 22 Oct 2026 00:46:39 +0200
+Subject: [PATCH 8/8] Metal: prewarm recorded hardware pipelines
+
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h
+index 71ef14962a38ed954a73f2e8d5bf4ac1c7edea30..2091a4ff092e696b0665986d7714cd22d2bfde54 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h
+@@ -277,6 +277,7 @@ public:
+ 	MRCOwned<id<MTLFunction>> m_hw_vs[6 << 3];
+ 	std::unordered_map<PSSelector, MRCOwned<id<MTLFunction>>> m_hw_ps;
+ 	std::unordered_map<PipelineSelectorMTL, MRCOwned<id<MTLRenderPipelineState>>> m_hw_pipeline;
++	size_t m_rrv_runtime_pipeline_compiles = 0;
+ 
+ 	MRCOwned<MTLRenderPassDescriptor*> m_render_pass_desc[16];
+ 	MRCOwned<MTLRenderPassDescriptor*> m_full_rov_render_pass_desc;
+@@ -446,6 +447,8 @@ public:
+ 	void FlushClears(GSTexture* tex);
+ 
+ 	// MARK: Main Render Encoder operations
++	id<MTLRenderPipelineState> GetHWPipeline(const PipelineSelectorMTL& fullsel, bool record_runtime = false);
++	void PrewarmRecordedHW();
+ 	void MRESetHWPipelineState(GSHWDrawConfig::VSSelector vs, GSHWDrawConfig::PSSelector ps, GSHWDrawConfig::BlendState blend, GSHWDrawConfig::ColorMaskSelector cms);
+ 	void MRESetDSS(DepthStencilSelector sel);
+ 	void MRESetDSS(id<MTLDepthStencilState> dss);
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index d15ad8ffaed8b31823d59b97dfe819ab384c6e84..fd8667572e07603876eb612759445e49d8a7f603 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -19,11 +19,16 @@
+ #include <thread>
+ #include <atomic>
+ #include <chrono>
++#include <algorithm>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <memory>
++#include <sstream>
+ #include <string>
+ #include <cstring>
++#include <fstream>
++#include <iomanip>
++#include <vector>
+ 
+ #ifdef __APPLE__
+ #include "GSMTLSharedHeader.h"
+@@ -1661,6 +1666,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+ 		RrvMetalLifetimeRecordRaw(rrv::metal_lifetime::Event::PipelineReady, RrvMetalLifetimePointer(m_dev.dev), RrvMetalLifetimePointer(m_queue), RrvMetalLifetimePointer(m_layer), 0, m_current_draw, 0);
+ 	RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, initCommands, m_queue, m_layer, nil, m_current_draw);
+ 	[initCommands commit];
++	PrewarmRecordedHW();
+ 	return true;
+ }}
+ 
+@@ -2384,6 +2390,9 @@ static MTLBlendOperation ConvertBlendOp(GSDevice::BlendOp generic)
+ 	}
+ }
+ 
++static std::string RrvMetalPipelineFeatureTag(const GSMTLDevice& device);
++static void RrvRecordPipelineKey(const PipelineSelectorMTL& key, const std::string& feature_tag);
++
+ void GSDeviceMTL::MRESetHWPipelineState(GSHWDrawConfig::VSSelector vssel, GSHWDrawConfig::PSSelector pssel, GSHWDrawConfig::BlendState blend, GSHWDrawConfig::ColorMaskSelector cms)
+ {
+ 	PipelineSelectorExtrasMTL extras(blend, m_current_render.color_target, cms, m_current_render.depth_target, m_current_render.stencil_target, m_current_render.has.rt1_depth);
+@@ -2392,13 +2401,28 @@ static MTLBlendOperation ConvertBlendOp(GSDevice::BlendOp generic)
+ 		return;
+ 	m_current_render.pipeline_sel = fullsel;
+ 	m_current_render.has.pipeline_sel = true;
+-	auto idx = m_hw_pipeline.find(fullsel);
+-	if (idx != m_hw_pipeline.end())
+-	{
+-		[m_current_render.encoder setRenderPipelineState:idx->second];
+-		return;
+-	}
+-
++	[m_current_render.encoder setRenderPipelineState:GetHWPipeline(fullsel, true)];
++}
++
++id<MTLRenderPipelineState> GSDeviceMTL::GetHWPipeline(const PipelineSelectorMTL& fullsel, bool record_runtime)
++{
++	if (auto it = m_hw_pipeline.find(fullsel); it != m_hw_pipeline.end())
++		return it->second;
++	const auto vssel = fullsel.vs;
++	const auto pssel = fullsel.ps;
++	const auto extras = fullsel.extras;
++	GSHWDrawConfig::BlendState blend;
++	blend.enable = extras.blend_enable;
++	blend.src_factor = extras.src_factor;
++	blend.dst_factor = extras.dst_factor;
++	blend.src_factor_alpha = extras.src_factor_alpha;
++	blend.dst_factor_alpha = extras.dst_factor_alpha;
++	blend.op = extras.blend_op;
++	GSHWDrawConfig::ColorMaskSelector cms;
++	cms.wr = (extras.writemask & MTLColorWriteMaskRed) != 0;
++	cms.wg = (extras.writemask & MTLColorWriteMaskGreen) != 0;
++	cms.wb = (extras.writemask & MTLColorWriteMaskBlue) != 0;
++	cms.wa = (extras.writemask & MTLColorWriteMaskAlpha) != 0;
+ 	bool primid_tracking_init = pssel.date == 1 || pssel.date == 2;
+ 
+ 	VSSelector vssel_mtl;
+@@ -2527,8 +2551,104 @@ static MTLBlendOperation ConvertBlendOp(GSDevice::BlendOp generic)
+ 	NSString* pname = [NSString stringWithFormat:@"HW Render %x.%llx.%llx.%x", vssel_mtl.key, pssel.key_hi, pssel.key_lo, extras.fullkey];
+ 	auto pipeline = MakePipeline(pdesc, vs, ps, pname);
+ 
+-	[m_current_render.encoder setRenderPipelineState:pipeline];
+-	m_hw_pipeline.insert(std::make_pair(fullsel, std::move(pipeline)));
++	if (record_runtime)
++	{
++		RrvRecordPipelineKey(fullsel, RrvMetalPipelineFeatureTag(m_dev));
++		fprintf(stderr, "[RRV_PCSX2_GS_PIPELINE_RUNTIME_COMPILE_COUNT] count=%zu\n", ++m_rrv_runtime_pipeline_compiles);
++	}
++	return m_hw_pipeline.emplace(fullsel, std::move(pipeline)).first->second;
++}
++
++static std::string RrvMetalPipelineFeatureTag(const GSMTLDevice& device)
++{
++	const auto& f = device.features;
++	const char* family = "unknown";
++	if ([device.dev supportsFamily:MTLGPUFamilyApple7]) family = "apple7";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple6]) family = "apple6";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple5]) family = "apple5";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple4]) family = "apple4";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple3]) family = "apple3";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple2]) family = "apple2";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple1]) family = "apple1";
++	char tag[128];
++	snprintf(tag, sizeof(tag), "family=%s;shader=%u;fbf=%u;primid=%u;rov=%u;rrt=%u;rr32=%u;depth=%u;broken=%u", family,
++		static_cast<unsigned>(f.shader_version), unsigned(f.framebuffer_fetch), unsigned(f.primid), unsigned(f.rov),
++		unsigned(f.rov_requires_rt), unsigned(f.rov_requires_r32), unsigned(f.depth_feedback), unsigned(f.broken_shader_depth));
++	return tag;
++}
++
++static bool RrvReadPipelineKeys(const std::string& path, const std::string& feature_tag, std::vector<PipelineSelectorMTL>& keys)
++{
++	std::ifstream in(path);
++	if (!in) return false;
++	std::string line;
++	bool feature_match = false;
++	std::vector<PipelineSelectorMTL> parsed;
++	while (std::getline(in, line))
++	{
++		if (line.rfind("# features=", 0) == 0) { feature_match = line.substr(11) == feature_tag; continue; }
++		if (line.empty() || line[0] == '#') continue;
++		unsigned vs, extras; unsigned long long hi, lo;
++		if (sscanf(line.c_str(), "vs=%x ps_hi=%llx ps_lo=%llx extras=%x", &vs, &hi, &lo, &extras) != 4) continue;
++		PipelineSelectorMTL key;
++		key.vs.key = static_cast<u8>(vs); key.ps.key_hi = hi; key.ps.key_lo = lo; key.extras.fullkey = extras;
++		parsed.push_back(key);
++	}
++	if (feature_match)
++		for (const auto& key : parsed)
++			if (std::find(keys.begin(), keys.end(), key) == keys.end()) keys.push_back(key);
++	return feature_match;
++}
++
++void GSDeviceMTL::PrewarmRecordedHW()
++{
++	const char* enabled = std::getenv("RRV_PCSX2_GS_PIPELINE_PREWARM");
++	if (enabled && enabled[0] == '0') return;
++	const auto tag = RrvMetalPipelineFeatureTag(m_dev);
++	std::vector<PipelineSelectorMTL> keys;
++	if (const char* manifest = std::getenv("RRV_PCSX2_GS_PIPELINE_MANIFEST"))
++		RrvReadPipelineKeys(manifest, tag, keys);
++	if (const char* user = std::getenv("RRV_PCSX2_GS_PIPELINE_CACHE"))
++		RrvReadPipelineKeys(user, tag, keys);
++	const auto start = std::chrono::steady_clock::now();
++	const size_t before = m_hw_pipeline.size();
++	for (const auto& key : keys) GetHWPipeline(key);
++	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
++	fprintf(stderr, "[RRV_PCSX2_GS_PIPELINE_PREWARM] feature=%s keys=%zu created=%zu ms=%lld\n", tag.c_str(), keys.size(), m_hw_pipeline.size() - before, static_cast<long long>(ms));
++}
++
++static void RrvRecordPipelineKey(const PipelineSelectorMTL& key, const std::string& feature_tag)
++{
++	const char* path = std::getenv("RRV_PCSX2_GS_PIPELINE_RECORD");
++	const char* enabled = std::getenv("RRV_PCSX2_GS_PIPELINE_PREWARM");
++	if ((!enabled || enabled[0] != '0') && (!path || !*path))
++		path = std::getenv("RRV_PCSX2_GS_PIPELINE_CACHE");
++	if (enabled && enabled[0] == '0' && (!path || !*path)) return;
++	if (!path || !*path) return;
++	bool reset = true;
++	bool duplicate = false;
++	{
++		std::ifstream in(path);
++		std::string first;
++		if (std::getline(in, first) && first == "# features=" + feature_tag)
++		{
++			reset = false;
++			std::ostringstream serialized;
++			serialized << "vs=" << std::hex << std::setw(2) << std::setfill('0') << unsigned(key.vs.key)
++				<< " ps_hi=" << std::setw(16) << key.ps.key_hi << " ps_lo=" << std::setw(16) << key.ps.key_lo
++				<< " extras=" << std::setw(8) << key.extras.fullkey;
++			const std::string target = serialized.str();
++			std::string line;
++			while (std::getline(in, line)) if (line == target) { duplicate = true; break; }
++		}
++	}
++	if (duplicate) return;
++	std::ofstream out(path, reset ? std::ios::trunc : std::ios::app);
++	if (!out) return;
++	if (reset) out << "# features=" << feature_tag << '\n';
++	out << "vs=" << std::hex << std::setw(2) << std::setfill('0') << unsigned(key.vs.key)
++		<< " ps_hi=" << std::setw(16) << key.ps.key_hi << " ps_lo=" << std::setw(16) << key.ps.key_lo
++		<< " extras=" << std::setw(8) << key.extras.fullkey << '\n';
+ }
+ 
+ void GSDeviceMTL::MRESetDSS(DepthStencilSelector sel)

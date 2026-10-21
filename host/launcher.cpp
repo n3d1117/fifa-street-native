@@ -251,6 +251,9 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         redirectLogsIfDetached(userDirectory);
         // Settings: the user's file plus the documented debug overrides, loaded once.
         host::configure_settings(userDirectory.c_str());
+        const auto pipelineCache = userDirectory / "gs-metal-pipelines.txt";
+        if (!std::getenv("RRV_PCSX2_GS_PIPELINE_CACHE"))
+            setenv("RRV_PCSX2_GS_PIPELINE_CACHE", pipelineCache.c_str(), 1);
         PS2HostConfig hostConfig;
         // Pace hardware time from the host clock. Estimated block costs must
         // neither slow it down nor accelerate audio during movie playback.

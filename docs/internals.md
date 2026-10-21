@@ -87,6 +87,10 @@ VU0 runs interpreted. VU1 native code comes from disc-derived programs; the inte
 - The guest audio callback returns zero when its ring cannot take a complete PES payload. The MPEG shim must then leave the PES in the input ring and report only accepted bytes. Erasing it shifts later data and corrupts ADPCM. Demux stops at the first registered audio PES; incomplete and wrapped packets are assembled from both ring sides; CD/EOF accounting follows accepted bytes. Never mask a symptom with mute, gain reduction or a limiter. Code: `deps/ps2recomp/ps2xRuntime/src/lib/Kernel/Stubs/MPEG.cpp` (`processPssBuffer`, `dispatchGuestStreamCallback`).
 - The SPU host issues `Sync(t)` only. An inline/threaded fixture compares events, core state, PCM hash and frame count. Time stretching is off unless `PS2X_AUDIO_STRETCH=1`: with the host-clock-locked guest the stretcher reacted to producer bursts by dropping about a fifth of the output frames in a match. Underrun statistics count every frame the host requests but the SPU ring cannot provide, including startup; do not gate the counter on sample amplitude or playback state.
 
+## Metal pipeline pre-warm
+
+`bridge/gs/pipelines-fifa.txt` stores measured hardware-render pipeline selectors as VS key, PS key high/low words and `PipelineSelectorExtrasMTL::fullkey`, tagged by the Metal GPU family and `GSDeviceMTL` feature probes. Its PCSX2 revision must match `deps.lock`; `./rx check` enforces the stamp. At GS device creation, the GS worker compiles matching shipped keys and the per-user `gs-metal-pipelines.txt` from the application support directory before game draws. Newly created runtime pipelines extend that user list; the repo is never written at runtime. `RRV_PCSX2_GS_PIPELINE_PREWARM=0` disables pre-warming and automatic learning. `RRV_PCSX2_GS_PIPELINE_RECORD=<path>` explicitly records lazily created keys for menu/match coverage. Unlisted keys still compile lazily.
+
 ## EE FPU, VU0 and IOP semantics
 
 - SQRT.S/RSQRT.S clear current FCR31 I/D causes before setting the operation's exception (sticky flags kept). Negative nonzero Ft sets I/SI; zero or denormal Ft sets D/SD for RSQRT. Classification precedes the destination write, so Fd may alias Ft.
@@ -122,6 +126,8 @@ Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C`
 | `PS2X_AUDIO_STRETCH=1` | enable adaptive audio time stretching (off by default) |
 | `RRV_PCSX2_GS_PRESENT_MIN_US=<us>` | minimum interval between host presents (default 8000, 0 disables); frames closer than this are skipped so a burst of catch-up VBlanks cannot block the EE on `nextDrawable` |
 | `RRV_PCSX2_GS_TEST_PRESENT_STALL_MS=<ms>` | inject one Metal present stall; the StreamRing watchdog excludes only this host drawable-acquisition interval |
+| `RRV_PCSX2_GS_PIPELINE_PREWARM=0` | disable recorded Metal pipeline pre-warm and automatic learning |
+| `RRV_PCSX2_GS_PIPELINE_RECORD=<path>` | record lazily created Metal pipeline keys to a file for coverage collection |
 | `PS2X_VU1_WORKER=0\|sync` | inline or drained data side |
 | `PS2X_GS_VERIFY=1` | eager GS readback verify |
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |

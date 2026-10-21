@@ -297,6 +297,7 @@ def main():
         copy_fresh(LLVM_LIB / "libc++.1.0.dylib", runtime / "libc++.1.dylib")
         copy_fresh(LLVM_LIB / "libc++abi.1.0.dylib", runtime / "libc++abi.1.dylib")
         shutil.copytree(bridge_resources, frameworks / "PCSX2GSBridge/resources")
+        shutil.copy2(ROOT / "bridge/gs/pipelines-fifa.txt", frameworks / "PCSX2GSBridge/resources/pipelines-fifa.txt")
         if any(path.is_symlink() for path in game_dir.rglob("*")):
             raise RuntimeError("game extraction contains a symlink; refusing unsafe bundle copy")
         shutil.copytree(game_dir, resources / "game", copy_function=shutil.copy2)
