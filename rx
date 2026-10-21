@@ -544,6 +544,7 @@ def cmd_run(args):
         run.notes += [f"reached: {s['reached']}", f"seconds: {s['seconds']:g}", f"fps_game: {fmt(s.get('fps_game'))}",
                       f"gpu_presents_per_sec: {fmt(s.get('gpu_presents_per_sec'))}",
                       f"cpu_user_s: {fmt(s['cpu_user_s'])}", f"cpu_sys_s: {fmt(s['cpu_sys_s'])}",
+                      f"energy_per_s: {fmt(s.get('energy_per_s'))}", f"wakeups_per_s: {fmt(s.get('wakeups_per_s'))}",
                       f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
                       "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
                       f"stubs: {stubs}"]
@@ -640,6 +641,8 @@ def cmd_ab(args):
                 "fps_game": summary.get("fps_game"),
                 "cpu_total_per_s": (float(summary.get("cpu_user_s") or 0) + float(summary.get("cpu_sys_s") or 0)) / duration,
                 "audio_underruns": summary.get("audio_underruns"),
+                "energy_per_s": summary.get("energy_per_s"),
+                "wakeups_per_s": summary.get("wakeups_per_s"),
                 "crash": int(bool(summary.get("crash"))),
                 "reached": int(summary.get("reached") == summary.get("target")),
             }
@@ -655,7 +658,7 @@ def cmd_ab(args):
         names = ["fps_game", "cpu_total_per_s"]
         if args.profile:
             names += ["GameThread cpu_per_s", "worker cpu_per_s"]
-        names += ["audio_underruns", "crash", "reached"]
+        names += ["energy_per_s", "wakeups_per_s", "audio_underruns", "crash", "reached"]
         report = {"order": order, "pairs": args.pairs, "control_env": control_env,
                   "candidate_env": candidate_env, "options": {"seconds": args.seconds, "match": True, "profile": args.profile},
                   "summaries": summaries, "metrics": {}}

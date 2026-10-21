@@ -88,6 +88,8 @@ VU0 runs interpreted. VU1 native code comes from disc-derived programs; the inte
 
 ## Settings and environment
 
+`tools/probe/probe.py` reads macOS `proc_pid_rusage` RUSAGE_INFO_V4 around the bounded run when available. `energy_per_s` is billed energy in nJ/s; `wakeups_per_s` is package-idle plus interrupt wakeups per second. Both are null when the API or either sample is unavailable. They are process counters, not whole-system power readings.
+
 One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `renderScale` (1..4, native by default) and `sharperImage`. Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
 
 `host/metal-host.mm` derives the `RRV_PCSX2_GS_*` bridge variables from `Settings`.

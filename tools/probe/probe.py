@@ -173,6 +173,39 @@ _PROC_PIDTHREADINFO = 5
 _PROC_PIDTHREADID64INFO = 15
 _PROC_PIDLISTTHREADIDS = 28
 _PROC_INFO = None
+_RUSAGE_INFO = None
+
+
+def process_rusage(pid):
+    """Read macOS RUSAGE_INFO_V4 counters; unavailable platforms return None."""
+    global _RUSAGE_INFO
+    if sys.platform != "darwin":
+        return None
+    if _RUSAGE_INFO is None:
+        try:
+            _RUSAGE_INFO = ctypes.CDLL("/usr/lib/libproc.dylib").proc_pid_rusage
+            _RUSAGE_INFO.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+            _RUSAGE_INFO.restype = ctypes.c_int
+        except OSError:
+            _RUSAGE_INFO = False
+    if not _RUSAGE_INFO:
+        return None
+    # rusage_info_v4: 16-byte UUID followed by 35 uint64 fields. V4 is flavor 4.
+    storage = (ctypes.c_uint64 * 37)()
+    if _RUSAGE_INFO(pid, 4, ctypes.byref(storage)) != 0:
+        return None
+    return {"pkg_idle_wakeups": storage[4], "interrupt_wakeups": storage[5],
+            "billed_energy": storage[33]}
+
+
+def rusage_rates(before, after, seconds):
+    if before is None or after is None or seconds <= 0:
+        return {"energy_per_s": None, "wakeups_per_s": None}
+    energy = max(0, after["billed_energy"] - before["billed_energy"])
+    wakeups = max(0, after["pkg_idle_wakeups"] - before["pkg_idle_wakeups"])
+    wakeups += max(0, after["interrupt_wakeups"] - before["interrupt_wakeups"])
+    return {"energy_per_s": round(energy / seconds, 3),
+            "wakeups_per_s": round(wakeups / seconds, 3)}
 
 
 def proc_info():
@@ -597,6 +630,7 @@ def main():
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     proc = subprocess.Popen(command, cwd=user_dir, env=env, stdout=logf, stderr=subprocess.STDOUT,
                             preexec_fn=os.setpgrp)
+    rusage_start = process_rusage(proc.pid)
     exit_watch = select.kqueue()
     exit_watch.control([select.kevent(proc.pid, filter=select.KQ_FILTER_PROC,
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE,
@@ -725,6 +759,8 @@ def main():
     finally:
         if profile_thread:
             profile_thread.join()
+        rusage_end = process_rusage(proc.pid)
+        rusage_duration = time.monotonic() - started
         quit_ok = None
         if args.quit_at_end and not child_exited(exit_watch):
             subprocess.run(["osascript", "-e", f'tell application id "{game.GAME["bundle_id"]}" to quit'],
@@ -811,6 +847,7 @@ def main():
         "fps_game_series": metrics.get("fps_game_series"),
         "gpu_presents_per_sec": metrics.get("gpu_presents_per_sec"),
         "cpu_user_s": cpu_user_s, "cpu_sys_s": cpu_sys_s,
+        **rusage_rates(rusage_start, rusage_end, rusage_duration),
         "vu_fallbacks": metrics.get("vu_fallbacks"), "audio_underruns": metrics.get("audio_underruns"),
         "vu1": metrics.get("vu1"),
         "crash": crash, "stubs": metrics["stubs"], "faults": metrics["faults"],
