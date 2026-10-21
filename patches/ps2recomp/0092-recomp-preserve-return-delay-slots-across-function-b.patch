@@ -1,0 +1,232 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Wed, 21 Oct 2026 18:22:47 +0200
+Subject: [PATCH 92/92] recomp: preserve return delay slots across function
+ boundaries
+
+FIFA Street's discovered 0x1e8480 entry split the real addiu sp,sp,0x30 delay instruction from JR RA at 0x1e847c. A synthetic NOP left the caller using the callee's stack frame, predicting the repeated 0x1e83e4 epilogue and v0=0x2ae7c8 seen in the manual skill-move fault. Decode the actual slot beyond the ownership boundary and retain it during discovery/reslicing.
+
+The split-symbol ELF regression failed before the fix. Tests also cover discovery/reslicing and an optional typed-store observer carrying store PC, width and value for the host's saved-RA watch. No FPU behavior changes.
+
+Verified rx build, rx test --full (57/57), and one rx run --match --seconds 60 with PS2X_WATCH_RA_STOMP=1: 50.0 game FPS, 50.0 presents/s, zero underruns, no fault or guard anomaly. Manual skill-move confirmation remains pending.
+
+diff --git a/ps2xRecomp/src/lib/ps2_recompiler.cpp b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+index 9df49655fe2ee58626d2029037103d96acdf90c3..ae4292f6aa7f12150ed45edcce48f4be5b8459c8 100644
+--- a/ps2xRecomp/src/lib/ps2_recompiler.cpp
++++ b/ps2xRecomp/src/lib/ps2_recompiler.cpp
+@@ -547,6 +547,12 @@ namespace ps2recomp
+                             continue;
+                         }
+ 
++                        if (sliceEndIt != containingInstructions.end() &&
++                            std::prev(sliceEndIt)->hasDelaySlot &&
++                            sliceEndIt->address == std::prev(sliceEndIt)->address + 4u)
++                        {
++                            ++sliceEndIt;
++                        }
+                         std::vector<Instruction> slicedInstructions(sliceIt, sliceEndIt);
+                         decodedFunctions[target] = std::move(slicedInstructions);
+                         entryFunction.end = sliceEndAddress;
+@@ -720,6 +726,12 @@ namespace ps2recomp
+                     continue;
+                 }
+ 
++                if (sliceEndIt != sourceInstructions->end() &&
++                    std::prev(sliceEndIt)->hasDelaySlot &&
++                    sliceEndIt->address == std::prev(sliceEndIt)->address + 4u)
++                {
++                    ++sliceEndIt;
++                }
+                 std::vector<Instruction> slicedInstructions(sliceBeginIt, sliceEndIt);
+                 bool changed = (function.end != sliceEndAddress);
+                 auto existingIt = decodedFunctions.find(function.start);
+@@ -2219,7 +2231,12 @@ namespace ps2recomp
+         uint32_t start = function.start;
+         uint32_t end = function.end;
+ 
+-        for (uint32_t address = start; address < end; address += 4)
++        // A neighboring symbol may start in this instruction's delay slot.
++        // Ownership boundaries do not annul execution of that retail word.
++        for (uint32_t address = start;
++             address < end || (!instructions.empty() && instructions.back().hasDelaySlot &&
++                               instructions.back().address + 4u == address);
++             address += 4)
+         {
+             try
+             {
+diff --git a/ps2xRuntime/include/ps2_guest_abi.h b/ps2xRuntime/include/ps2_guest_abi.h
+index 493760ac1a572a7b3e0fd069de38de1484634417..2ca980391fbb2ce3baf112ab82ab0f0ee3a5580c 100644
+--- a/ps2xRuntime/include/ps2_guest_abi.h
++++ b/ps2xRuntime/include/ps2_guest_abi.h
+@@ -178,21 +178,17 @@ inline void setReturnU64(R5900Context *ctx, uint64_t value)
+     ctx->r[3] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<uint32_t>(value >> 32)));
+ }
+ 
+-inline void ps2TraceGuestWrite(uint8_t *rdram,
+-                               uint32_t guestAddr,
+-                               uint32_t size,
+-                               uint64_t valueLo,
+-                               uint64_t valueHi,
+-                               const char *op,
++using Ps2GuestWriteObserver = void (*)(uint8_t *, uint32_t, uint32_t, uint64_t, uint64_t,
++                                      const char *, const R5900Context *);
++// Installed before guest execution; observers must not modify guest state.
++extern Ps2GuestWriteObserver g_ps2GuestWriteObserver;
++
++inline void ps2TraceGuestWrite(uint8_t *rdram, uint32_t guestAddr, uint32_t size,
++                               uint64_t valueLo, uint64_t valueHi, const char *op,
+                                const R5900Context *ctx)
+ {
+-    (void)rdram;
+-    (void)guestAddr;
+-    (void)size;
+-    (void)valueLo;
+-    (void)valueHi;
+-    (void)op;
+-    (void)ctx;
++    if (g_ps2GuestWriteObserver)
++        g_ps2GuestWriteObserver(rdram, guestAddr, size, valueLo, valueHi, op, ctx);
+ }
+ 
+ enum class Ps2GuestBranchKind
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index d30c57941875ec58a7a25f6b6c1054f416ef268c..345818096e9e579313d49ff8c505371c21b3ae28 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -108,6 +108,8 @@ struct ProgramHeader
+     uint32_t align;
+ };
+ 
++Ps2GuestWriteObserver g_ps2GuestWriteObserver = nullptr;
++
+ namespace
+ {
+     Vu1NativeDispatcher &vu1NativeDispatcher()
+diff --git a/ps2xTest/src/ps2_recompiler_tests.cpp b/ps2xTest/src/ps2_recompiler_tests.cpp
+index 2c19ab773d56d54e2bc88b7e7a0d309033baeb2d..24240416e3bf14c97c9fdda64be04e95a2f93b46 100644
+--- a/ps2xTest/src/ps2_recompiler_tests.cpp
++++ b/ps2xTest/src/ps2_recompiler_tests.cpp
+@@ -840,7 +840,7 @@ static bool writeMinimalMipsElfWithAddressTakenCallbacks(const std::filesystem::
+ 
+ static bool writeMinimalMipsElfWithInitializer(const std::filesystem::path &elfPath,
+                                                const std::string &functionName,
+-                                               uint32_t initializerTarget)
++                                               uint32_t initializerTarget, bool splitReturnSlot = false)
+ {
+     ELFIO::elfio writer;
+     writer.create(ELFIO::ELFCLASS32, ELFIO::ELFDATA2LSB);
+@@ -856,7 +856,7 @@ static bool writeMinimalMipsElfWithInitializer(const std::filesystem::path &elfP
+     text->set_address(0x00100000u);
+     const std::array<uint32_t, 2> textWords = {
+         0x03E00008u, // jr $ra
+-        0x00000000u, // nop
++        splitReturnSlot ? 0x27BD0030u : 0x00000000u, // addiu sp,sp,0x30 or nop
+     };
+     text->set_data(reinterpret_cast<const char *>(textWords.data()),
+                    static_cast<ELFIO::Elf_Word>(textWords.size() * sizeof(uint32_t)));
+@@ -884,9 +884,13 @@ static bool writeMinimalMipsElfWithInitializer(const std::filesystem::path &elfP
+     ELFIO::string_section_accessor strings(strtab);
+     symbols.add_symbol(strings, "", 0, 0,
+                        ELFIO::STB_LOCAL, ELFIO::STT_NOTYPE, 0, ELFIO::SHN_UNDEF);
+-    symbols.add_symbol(strings, functionName.c_str(), text->get_address(), text->get_size(),
++    symbols.add_symbol(strings, functionName.c_str(), text->get_address(), splitReturnSlot ? 4u : text->get_size(),
+                        ELFIO::STB_GLOBAL, ELFIO::STT_FUNC, 0, text->get_index());
+ 
++    if (splitReturnSlot)
++        symbols.add_symbol(strings, "return_slot", text->get_address() + 4u, 4u,
++                           ELFIO::STB_GLOBAL, ELFIO::STT_FUNC, 0, text->get_index());
++
+     ELFIO::segment *textSegment = writer.segments.add();
+     textSegment->set_type(ELFIO::PT_LOAD);
+     textSegment->set_flags(ELFIO::PF_R | ELFIO::PF_X);
+@@ -947,6 +951,45 @@ void register_ps2_recompiler_tests()
+ {
+     MiniTest::Case("PS2Recompiler", [](TestCase &tc)
+                    {
++        tc.Run("return restores SP when another symbol owns its delay slot", [](TestCase &t) {
++            const auto root = std::filesystem::temp_directory_path() /
++                ("ps2recomp-split-slot-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
++            std::filesystem::create_directories(root);
++            const auto elf = root / "slot.elf", config = root / "slot.toml", output = root / "output";
++            t.IsTrue(writeMinimalMipsElfWithInitializer(elf, "split_return", 0x100000u, true) &&
++                     writeRecompilerTestConfig(config, elf, output, {}), "split-slot inputs must be written");
++            PS2Recompiler recompiler(config.string());
++            t.IsTrue(recompiler.initialize() && recompiler.recompile(), "split-slot ELF must translate");
++            recompiler.generateOutput();
++            std::ifstream file(output / "split_return_0x100000.cpp");
++            const std::string code{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
++            const auto restore = code.find("ADD32(GPR_U32(ctx, 29), 48)");
++            t.IsTrue(restore != std::string::npos && restore < code.find("ctx->pc = jumpTarget;"),
++                     "JR RA must execute the real stack restoration before returning across a symbol boundary");
++            std::error_code error;
++            std::filesystem::remove_all(root, error);
++        });
++
++        tc.Run("entry discovery and reslicing retain a boundary return delay slot", [](TestCase &t) {
++            std::vector<Function> functions{
++                makeFunction("owner", 0x1000u, 0x1020u),
++                makeFunction("slot_owner", 0x1014u, 0x1020u),
++                makeFunction("caller", 0x2000u, 0x2008u)};
++            std::unordered_map<uint32_t, std::vector<Instruction>> decoded;
++            decoded[0x1000u] = {makeNopLike(0x1000u), makeNopLike(0x1004u),
++                makeNopLike(0x1008u), makeNopLike(0x100cu), makeJrRa(0x1010u),
++                makeNopLike(0x1014u), makeNopLike(0x1018u), makeNopLike(0x101cu)};
++            decoded[0x1014u] = {makeNopLike(0x1014u), makeNopLike(0x1018u), makeNopLike(0x101cu)};
++            decoded[0x2000u] = {makeAbsJump(0x2000u, 0x1008u, OPCODE_J), makeNopLike(0x2004u)};
++            std::vector<Section> sections{{".text", 0x1000u, 0x3000u, 0u, true, false, false, true, nullptr}};
++            PS2Recompiler::DiscoverAdditionalEntryPoints(functions, decoded, sections);
++            t.IsTrue(decoded.contains(0x1008u) && decoded.at(0x1008u).back().address == 0x1014u,
++                     "discovery must include the slot even when it has a separate entry");
++            PS2Recompiler::ResliceEntryFunctions(functions, decoded);
++            t.IsTrue(decoded.contains(0x1008u) && decoded.at(0x1008u).back().address == 0x1014u,
++                     "late reslicing must not trim the slot back off");
++        });
++
+         tc.Run("game helpers are not classified as runtime stubs", [](TestCase &t) {
+             t.IsFalse(ps2_runtime_calls::isStubName("Pad_init"),
+                       "Pad_init should be recompiled as game code");
+diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+index 27271c27e4506f38e7e5c38ffcb3d49dde81aa80..94d4e998a0c4a6b23151d32bb3b9d06e3c93680e 100644
+--- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
++++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
+@@ -572,6 +572,40 @@ void register_ps2_runtime_kernel_tests()
+ {
+     MiniTest::Case("PS2RuntimeKernel", [](TestCase &tc)
+     {
++        tc.Run("RAM write observer receives store PC, width and aligned quadword value", [](TestCase &t)
++        {
++            TestEnv env;
++            auto *rdram = env.rdram.data();
++            auto *ctx = &env.ctx;
++            auto *runtime = &env.runtime;
++            struct Write { uint32_t addr, size, pc; uint64_t lo, hi; };
++            static std::vector<Write> writes;
++            writes.clear();
++            struct Restore {
++                Ps2GuestWriteObserver previous = g_ps2GuestWriteObserver;
++                ~Restore() { g_ps2GuestWriteObserver = previous; }
++            } restore;
++            g_ps2GuestWriteObserver = [](uint8_t *, uint32_t addr, uint32_t size,
++                                        uint64_t lo, uint64_t hi, const char *, const R5900Context *c) {
++                writes.push_back({addr, size, c->pc, lo, hi});
++            };
++            ctx->pc = 0x123456u;
++            WRITE8(0x1001u, 0x12u);
++            WRITE16(0x1002u, 0x3456u);
++            WRITE32(0x1004u, 0x789abcdeu);
++            WRITE64(0x1008u, 0x1122334455667788ull);
++            WRITE128(0x101fu, _mm_set_epi64x(0x1234, 0x5678));
++            t.Equals(writes.size(), size_t{5}, "all inline typed RAM stores must reach the observer");
++            t.IsTrue(writes[0].size == 1u && writes[1].size == 2u && writes[2].size == 4u &&
++                     writes[3].size == 8u && writes[4].size == 16u && writes[4].addr == 0x1010u &&
++                     writes[4].lo == 0x5678u && writes[4].hi == 0x1234u && writes[4].pc == ctx->pc,
++                     "watch metadata must describe the actual aligned store and its instruction");
++            g_ps2GuestWriteObserver = nullptr;
++            WRITE32(0x1020u, 0xabcdefu);
++            t.Equals(writes.size(), size_t{5}, "disabled observer must receive no writes");
++            t.Equals(READ32(0x1020u), 0xabcdefu, "disabling diagnostics must preserve the RAM write");
++        });
++
+         tc.Run("context history wraps chronologically and preserves saved nested contexts", [](TestCase &t)
+         {
+             TestEnv env;

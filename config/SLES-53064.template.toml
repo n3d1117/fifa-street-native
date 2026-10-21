@@ -199,3 +199,17 @@ stubs = [
 [[hooks]]
 address = "0x3C1994"
 when = "before"
+
+# Opt-in saved-RA/SP diagnosis, verified against retail words before installation.
+[[hooks]]
+address = "0x1E83C4"
+when = "before"
+[[hooks]]
+address = "0x1E83CC"
+when = "before"
+[[hooks]]
+address = "0x1E83E4"
+when = "before"
+[[hooks]]
+address = "0x1E83FC"
+when = "before"

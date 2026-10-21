@@ -23,6 +23,7 @@
 
 bool ps2x_boot_match_install(PS2Runtime &runtime, const std::filesystem::path &elfPath,
                              const std::filesystem::path &userDir, const std::filesystem::path &realUserDir);
+bool ps2x_ra_watch_install(PS2Runtime &runtime, const std::filesystem::path &elfPath);
 bool ps2x_poll_idle_install(PS2Runtime &runtime, const std::filesystem::path &elfPath);
 bool ps2x_cheats_install(PS2Runtime &runtime, const std::filesystem::path &elfPath, bool unlockAllVenues);
 
@@ -292,6 +293,7 @@ int ps2x_app_run(const Ps2xAppConfig *config)
             ps2x_boot_match_install(runtime, elfPath, userDirectory, realUserDirectory);
         }
         ps2x_poll_idle_install(runtime, elfPath);
+        ps2x_ra_watch_install(runtime, elfPath);
         ps2x_cheats_install(runtime, elfPath, host::active_settings().unlockAllVenues);
         std::cout << "Game ELF: " << elfPath << std::endl;
         std::cout << "Memory cards: " << memoryCardDirectory << std::endl;
