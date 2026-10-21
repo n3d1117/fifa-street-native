@@ -169,6 +169,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - MTLBinaryArchive pre-warm of recorded keys: cold runs still underran (about 7.5k).
 - 4× field-mode menu captures: HPO 0–5, Round Sprite 1/2, and Align Sprite alone and combined showed no visible text/UI improvement; forced bilinear including sprites corrupted team flags, while forced bilinear excluding sprites showed no visible change. Full-mode Merge Sprite and Native Scaling do not apply to the observed field mode.
 - Same-size Lanczos/full-chroma MPEG conversion at the decoded 640×512 frame size produced no visible improvement in matched intro captures; the visible stretch remains in GS presentation, so the conversion experiment was reverted.
+- De-interlacing menu deferred: match captures measured `SMODE2=0x1` (INT=1, FFMD=0), stable DISPFB/DISPLAY, and alternating CSR.FIELD; single-capture mode probes all measured 50.0 game FPS, but independent match states did not align for visual comparison, and four captures in one run distorted timing (43.0 FPS, 234 audio underruns). Recheck with matched motion captures before exposing modes.
 
 ## Function discovery and SDK binding (stripped ELF)
 

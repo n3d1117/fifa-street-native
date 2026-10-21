@@ -28,8 +28,7 @@ Work these in order. **Every task updates this file in the same commit that comp
 
 **Modern feel (all opt-in, off by default)**
 
-4. De-interlacing: measure SMODE2/field parity, then offer a "Deinterlacing" menu (Automatic default, Off, Bob, Weave, Blend, Adaptive), chosen by matched motion captures.
-5. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
+3. Texture upscaling filter for UI and text: opt-in smart upscaling (xBRZ or ScaleFX, as PPSSPP and Dolphin offer) of small 2D textures (fonts, UI) when they are loaded into the PCSX2 texture cache. It processes only the game's own textures; no packs. Measure texture-cache cost and compare captures.
 
 ## Backlog
 
