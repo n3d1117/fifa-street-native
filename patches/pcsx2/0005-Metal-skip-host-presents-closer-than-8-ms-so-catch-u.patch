@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 01:18:22 +0200
-Subject: [PATCH 05/13] Metal: skip host presents closer than 8 ms so catch-up
+Subject: [PATCH 05/14] Metal: skip host presents closer than 8 ms so catch-up
  VBlanks cannot block the EE on nextDrawable
 
 After a guest stall (the splash load, ~1 s) the missed VBlanks are delivered back to back. Each reached BeginPresent; with the drawable pool exhausted nextDrawable blocked the GS worker one refresh per frame and the EE, which drains the worker at every VSync, stalled ~250 ms. IOP/SPU2 mixing runs on the EE thread, so the 2000-frame audio ring ran dry (bursts of 1000-12000 underruns in about half of runs). GS state and Merge are unchanged; only the host present is skipped. RRV_PCSX2_GS_PRESENT_MIN_US=0 disables.
