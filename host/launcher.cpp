@@ -245,6 +245,16 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
             options.userDirectorySpecified = true;
             continue;
         }
+        if (argument == "--NSDocumentRevisionsDebugMode" ||
+            argument == "-NSDocumentRevisionsDebugMode")
+        {
+            if (i + 1 < argc && argv[i + 1] &&
+                (std::string(argv[i + 1]) == "YES" || std::string(argv[i + 1]) == "NO"))
+            {
+                ++i;
+            }
+            continue;
+        }
         if (argument.starts_with('-'))
         {
             throw std::runtime_error("Unknown option: " + argument);

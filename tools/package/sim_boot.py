@@ -33,11 +33,8 @@ def main():
         device_name = "iPhone 12 Pro Max"
     else:
         devices = run(["xcrun", "simctl", "list", "devices", "available"], True)
-        if re.search(r"^\s+Apple TV 4K \(2nd generation\) \([^)]*\) \(Shutdown\)$", devices, re.M):
-            device_name = "Apple TV 4K (2nd generation)"
-        else:
-            device_name = "Apple TV 4K"
-        if not re.search(r"^\s+" + re.escape(device_name) + r" \([^)]*\) \(Shutdown\)$", devices, re.M):
+        device_name = "Apple TV 4K (2nd generation)"
+        if not re.search(r"^\s+" + re.escape(device_name) + r" \([0-9A-Fa-f-]{36}\) \((?:Booted|Shutdown)\)\s*$", devices, re.M):
             types = run(["xcrun", "simctl", "list", "devicetypes"], True)
             runtimes = run(["xcrun", "simctl", "list", "runtimes"], True)
             type_id = "com.apple.CoreSimulator.SimDeviceType.Apple-TV-4K-2nd-generation-4K"

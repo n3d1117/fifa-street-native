@@ -26,7 +26,7 @@ cd fifa-street-native
 ./rx build                    # build the engine (and the game once it is configured)
 ./rx test                     # quick tests, no disc needed
 ./rx package --install        # optional: /Applications/FIFA Street PS2.app
-./rx xcode                    # generate the Xcode project (CMake remains the compiler build)
+./rx xcode                    # generate an Xcode project whose Build and Run use the assembled app
 ```
 
 ## Play

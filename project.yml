@@ -5,28 +5,88 @@ options:
     macOS: "11.0"
     iOS: "14.5"
     tvOS: "14.5"
+fileGroups:
+  - host
+  - bridge
+  - deps/ps2recomp/ps2xRuntime
+  - deps/ps2recomp/ps2xIOP
+  - config
+  - tools/check-repo-hygiene.py
+  - tools/build-deps-embedded.sh
+  - tools/deps.py
+  - tools/generate.py
+  - tools/game.py
+  - tools/where.py
+  - tools/check-generated-includes.py
+  - tools/disc.py
+  - tools/jobs.py
+  - tools/build-game-embedded.sh
+  - tools/embedded-cmake.sh
+  - tools/build-deps.sh
+  - tools/ffmpeg-minimal-components.sh
+  - tools/build-embedded-runtimes.sh
+  - tools/build-bridge-embedded.sh
+  - tools/xcode-build.sh
+  - tools/package
+  - tools/probe
+  - tools/vu
+  - docs
+settings:
+  base:
+    PRODUCT_NAME: FIFA Street PS2
+    EXECUTABLE_NAME: FIFAStreetPS2
+    PRODUCT_BUNDLE_IDENTIFIER: fyi.edoardo.fifa-street-ps2
+    INFOPLIST_FILE: ""
+    GENERATE_INFOPLIST_FILE: NO
+    CODE_SIGNING_ALLOWED: NO
+    CODE_SIGNING_REQUIRED: NO
 targets:
   macOS:
-    type: ""
+    type: application
     platform: macOS
-    legacy:
-      toolPath: /bin/sh
-      arguments: -c "./rx build && ./rx package"
-      workingDirectory: "$(SRCROOT)"
-      passSettings: false
+    settings:
+      base:
+        CONFIGURATION_BUILD_DIR: $(SRCROOT)/build/dist
+    postBuildScripts:
+      - name: Build and assemble app
+        script: "${SRCROOT}/tools/xcode-build.sh"
   iOS:
-    type: ""
+    type: application
     platform: iOS
-    legacy:
-      toolPath: /bin/sh
-      arguments: -c "./rx ipa --platform ios"
-      workingDirectory: "$(SRCROOT)"
-      passSettings: false
+    settings:
+      base:
+        CONFIGURATION_BUILD_DIR: $(SRCROOT)/build/embedded/$(PLATFORM_NAME)
+    postBuildScripts:
+      - name: Build and assemble app
+        script: "${SRCROOT}/tools/xcode-build.sh"
   tvOS:
-    type: ""
+    type: application
     platform: tvOS
-    legacy:
-      toolPath: /bin/sh
-      arguments: -c "./rx ipa --platform tvos"
-      workingDirectory: "$(SRCROOT)"
-      passSettings: false
+    settings:
+      base:
+        CONFIGURATION_BUILD_DIR: $(SRCROOT)/build/embedded/$(PLATFORM_NAME)
+    postBuildScripts:
+      - name: Build and assemble app
+        script: "${SRCROOT}/tools/xcode-build.sh"
+schemes:
+  macOS:
+    build:
+      targets:
+        macOS: all
+    run:
+      config: Debug
+      debugEnabled: false
+  iOS:
+    build:
+      targets:
+        iOS: all
+    run:
+      config: Debug
+      debugEnabled: false
+  tvOS:
+    build:
+      targets:
+        tvOS: all
+    run:
+      config: Debug
+      debugEnabled: false

@@ -807,6 +807,9 @@ def cmd_ipa(args):
         require(elf, "./rx disc <iso>")
         run.must(["bash", "tools/build-game-embedded.sh", platform], "embedded game")
         run.must([sys.executable, "tools/package/ios_app.py", platform], "assemble embedded app")
+        if args.app_only:
+            app = ROOT / f"build/embedded/{platform}" / (game.GAME["app_name"] + ".app")
+            return str(app.relative_to(ROOT))
         if args.platform.endswith("-sim"):
             run.must([sys.executable, "tools/package/sim_boot.py", platform], "simulator boot")
         run.must([sys.executable, "tools/package/ipa.py", platform], "IPA audit and package")
@@ -872,6 +875,7 @@ def main():
     k.set_defaults(fn=cmd_package)
     k = sp.add_parser("ipa")
     k.add_argument("--platform", required=True, choices=["ios", "tvos", "ios-sim", "tvos-sim"])
+    k.add_argument("--app-only", action="store_true", help="build and assemble the app without simulator boot or IPA packaging")
     k.set_defaults(fn=cmd_ipa)
     x = sp.add_parser("xcode")
     x.set_defaults(fn=cmd_xcode)

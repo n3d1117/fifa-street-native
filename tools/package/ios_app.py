@@ -75,6 +75,10 @@ def main():
     info_plist_path = output / "Info.plist"
     with info_plist_path.open("rb") as stream:
         info_plist = plistlib.load(stream)
+    info_plist["CFBundleIdentifier"] = GAME["bundle_id"]
+    info_plist["CFBundleName"] = GAME["app_name"]
+    info_plist["CFBundleExecutable"] = GAME["executable"]
+    info_plist["CFBundlePackageType"] = "APPL"
     info_plist["LSApplicationCategoryType"] = "public.app-category.sports-games"
     info_plist["LSSupportsGameMode"] = True
     with info_plist_path.open("wb") as stream:

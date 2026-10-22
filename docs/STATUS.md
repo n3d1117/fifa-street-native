@@ -19,6 +19,7 @@
 | Unverified | Directional input response, memory-card saves, full Roma matches and additional teams, other venues/modes, NTSC startup/pacing under background load, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
 | Platforms | macOS arm64; iOS and tvOS arm64 app builds; iOS and tvOS Simulator launches reach the language screen and survive a background/resume cycle. |
 | Game Mode | iOS/tvOS bundles set `LSApplicationCategoryType=public.app-category.sports-games` and `LSSupportsGameMode`; macOS has a games category and the same support key. Needs device check: confirm the Game Mode banner or Control Center indicator on an iPhone running iOS 18+. |
+| Xcode | `./rx xcode` generates iOS, tvOS and macOS application schemes. Build uses the platform's CMake tree; Run launches the assembled app. GUI Run and incremental rebuild verified with Xcode 12.5.1. Needs user check: open with `./rx xcode`, pick a simulator, Run. |
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
 
@@ -36,7 +37,8 @@ Measured: iOS and tvOS Simulator builds render the language screen. Unverified: 
 4. On-device performance diagnostics (later): a periodic log line with the game-thread split (guest code, VU1, GS submit, present wait, idle), GPU ms per frame, pipeline compiles, thermal state and `os_proc_available_memory`, written to `native.log` while the app runs.
 5. Apple GPU paths from ARMSX2 (each needs a switch and A/B): framebuffer-fetch ordering instead of barriers, iOS barrier rules. The Z-floor skip is moot (no depth quantisation in the pinned GS) and the other fixes are already upstream.
 6. Parked: small settings overlay (video mode, scale, rumble) usable with a controller and TV-safe on tvOS; real app icon for macOS, iOS and tvOS (macOS uses the generated placeholder from `tools/package/make-icon.m`; tvOS needs layered images).
-7. Real Xcode project (last): `application` targets that show the sources (not compiled by Xcode, whose clang 12 cannot build PCSX2 master or the runtime), a build phase that reads `PLATFORM_NAME` and runs the matching CMake build, and the assembled `.app` as the product, so Build compiles edits and Run launches in the iOS/tvOS Simulator and on macOS. Device installs stay on the IPA because Xcode 12.5.1 cannot deploy to current iOS. If this cannot be made to work, remove `project.yml` and `./rx xcode`.
+
+8. iOS/tvOS termination crash (pre-existing): when UIKit terminates the app (`simctl terminate`, Xcode Stop), `exit()` runs static destructors and `GSTextureCache::~GSTextureCache` -> `RemoveAll` -> `Target::~Target` faults on the main thread (EXC_BAD_ACCESS, GSTextureCache.cpp:8098) while the GS renderer is still live. Only at termination; fix by shutting the GS bridge down before exit or skipping static teardown.
 
 ### Embedded build efficiency
 
