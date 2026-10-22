@@ -35,7 +35,7 @@ def main():
             reason = 'unexpected extension or binary/media artifact'
         elif path.parts[0] == 'config' and name != 'config/game.json' and not name.endswith('.template.toml'):
             reason = 'local/game-derived configuration'
-        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu/', 'tools/metal-deps/compat/', 'tools/probe/', 'tools/package/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/disc.py', 'tools/game.py', 'tools/generate.py', 'tools/where.py', 'tools/jobs.py', 'tools/check-repo-hygiene.py', 'tools/check-generated-includes.py'}:
+        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu/', 'tools/metal-deps/compat/', 'tools/probe/', 'tools/package/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/build-embedded-runtimes.sh', 'tools/disc.py', 'tools/game.py', 'tools/generate.py', 'tools/where.py', 'tools/jobs.py', 'tools/check-repo-hygiene.py', 'tools/check-generated-includes.py'}:
             reason = 'dependency/toolchain output'
         elif size > 1024 * 1024:
             reason = 'file exceeds 1 MiB'
