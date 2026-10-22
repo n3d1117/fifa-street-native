@@ -53,6 +53,10 @@ export DEVELOPER_DIR=~/Developer/Xcode-12.5.1/Xcode.app/Contents/Developer
 
 Output: `build/embedded/<iphoneos|appletvos|iphonesimulator|appletvsimulator>/FIFA-Street-PS2-<ios|tvos>.ipa` (about 1.5 GB, game data included). Device builds are unsigned: install with a sideloading tool that signs (AltStore, Sideloadly) or sign with your own certificate. `-sim` platforms also boot the app in the Simulator and save a screenshot to `build/embedded/logs/`. The first build of a platform takes about an hour. Requires a game controller; there are no touch controls.
 
+## Device runs
+
+On macOS 11+, install `pymobiledevice3` in a dedicated environment and start its `tunneld` service. Configure `~/.config/rx/device.json` with a signing keychain, password and identity SHA-1 (or set `RX_SIGN_KEYCHAIN` and `RX_SIGN_IDENTITY`). `./rx device doctor` checks pairing, developer mode and provisioning. `./rx device install` signs and upgrades the connected app in place; `--lean` omits bundled game data, then `./rx device push-data` copies it into Documents. `./rx device run --seconds 60` collects device metrics and a summary under `build/device-runs/`.
+
 ## Troubleshooting
 
 - **Game data missing or unsupported:** verify your own PAL disc with `./rx disc <path-to-iso>`, rebuild, and package again. The installed app looks for `SLES_530.64` in its bundled `Contents/Resources/game` folder.

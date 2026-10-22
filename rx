@@ -13,6 +13,7 @@
   rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match|--seconds N] [--profile]
                            alternating control/candidate runs with a median and noise table
   rx package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
+  rx device <sub>          sign/install/run USB iOS/tvOS devices (tools/device/device.py)
   rx xcode                 generate the Xcode project from project.yml (XcodeGen 2.43.0)
   rx ipa --platform ios|tvos|ios-sim|tvos-sim
                            build embedded app, optionally boot its simulator, and produce an audited IPA
@@ -826,6 +827,15 @@ def cmd_where(args):
     return 2 if code is None else code
 
 
+def cmd_device(args):
+    run = Run("device", args.verbose)
+    rc = run.sh([sys.executable, str(ROOT / "tools/device/device.py"), *args.device_args])
+    message = run.last_message() if rc else None
+    if rc not in (0, 1, 2):
+        rc = 1
+    return run.finish(rc, message)
+
+
 def main():
     p = argparse.ArgumentParser(prog="rx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = p.add_subparsers(dest="cmd", required=True)
@@ -877,6 +887,9 @@ def main():
     k.add_argument("--platform", required=True, choices=["ios", "tvos", "ios-sim", "tvos-sim"])
     k.add_argument("--app-only", action="store_true", help="build and assemble the app without simulator boot or IPA packaging")
     k.set_defaults(fn=cmd_ipa)
+    d = sp.add_parser("device", help="sign, install, run and summarize a USB iOS/tvOS device")
+    d.add_argument("device_args", nargs=argparse.REMAINDER)
+    d.set_defaults(fn=cmd_device)
     x = sp.add_parser("xcode")
     x.set_defaults(fn=cmd_xcode)
     w = sp.add_parser("where")
