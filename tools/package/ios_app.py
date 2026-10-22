@@ -72,6 +72,13 @@ def main():
     (output / "game").mkdir()
     shutil.copy2(source_runner, output / GAME["executable"])
     shutil.copy2(source_bundle / "Info.plist", output / "Info.plist")
+    info_plist_path = output / "Info.plist"
+    with info_plist_path.open("rb") as stream:
+        info_plist = plistlib.load(stream)
+    info_plist["LSApplicationCategoryType"] = "public.app-category.sports-games"
+    info_plist["LSSupportsGameMode"] = True
+    with info_plist_path.open("wb") as stream:
+        plistlib.dump(info_plist, stream)
     shutil.copy2(bridge, output / "Frameworks" / BRIDGE_NAME)
     runtime = ROOT / "tools/embedded" / platform / "libcxx/lib"
     for library in ("libc++.1.dylib", "libc++abi.1.dylib"):

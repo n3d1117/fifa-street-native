@@ -18,6 +18,7 @@
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
 | Unverified | Directional input response, memory-card saves, full Roma matches and additional teams, other venues/modes, NTSC startup/pacing under background load, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
 | Platforms | macOS arm64; iOS and tvOS arm64 app builds; iOS and tvOS Simulator launches reach the language screen and survive a background/resume cycle. |
+| Game Mode | iOS/tvOS bundles set `LSApplicationCategoryType=public.app-category.sports-games` and `LSSupportsGameMode`; macOS has a games category and the same support key. Needs device check: confirm the Game Mode banner or Control Center indicator on an iPhone running iOS 18+. |
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
 

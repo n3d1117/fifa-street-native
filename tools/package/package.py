@@ -120,6 +120,7 @@ def write_info_plist(contents):
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
         "CFBundleVersion": "19", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
+        "LSSupportsGameMode": True,
         "NSPrincipalClass": "NSApplication",
     }
     with (contents / "Info.plist").open("wb") as stream:
