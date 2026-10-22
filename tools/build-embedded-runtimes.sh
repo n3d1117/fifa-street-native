@@ -30,6 +30,7 @@ fi
   "$CMAKE" -U CMAKE_C_FLAGS -U CMAKE_CXX_FLAGS -S "$SRC/runtimes" -B "$BUILD" -G Ninja \
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
+    -DCMAKE_SYSTEM_NAME:STRING=Darwin \
     -DRX_APPLE_PLATFORM="$PLATFORM" \
     -DAPPLE=ON \
     -DRX_BUILDING_LIBCXX=ON \
