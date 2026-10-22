@@ -36,7 +36,8 @@ Measured: iOS and tvOS Simulators boot to the language screen at 50 presents/s (
 5. Apple GPU paths from ARMSX2 (each needs a switch and A/B): skip PS2 Z floor on Apple GPUs, framebuffer-fetch ordering instead of barriers, iOS barrier rules, late-upload encoder fix.
 6. Small settings overlay (video mode, scale, rumble) usable with a controller; TV-safe layout on tvOS.
 7. Watch `ProcessInfo.thermalState`; degrade optional extras only, never guest timing.
-8. Build scripts reconfigure stale CMake caches automatically (hash stamp per build dir); today a cached `CMAKE_SYSTEM_NAME` needs the build dir removed.
+8. Real app icon for macOS, iOS and tvOS (today macOS uses the package-time generated placeholder from `tools/package/make-icon.m`; iOS/tvOS bundles have none; tvOS needs layered top-shelf/app images).
+9. Build scripts reconfigure stale CMake caches automatically (hash stamp per build dir); today a cached `CMAKE_SYSTEM_NAME` needs the build dir removed.
 
 ### Embedded build efficiency
 
