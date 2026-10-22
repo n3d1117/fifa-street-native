@@ -92,9 +92,17 @@ if [[ "$PLATFORM" == iphoneos || "$PLATFORM" == appletvos ]]; then CPU_FLAG="-mc
 mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
 (
   cd "$FFMPEG_SOURCE"
+  # This source tree is reused for all four Apple targets. FFmpeg's Makefile
+  # does not track CFLAGS changes, so a prior platform's objects would survive
+  # a plain reconfigure and contaminate the next static archive.
+  if [[ -f Makefile ]]; then make distclean; fi
+  for library in avcodec avformat avutil swscale swresample; do
+    rm -f "lib$library/lib$library.a" "$FFMPEG_PREFIX/lib/lib$library.a"
+  done
   export CC="$LLVM/bin/clang" AR="$(xcrun --find ar)" NM="$(xcrun --find nm)"
   export RANLIB="$(xcrun --find ranlib)" STRIP="$(xcrun --find strip)"
   export CFLAGS="--target=$TARGET $CPU_FLAG -isysroot $SDK $MIN_FLAG -ffile-prefix-map=$ROOT=."
+  export ASFLAGS="$CFLAGS"
   export LDFLAGS="$CFLAGS"
   ./configure --prefix="$FFMPEG_PREFIX" --pkg-config-flags=--static \
     --arch=aarch64 --target-os=darwin --enable-cross-compile --cc="$CC" \
@@ -103,7 +111,7 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
     --disable-network --disable-autodetect --disable-x86asm --disable-encoders \
     --disable-muxers --disable-filters --disable-devices --enable-pic \
     2>&1 | tee "$LOG/$PLATFORM-ffmpeg-configure.log"
-  make -j"$NCPU" V=1 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-build.log"
+  make -j"$NCPU" 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-build.log"
   make install 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-install.log"
 )
 
@@ -174,3 +182,4 @@ extract rapidyaml-0.12.1-src.tgz rapidyaml-0.12.1
 cmake_install rapidyaml "$SRC/rapidyaml-0.12.1" -DRYML_BUILD_TESTS=OFF -DRYML_BUILD_TOOLS=OFF
 
 echo "== embedded static dependencies ready: $PREFIX"
+printf '%s\n' "$FFMPEG_HASH" > "$BUILD/embedded-deps.stamp"

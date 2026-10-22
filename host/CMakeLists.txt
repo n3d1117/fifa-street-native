@@ -32,7 +32,11 @@ set(RX_SOUNDTOUCH_LIBRARY "${RX_SOUNDTOUCH_DEFAULT}"
 if(NOT EXISTS "${RX_SOUNDTOUCH_LIBRARY}")
     message(FATAL_ERROR "Missing pinned PCSX2 SoundTouch library: ${RX_SOUNDTOUCH_LIBRARY}")
 endif()
-set(RX_LIBCXX_INCLUDE "${RX_LLVM}/include/c++/v1")
+if(RX_EMBEDDED)
+    set(RX_LIBCXX_INCLUDE "${RX_ROOT}/tools/embedded/${RX_APPLE_PLATFORM}/libcxx/include/c++/v1")
+else()
+    set(RX_LIBCXX_INCLUDE "${RX_LLVM}/include/c++/v1")
+endif()
 
 if(RX_GAME_READY)
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

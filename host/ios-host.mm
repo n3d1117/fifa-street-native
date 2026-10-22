@@ -145,7 +145,7 @@ void show_settings_window() {}
 extern "C" int ps2x_metal_host_start(const char*, uint32_t, uint32_t) {
     if (!std::getenv("RRV_PCSX2_GS_PIPELINE_MANIFEST")) {
         NSString* manifest = [[[NSBundle mainBundle] bundlePath]
-            stringByAppendingPathComponent:@"Frameworks/PCSX2GSBridge/resources/pipelines-fifa.txt"];
+            stringByAppendingPathComponent:@"Frameworks/resources/pipelines-fifa.txt"];
         if ([[NSFileManager defaultManager] fileExistsAtPath:manifest])
             setenv("RRV_PCSX2_GS_PIPELINE_MANIFEST", [manifest fileSystemRepresentation], 0);
     }

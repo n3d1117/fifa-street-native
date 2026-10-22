@@ -38,7 +38,7 @@ git -C "$PCSX2" rev-parse --show-toplevel >/dev/null || { echo "Missing deps/pcs
   -DUSE_VULKAN=OFF -DSKIP_POSTPROCESS_BUNDLE=ON \
   -DRRV_PCSX2_GS_BRIDGE_SOURCE_DIR="$BRIDGE" \
   -DPCSX2_COMPILER_RT_OS_VERSION_CHECK_SOURCE="$ROOT/tools/metal-deps/compat/llvm19-os_version_check.c" \
-  -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath,@loader_path -Wl,-force_load,$ROOT/tools/embedded/$PLATFORM/libcxx/lib/libc++.a -Wl,-force_load,$ROOT/tools/embedded/$PLATFORM/libcxx/lib/libc++abi.a" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-L$ROOT/tools/embedded/$PLATFORM/libcxx/lib -lc++ -lc++abi -Wl,-rpath,@loader_path" \
   2>&1 | tee "$LOG/$PLATFORM-bridge-configure.log"
 CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" "$CMAKE" --build "$BRIDGE_BUILD" --target rrv-pcsx2-gs-bridge \
   2>&1 | tee "$LOG/$PLATFORM-bridge-build.log"

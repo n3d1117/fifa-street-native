@@ -31,6 +31,7 @@ fi
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
     -DRX_APPLE_PLATFORM="$PLATFORM" \
+    -DAPPLE=ON \
     -DRX_BUILDING_LIBCXX=ON \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="$LLVM/bin/clang" \
@@ -40,16 +41,18 @@ fi
     -DCMAKE_INSTALL_NAME_DIR=@rpath \
     -DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi' \
     -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
-    -DLIBCXX_ENABLE_SHARED=OFF -DLIBCXX_ENABLE_STATIC=ON \
-    -DLIBCXXABI_ENABLE_SHARED=OFF -DLIBCXXABI_ENABLE_STATIC=ON \
+    -DLIBCXX_ENABLE_SHARED=ON -DLIBCXX_ENABLE_STATIC=ON \
+    -DLIBCXXABI_ENABLE_SHARED=ON -DLIBCXXABI_ENABLE_STATIC=ON \
     -DLIBCXX_INSTALL_LIBRARY=ON -DLIBCXX_INSTALL_HEADERS=ON \
     -DLIBCXX_INSTALL_LIBRARY_DIR=lib -DLIBCXXABI_INSTALL_LIBRARY_DIR=lib \
     -DLIBCXXABI_USE_LLVM_UNWINDER=OFF \
+    -DLIBCXX_USE_COMPILER_RT=ON -DLIBCXXABI_USE_COMPILER_RT=ON \
     -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXXABI_INCLUDE_TESTS=OFF \
     2>&1 | tee "$LOG/$PLATFORM-libcxx-configure.log"
 "$NINJA" -C "$BUILD" -j"$JOBS" install-cxx install-cxxabi \
   2>&1 | tee "$LOG/$PLATFORM-libcxx-build.log"
-[[ -f "$PREFIX/lib/libc++.a" && -f "$PREFIX/lib/libc++abi.a" ]] || {
-  echo "Expected static libc++ archives were not installed" >&2; exit 1;
+[[ -f "$PREFIX/lib/libc++.a" && -f "$PREFIX/lib/libc++abi.a" && \
+   -f "$PREFIX/lib/libc++.1.dylib" ]] || {
+  echo "Expected static runtimes and shared libc++ were not installed" >&2; exit 1;
 }
 echo "== libc++ ready: $PREFIX"

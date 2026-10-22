@@ -13,6 +13,8 @@
   rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match|--seconds N] [--profile]
                            alternating control/candidate runs with a median and noise table
   rx package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
+  rx ipa --platform ios|tvos|ios-sim|tvos-sim
+                           build embedded app, optionally boot its simulator, and produce an audited IPA
   rx where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
   rx where --unimplemented audit configured direct TODO handlers
 
@@ -722,6 +724,47 @@ def cmd_package(args):
     return run_command("package", args, body)
 
 
+def cmd_ipa(args):
+    def body(run):
+        platforms = {"ios": "iphoneos", "tvos": "appletvos",
+                     "ios-sim": "iphonesimulator", "tvos-sim": "appletvsimulator"}
+        platform = platforms[args.platform]
+        os.environ.setdefault("DEVELOPER_DIR", str(Path.home() / "Developer/Xcode-12.5.1/Xcode.app/Contents/Developer"))
+        os.environ.setdefault("RX_JOBS", "3")
+        prefix = ROOT / f"tools/embedded/{platform}/prefix"
+        runtime_prefix = ROOT / f"tools/embedded/{platform}/libcxx/lib"
+        embedded_stamp = ROOT / f"build/embedded/{platform}/deps/embedded-deps.stamp"
+        bridge = ROOT / f"build/embedded/{platform}/metal-bridge/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
+        spu2 = ROOT / f"build/embedded/{platform}/spu2-backend/librrv_pcsx2_spu2.a"
+        if not all(path.exists() for path in (prefix, spu2, embedded_stamp)):
+            run.must(["bash", "tools/build-deps-embedded.sh", platform], "embedded dependencies")
+        runtime_libraries = (runtime_prefix / "libc++.1.dylib", runtime_prefix / "libc++abi.1.dylib")
+        if not all(path.is_file() for path in runtime_libraries):
+            run.must(["bash", "tools/build-embedded-runtimes.sh", platform], "embedded C++ runtimes")
+        def links_embedded_runtime(path, require_abi=False):
+            if not path.is_file():
+                return False
+            dependencies = subprocess.run(["otool", "-L", str(path)], check=True,
+                                          text=True, stdout=subprocess.PIPE).stdout
+            return "@rpath/libc++.1.dylib" in dependencies and (
+                not require_abi or "@rpath/libc++abi.1.dylib" in dependencies)
+        if not links_embedded_runtime(bridge, require_abi=True):
+            run.must(["bash", "tools/build-bridge-embedded.sh", platform], "embedded GS bridge and SPU2")
+        elf = ROOT / "extracted/disc" / game.GAME["elf"]
+        require(elf, "./rx disc <iso>")
+        runner = ROOT / f"build/embedded/{platform}/game/ps2recomp/ps2xRuntime/{game.GAME['executable']}.app/{game.GAME['executable']}"
+        if not links_embedded_runtime(runner):
+            run.must(["bash", "tools/build-game-embedded.sh", platform], "embedded game")
+        run.must([sys.executable, "tools/package/ios_app.py", platform], "assemble embedded app")
+        if args.platform.endswith("-sim"):
+            run.must([sys.executable, "tools/package/sim_boot.py", platform], "simulator boot")
+        run.must([sys.executable, "tools/package/ipa.py", platform], "IPA audit and package")
+        flavor = "ios" if args.platform.startswith("ios") else "tvos"
+        ipa = ROOT / f"build/embedded/{platform}/FIFA-Street-PS2-{flavor}.ipa"
+        return str(ipa.relative_to(ROOT))
+    return run_command("ipa", args, body)
+
+
 def cmd_where(args):
     import where
     code, lines = where.unimplemented() if args.unimplemented else where.where(args.query)
@@ -776,6 +819,9 @@ def main():
     k = sp.add_parser("package")
     k.add_argument("--install", action="store_true")
     k.set_defaults(fn=cmd_package)
+    k = sp.add_parser("ipa")
+    k.add_argument("--platform", required=True, choices=["ios", "tvos", "ios-sim", "tvos-sim"])
+    k.set_defaults(fn=cmd_ipa)
     w = sp.add_parser("where")
     where_mode = w.add_mutually_exclusive_group(required=True)
     where_mode.add_argument("query", nargs="?")
