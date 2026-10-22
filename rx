@@ -13,6 +13,7 @@
   rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match|--seconds N] [--profile]
                            alternating control/candidate runs with a median and noise table
   rx package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
+  rx xcode                 generate the Xcode project from project.yml (XcodeGen 2.43.0)
   rx ipa --platform ios|tvos|ios-sim|tvos-sim
                            build embedded app, optionally boot its simulator, and produce an audited IPA
   rx where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
@@ -724,6 +725,42 @@ def cmd_package(args):
     return run_command("package", args, body)
 
 
+XCODEGEN_VERSION = "2.43.0"
+XCODEGEN_URL = "https://github.com/yonaskolb/XcodeGen/releases/download/2.43.0/xcodegen.zip"
+XCODEGEN_SHA256 = "a4847ed77d3341a4d24049bc4424a3babca4c94ff1dcaaee923eaca2b32c678f"
+
+
+def cmd_xcode(args):
+    def body(run):
+        spec = ROOT / "project.yml"
+        require(spec, "restore project.yml")
+        base = ROOT / "tools/build/xcodegen"
+        archive = base / f"xcodegen-{XCODEGEN_VERSION}.zip"
+        executable = base / "xcodegen/bin/xcodegen"
+        if not executable.is_file():
+            base.mkdir(parents=True, exist_ok=True)
+            if not archive.is_file() or sha256(archive).hexdigest() != XCODEGEN_SHA256:
+                partial = archive.with_suffix(".zip.part")
+                partial.unlink(missing_ok=True)
+                if run.sh(["curl", "-fL", "--retry", "3", XCODEGEN_URL, "-o", partial]) != 0:
+                    partial.unlink(missing_ok=True)
+                    raise Missing("could not download XcodeGen -> check the network and retry ./rx xcode")
+                if sha256(partial).hexdigest() != XCODEGEN_SHA256:
+                    partial.unlink(missing_ok=True)
+                    raise Failed(f"XcodeGen {XCODEGEN_VERSION} SHA-256 mismatch")
+                partial.replace(archive)
+            if run.sh(["unzip", "-q", "-o", archive, "-d", base]) != 0:
+                raise Failed(f"could not extract {archive.relative_to(ROOT)}")
+        version = subprocess.run([str(executable), "--version"], capture_output=True, text=True)
+        if version.returncode != 0 or version.stdout.strip() != f"Version: {XCODEGEN_VERSION}":
+            raise Failed(f"expected XcodeGen {XCODEGEN_VERSION} at {executable.relative_to(ROOT)}")
+        project = ROOT / "FIFA Street PS2.xcodeproj"
+        run.must([str(executable), "generate", "--quiet", "--spec", spec, "--project", ROOT], "XcodeGen")
+        require(project, "run ./rx xcode again")
+        return str(project.relative_to(ROOT))
+    return run_command("xcode", args, body)
+
+
 def cmd_ipa(args):
     def body(run):
         platforms = {"ios": "iphoneos", "tvos": "appletvos",
@@ -820,6 +857,8 @@ def main():
     k = sp.add_parser("ipa")
     k.add_argument("--platform", required=True, choices=["ios", "tvos", "ios-sim", "tvos-sim"])
     k.set_defaults(fn=cmd_ipa)
+    x = sp.add_parser("xcode")
+    x.set_defaults(fn=cmd_xcode)
     w = sp.add_parser("where")
     where_mode = w.add_mutually_exclusive_group(required=True)
     where_mode.add_argument("query", nargs="?")

@@ -1,0 +1,32 @@
+name: FIFA Street PS2
+options:
+  xcodeVersion: "12.5"
+  deploymentTarget:
+    macOS: "11.0"
+    iOS: "14.5"
+    tvOS: "14.5"
+targets:
+  macOS:
+    type: ""
+    platform: macOS
+    legacy:
+      toolPath: /bin/sh
+      arguments: -c "./rx build && ./rx package"
+      workingDirectory: "$(SRCROOT)"
+      passSettings: false
+  iOS:
+    type: ""
+    platform: iOS
+    legacy:
+      toolPath: /bin/sh
+      arguments: -c "./rx ipa --platform ios"
+      workingDirectory: "$(SRCROOT)"
+      passSettings: false
+  tvOS:
+    type: ""
+    platform: tvOS
+    legacy:
+      toolPath: /bin/sh
+      arguments: -c "./rx ipa --platform tvos"
+      workingDirectory: "$(SRCROOT)"
+      passSettings: false

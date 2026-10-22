@@ -6,6 +6,7 @@
 !/CMakePresets.json
 !/README.md
 !/AGENTS.md
+!/project.yml
 !/THIRD_PARTY.md
 !/LICENSE
 !/requirements.txt
@@ -68,3 +69,6 @@
 *.dylib
 *.ipa
 .DS_Store
+
+# XcodeGen output is regenerated from project.yml.
+/*.xcodeproj/
