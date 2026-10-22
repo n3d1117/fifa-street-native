@@ -1,5 +1,6 @@
 #include "autopilot.hpp"
 #include "app.hpp"
+#include "perf-log.hpp"
 #include "metal-host.hpp"
 #include "settings.hpp"
 #include "ps2_runtime.h"
@@ -34,6 +35,7 @@ extern "C" void ps2x_show_error_alert(const char* message);
 
 namespace
 {
+struct PerfScope { ~PerfScope() { ps2x_perf_stop(); } };
 #if !TARGET_OS_IPHONE
 // When this executable is Contents/MacOS/<name> of an app bundle, keep lookup
 // inside Contents/Resources/game even when the ELF is missing so validation
@@ -338,6 +340,8 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         validateGameElf(elfPath);
         // Settings: the user's file plus the documented debug overrides, loaded once.
         host::configure_settings(userDirectory.c_str());
+        ps2x_perf_start(userDirectory, ps2x_autopilot_gameplay, ps2GetPerfSnapshot);
+        const PerfScope perfScope;
         const auto pipelineCache = userDirectory / "gs-metal-pipelines.txt";
         if (!std::getenv("RRV_PCSX2_GS_PIPELINE_CACHE"))
             setenv("RRV_PCSX2_GS_PIPELINE_CACHE", pipelineCache.c_str(), 1);

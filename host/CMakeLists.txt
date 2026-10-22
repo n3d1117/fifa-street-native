@@ -59,6 +59,7 @@ if(RX_GAME_READY)
     add_library(metalHost STATIC
         ${RX_HOST_PLATFORM_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/diagnostic-input.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/perf-log.mm"
         "${CMAKE_CURRENT_SOURCE_DIR}/spu2-host.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp")
     target_include_directories(metalHost PRIVATE

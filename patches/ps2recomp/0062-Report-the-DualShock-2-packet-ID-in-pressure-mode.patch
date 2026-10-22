@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 21:31:49 +0200
-Subject: [PATCH 62/96] Report the DualShock 2 packet ID in pressure mode
+Subject: [PATCH 62/97] Report the DualShock 2 packet ID in pressure mode
 
 FIFA Street validates status zero and ID 0x79 at 0x103750..0x10376c before consuming input. The HLE returned analog ID 0x73 after EnterPressMode, so every input packet was rejected. Match PCSX2 Mode::DUALSHOCK2 and cover the enter/exit transitions.
 

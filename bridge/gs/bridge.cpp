@@ -526,7 +526,7 @@ struct Gate4GsObserverV1
         std::fprintf(f, "# gate4-gs v1 columns: field parity entry_ns packets bytes gif_ns vsync_ns "
                         "readbacks result_changes local_reads local_read_bytes local_read_ns "
                         "p:Prim,Draw,DrawCalls,Readbacks,Swizzle,Unswizzle,TextureCopies,TextureUploads,"
-                        "Barriers,RenderPasses,TextureCopiesROV,DrawCallsROV,BarriersROV "
+                        "Barriers,RenderPasses,TextureCopiesROV,DrawCallsROV,BarriersROV,TextureUploadBytes "
                         "v:<same, inside GSvsync, -1 if PCSX2 reset> g:gpu_ms,pcsx2_avg_gpu_ms\n");
         for (const Gate4GsFieldV1& r : rows)
         {
@@ -587,6 +587,34 @@ struct RrvPcsx2GsBridge {
 extern "C" uint32_t rrv_pcsx2_gs_bridge_version(void)
 {
     return RRV_PCSX2_GS_BRIDGE_ABI_VERSION;
+}
+
+namespace {
+std::atomic<RrvPcsx2GsPerfCallback> s_perf_callback{nullptr};
+void ForwardPerfFrame(const RrvGsPerfFrame* frame, void* context)
+{
+    if (const auto callback = s_perf_callback.load(std::memory_order_acquire))
+    {
+        RrvPcsx2GsPerfFrame output{};
+        static_assert(sizeof(output) == sizeof(*frame));
+        std::memcpy(&output, frame, sizeof(output));
+        callback(&output, context);
+    }
+}
+}
+
+extern "C" void rrv_pcsx2_gs_bridge_set_perf_callback(
+    RrvPcsx2GsPerfCallback callback, void* context)
+{
+    if (!callback)
+    {
+        g_rrv_perf_callback.store(nullptr, std::memory_order_release);
+        s_perf_callback.store(nullptr, std::memory_order_release);
+        return;
+    }
+    g_rrv_perf_context.store(context, std::memory_order_release);
+    s_perf_callback.store(callback, std::memory_order_release);
+    g_rrv_perf_callback.store(ForwardPerfFrame, std::memory_order_release);
 }
 
 extern "C" void rrv_pcsx2_gs_bridge_set_host_present_callback(
@@ -2622,6 +2650,8 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
                      static_cast<unsigned long long>(field_index));
         bridge->vsync_from_field = 0;
     }
+    if (g_rrv_perf_callback.load(std::memory_order_relaxed))
+        g_rrv_perf_field = field_index;
     GSvsync(pcsx2_field, VsyncRegistersWritten());
     HudScaleFieldEnd();
     HudStatsFieldEnd();

@@ -158,6 +158,17 @@ typedef struct RrvPcsx2GsBridgeStats {
 typedef uint64_t RrvPcsx2GsPrivRegs[RRV_PCSX2_GS_BRIDGE_PRIV_REG_COUNT];
 
 RRV_PCSX2_GS_BRIDGE_API uint32_t rrv_pcsx2_gs_bridge_version(void);
+typedef struct RrvPcsx2GsPerfFrame {
+    uint32_t struct_size;
+    double t, present_dt_ms, gpu_ms, present_wait_ms;
+    uint64_t game_frame, draws, render_passes, tex_uploads;
+    uint64_t tex_upload_bytes, readbacks, pipeline_compiles;
+    // 0 snapshots CPU/guest state at submission; 1 completes the same frame with GPU time.
+    uint32_t completed;
+} RrvPcsx2GsPerfFrame;
+typedef void (*RrvPcsx2GsPerfCallback)(const RrvPcsx2GsPerfFrame*, void*);
+RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_set_perf_callback(
+    RrvPcsx2GsPerfCallback callback, void* context);
 typedef void (*RrvPcsx2GsHostPresentCallback)(int active);
 RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_set_host_present_callback(
     RrvPcsx2GsHostPresentCallback callback);

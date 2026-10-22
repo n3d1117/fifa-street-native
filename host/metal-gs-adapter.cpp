@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "metal-gs-adapter.hpp"
+#include "perf-log.hpp"
 #include "runtime/ps2_host_present.h"
 
 #include <cmath>
@@ -178,9 +179,12 @@ void MetalGsAdapter::submit(uint32_t path, std::span<const uint8_t> packet) {
     if (path < 1 || path > 3) throw std::invalid_argument("GIF path must be the original path id 1, 2, or 3");
     if (packet.size() > UINT32_MAX) throw std::length_error("GIF packet exceeds bridge ABI size limit");
     char error[1024]{};
+    const bool perf = ps2x_perf_enabled();
+    const auto started = perf ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     check(rrv_pcsx2_gs_bridge_submit(handle_, path, packet.data(),
                                      static_cast<uint32_t>(packet.size()), error, sizeof(error)),
           "submit", error);
+    if (perf) ps2x_perf_gs_submit(std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 void MetalGsAdapter::vsync(const std::array<uint64_t, RRV_PCSX2_GS_BRIDGE_PRIV_REG_COUNT>& regs,
                            uint64_t field_index, uint32_t parity) {

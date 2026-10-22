@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "spu2-host.hpp"
+#include <mutex>
 
 #include "ps2x/iop/iop_host_spu2.h"
 #include "rrv_pcsx2_spu2.h"
@@ -32,6 +33,8 @@ struct DmaState {
 };
 
 rrv_spu2* g_spu2{};
+std::mutex g_perfStatsMutex;
+uint64_t g_finalUnderruns = 0;
 SDL_AudioStream* g_audio_stream{};
 bool g_audio_subsystem_initialized{};
 DmaState g_dma[2]{};
@@ -374,7 +377,11 @@ bool ps2x_spu2_host_start() {
         }
     }
     const rrv_spu2_config config{0, outputRingFrames};
-    g_spu2 = rrv_spu2_create(&config);
+    {
+        std::lock_guard lock(g_perfStatsMutex);
+        g_finalUnderruns = 0;
+        g_spu2 = rrv_spu2_create(&config);
+    }
     if (!g_spu2) {
         std::fprintf(stderr, "[spu2] PCSX2 SPU2 core creation failed\n");
         return false;
@@ -440,6 +447,17 @@ void ps2x_spu2_host_stop() {
         std::fprintf(stderr, "[spu2] SDL audio stream callback write errors: %llu\n",
                      static_cast<unsigned long long>(errors));
     }
+    std::lock_guard lock(g_perfStatsMutex);
+    rrv_spu2_stats stats{};
+    rrv_spu2_get_stats(g_spu2, &stats);
+    g_finalUnderruns = stats.underrun_frames;
     rrv_spu2_destroy(g_spu2);
     g_spu2 = nullptr;
+}
+
+uint64_t ps2x_spu2_host_underruns() {
+    std::lock_guard lock(g_perfStatsMutex);
+    rrv_spu2_stats stats{};
+    if (g_spu2) rrv_spu2_get_stats(g_spu2, &stats);
+    return g_spu2 ? stats.underrun_frames : g_finalUnderruns;
 }

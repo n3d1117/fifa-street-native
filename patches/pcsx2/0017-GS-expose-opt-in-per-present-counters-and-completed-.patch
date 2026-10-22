@@ -1,0 +1,332 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Fri, 23 Oct 2026 01:13:15 +0200
+Subject: [PATCH 17/17] GS: expose opt-in per-present counters and completed
+ GPU timing
+
+
+diff --git a/pcsx2/GS/GSPerfMon.cpp b/pcsx2/GS/GSPerfMon.cpp
+index 7faea49eda7433a75c24a08c84dcd71c2564f830..7dc742b6f64aa190bcbaf350be0f6b17f3575ba7 100644
+--- a/pcsx2/GS/GSPerfMon.cpp
++++ b/pcsx2/GS/GSPerfMon.cpp
+@@ -9,6 +9,9 @@
+ #include <inttypes.h>
+ 
+ GSPerfMon g_perfmon;
++std::atomic<RrvGsPerfCallback> g_rrv_perf_callback{nullptr};
++std::atomic<void*> g_rrv_perf_context{nullptr};
++uint64_t g_rrv_perf_field = 0;
+ 
+ GSPerfMon::GSPerfMon() = default;
+ 
+diff --git a/pcsx2/GS/GSPerfMon.h b/pcsx2/GS/GSPerfMon.h
+index d4defa812576ac1af8fbd965a506ee92a2bd818c..e92cb947df9e4bdced30ca93f10b143bd4c9273c 100644
+--- a/pcsx2/GS/GSPerfMon.h
++++ b/pcsx2/GS/GSPerfMon.h
+@@ -5,6 +5,7 @@
+ 
+ #include "common/Pcsx2Defs.h"
+ 
++#include "GS/RRVPerf.h"
+ #include <ctime>
+ #include <string>
+ 
+@@ -26,6 +27,7 @@ public:
+ 		TextureCopiesROV, // Overlaps with regular texture copies.
+ 		DrawCallsROV, // Overlaps with regular draw calls.
+ 		BarriersROV, // Overlaps with regular barriers.
++		TextureUploadBytes,
+ 		CounterLast,
+ 
+ 		// Reused counters for HW.
+@@ -38,6 +40,7 @@ public:
+ 
+ protected:
+ 	double m_counters[CounterLast] = {};
++	double m_perf_totals[CounterLast] = {};
+ 	double m_stats[CounterLast] = {};
+ 	int m_frame = 0;
+ 	clock_t m_lastframe = 0;
+@@ -53,7 +56,13 @@ public:
+ 	int GetFrame() { return m_frame; }
+ 	void EndFrame(bool frame_only);
+ 
+-	void Put(counter_t c, double val) { m_counters[c] += val; }
++	void Put(counter_t c, double val)
++	{
++		m_counters[c] += val;
++		if (g_rrv_perf_callback.load(std::memory_order_relaxed))
++			m_perf_totals[c] += val;
++	}
++	double GetPerfTotal(counter_t c) const { return m_perf_totals[c]; }
+ 	double GetCounter(counter_t c) { return m_counters[c]; }
+ 	double Get(counter_t c) { return m_stats[c]; }
+ 	void Update();
+diff --git a/pcsx2/GS/GSUtil.cpp b/pcsx2/GS/GSUtil.cpp
+index ef080e6283e02191dc7a976497ac5330494e05e1..38cddf79e9c7c5fcdc5d23d1b126f1e96bf5ca89 100644
+--- a/pcsx2/GS/GSUtil.cpp
++++ b/pcsx2/GS/GSUtil.cpp
+@@ -190,7 +190,11 @@ const char* GSUtil::GetPerfMonCounterName(GSPerfMon::counter_t counter, bool hw)
+ 			"TextureCopies",
+ 			"TextureUploads",
+ 			"Barriers",
+-			"RenderPasses"
++			"RenderPasses",
++			"TextureCopiesROV",
++			"DrawCallsROV",
++			"BarriersROV",
++			"TextureUploadBytes"
+ 		};
+ 		return counter < std::size(names_hw) ? names_hw[counter] : "";
+ 	}
+diff --git a/pcsx2/GS/RRVPerf.h b/pcsx2/GS/RRVPerf.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..72b41399a225b865b3f6042c251a8843270cf0a3
+--- /dev/null
++++ b/pcsx2/GS/RRVPerf.h
+@@ -0,0 +1,17 @@
++// SPDX-License-Identifier: GPL-3.0+
++#pragma once
++#include <atomic>
++#include <cstdint>
++
++struct RrvGsPerfFrame
++{
++    uint32_t struct_size = sizeof(RrvGsPerfFrame);
++    double t = 0, present_dt_ms = 0, gpu_ms = 0, present_wait_ms = 0;
++    uint64_t game_frame = 0, draws = 0, render_passes = 0, tex_uploads = 0;
++    uint64_t tex_upload_bytes = 0, readbacks = 0, pipeline_compiles = 0;
++    uint32_t completed = 0;
++};
++using RrvGsPerfCallback = void (*)(const RrvGsPerfFrame*, void*);
++extern std::atomic<RrvGsPerfCallback> g_rrv_perf_callback;
++extern std::atomic<void*> g_rrv_perf_context;
++extern uint64_t g_rrv_perf_field;
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h
+index 15cd5002a05654d4940a0932b8c9802e97b4c5a9..77ab8edf80e0a5ee38fc2540440f6f68f39ca56e 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h
+@@ -140,6 +140,8 @@ public:
+ struct ImDrawData;
+ class GSTextureMTL;
+ 
++struct RrvMetalPerfPending;
++
+ class GSDeviceMTL final : public GSDevice
+ {
+ public:
+@@ -387,6 +389,13 @@ public:
+ 	/// Called by command buffers when they finish
+ 	void DrawCommandBufferFinished(u64 draw, id<MTLCommandBuffer> buffer);
+ 	/// Flush pending operations from all encoders to the GPU
++	void TrackPerfBuffer(id<MTLCommandBuffer> buffer);
++	void SealPerfFrame();
++	std::shared_ptr<RrvMetalPerfPending> m_perf_frame;
++	double m_perf_last_present = 0;
++	double m_perf_draws = 0, m_perf_passes = 0, m_perf_uploads = 0;
++	double m_perf_upload_bytes = 0, m_perf_readbacks = 0;
++	u64 m_perf_pipeline_compiles = 0;
+ 	void FlushEncoders();
+ 	/// Flush pending operations and spins the GPU for a download.
+ 	void FlushEncodersForReadback();
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index a219b2d6aba48b6c2e3d2f1fa8f9768eee62a6c3..e1ad1ec23d06097bcb186f4855774719bced5b82 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -391,6 +391,14 @@ void RrvMetalLifetimeRecordConfigIfChanged(rrv::metal_lifetime::Event event, std
+ 	, m_dev(nil)
+ {
+ 	m_backref->second = this;
++	if (g_rrv_perf_callback.load(std::memory_order_relaxed))
++	{
++		m_perf_draws = g_perfmon.GetPerfTotal(GSPerfMon::DrawCalls);
++		m_perf_passes = g_perfmon.GetPerfTotal(GSPerfMon::RenderPasses);
++		m_perf_uploads = g_perfmon.GetPerfTotal(GSPerfMon::TextureUploads);
++		m_perf_upload_bytes = g_perfmon.GetPerfTotal(GSPerfMon::TextureUploadBytes);
++		m_perf_readbacks = g_perfmon.GetPerfTotal(GSPerfMon::Readbacks);
++	}
+ 	m_resource_options_shared_wc = MTLResourceStorageModeShared | MTLResourceCPUCacheModeWriteCombined;
+ #ifdef _M_X86
+ 	// WC memory doesn't work properly on AMD hackintoshes, and ends up being horribly slow even when only writing
+@@ -577,6 +585,87 @@ void RrvMetalLifetimeRecordConfigIfChanged(rrv::metal_lifetime::Event event, std
+ 	AccumulateCommandBufferTime(buffer);
+ }
+ 
++struct RrvMetalPerfPending
++{
++	std::mutex mutex;
++	RrvGsPerfFrame frame;
++	size_t pending = 0;
++	bool sealed = false;
++
++	void Finish(bool seal, double gpu_ms = 0)
++	{
++		RrvGsPerfFrame completed;
++		{
++			std::lock_guard<std::mutex> lock(mutex);
++			frame.gpu_ms += gpu_ms;
++			if (seal)
++				sealed = true;
++			else
++				--pending;
++			if (!sealed || pending != 0)
++				return;
++			completed = frame;
++			completed.completed = 1;
++		}
++		if (const auto callback = g_rrv_perf_callback.load(std::memory_order_acquire))
++			callback(&completed, g_rrv_perf_context.load(std::memory_order_acquire));
++	}
++};
++
++void GSDeviceMTL::TrackPerfBuffer(id<MTLCommandBuffer> buffer)
++{
++	if (!g_rrv_perf_callback.load(std::memory_order_relaxed))
++		return;
++	if (!m_perf_frame)
++		m_perf_frame = std::make_shared<RrvMetalPerfPending>();
++	const auto frame = m_perf_frame;
++	{
++		std::lock_guard<std::mutex> lock(frame->mutex);
++		++frame->pending;
++	}
++	[buffer addCompletedHandler:[frame](id<MTLCommandBuffer> completed)
++	{
++		const double elapsed = [completed GPUEndTime] - [completed GPUStartTime];
++		frame->Finish(false, std::max(0.0, elapsed) * 1000.0);
++	}];
++}
++
++void GSDeviceMTL::SealPerfFrame()
++{
++	if (!g_rrv_perf_callback.load(std::memory_order_relaxed))
++		return;
++	if (!m_perf_frame)
++		m_perf_frame = std::make_shared<RrvMetalPerfPending>();
++	const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
++	auto& frame = m_perf_frame->frame;
++	frame.t = now;
++	frame.present_dt_ms = m_perf_last_present ? (now - m_perf_last_present) * 1000.0 : 0;
++	m_perf_last_present = now;
++	frame.game_frame = g_rrv_perf_field;
++	const auto delta = [](GSPerfMon::counter_t counter, double& previous) -> u64 {
++		const double current = g_perfmon.GetPerfTotal(counter);
++		const u64 result = static_cast<u64>(current - previous);
++		previous = current;
++		return result;
++	};
++	frame.draws = delta(GSPerfMon::DrawCalls, m_perf_draws);
++	frame.render_passes = delta(GSPerfMon::RenderPasses, m_perf_passes);
++	frame.tex_uploads = delta(GSPerfMon::TextureUploads, m_perf_uploads);
++	frame.tex_upload_bytes = delta(GSPerfMon::TextureUploadBytes, m_perf_upload_bytes);
++	frame.readbacks = delta(GSPerfMon::Readbacks, m_perf_readbacks);
++	frame.pipeline_compiles = m_rrv_runtime_pipeline_compiles - m_perf_pipeline_compiles;
++	m_perf_pipeline_compiles = m_rrv_runtime_pipeline_compiles;
++	RrvGsPerfFrame submitted;
++	{
++		std::lock_guard<std::mutex> lock(m_perf_frame->mutex);
++		submitted = frame;
++	}
++	if (const auto callback = g_rrv_perf_callback.load(std::memory_order_acquire))
++		callback(&submitted, g_rrv_perf_context.load(std::memory_order_acquire));
++	auto completed = std::move(m_perf_frame);
++	completed->Finish(true);
++}
++
+ void GSDeviceMTL::FlushEncoders()
+ {
+ 	bool needs_submit = m_current_render_cmdbuf;
+@@ -593,6 +682,7 @@ void RrvMetalLifetimeRecordConfigIfChanged(rrv::metal_lifetime::Event event, std
+ 	{
+ 		[m_vertex_upload_encoder endEncoding];
+ 		RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, m_vertex_upload_cmdbuf, m_queue, m_layer, m_current_drawable, m_current_draw);
++		TrackPerfBuffer(m_vertex_upload_cmdbuf);
+ 		[m_vertex_upload_cmdbuf commit];
+ 		m_vertex_upload_encoder = nil;
+ 		m_vertex_upload_cmdbuf = nil;
+@@ -601,6 +691,7 @@ void RrvMetalLifetimeRecordConfigIfChanged(rrv::metal_lifetime::Event event, std
+ 	{
+ 		[m_texture_upload_encoder endEncoding];
+ 		RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, m_texture_upload_cmdbuf, m_queue, m_layer, m_current_drawable, m_current_draw);
++		TrackPerfBuffer(m_texture_upload_cmdbuf);
+ 		[m_texture_upload_cmdbuf commit];
+ 		m_texture_upload_encoder = nil;
+ 		m_texture_upload_cmdbuf = nil;
+@@ -657,6 +748,7 @@ void RrvMetalLifetimeRecordConfigIfChanged(rrv::metal_lifetime::Event event, std
+ 		}];
+ 	}
+ 	RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, m_current_render_cmdbuf, m_queue, m_layer, m_current_drawable, m_current_draw);
++	TrackPerfBuffer(m_current_render_cmdbuf);
+ 	[m_current_render_cmdbuf commit];
+ 	m_current_render_cmdbuf = nil;
+ 	m_current_draw++;
+@@ -692,6 +784,7 @@ void RrvMetalLifetimeRecordConfigIfChanged(rrv::metal_lifetime::Event event, std
+ 				dev->m_spin_manager.SpinCompleted(spin_cycles, static_cast<u32>(begin), static_cast<u32>(end));
+ 		}];
+ 		RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, spinCmdBuf, m_queue, m_layer, m_current_drawable, diag_draw);
++		TrackPerfBuffer(spinCmdBuf);
+ 		[spinCmdBuf commit];
+ 	}
+ }
+@@ -1715,6 +1808,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+ 	if (s_rrv_metal_lifetime.enabled())
+ 		RrvMetalLifetimeRecordRaw(rrv::metal_lifetime::Event::PipelineReady, RrvMetalLifetimePointer(m_dev.dev), RrvMetalLifetimePointer(m_queue), RrvMetalLifetimePointer(m_layer), 0, m_current_draw, 0);
+ 	RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, initCommands, m_queue, m_layer, nil, m_current_draw);
++	TrackPerfBuffer(initCommands);
+ 	[initCommands commit];
+ 	PrewarmRecordedHW();
+ 	return true;
+@@ -1828,6 +1922,7 @@ static bool ConvertShaderNotNeeded(ShaderConvert shader)
+ 	  destinationOrigin:MTLOriginMake(0, 0, 0)];
+ 	[enc endEncoding];
+ 	RrvMetalLifetimeRecord(rrv::metal_lifetime::Event::Commit, cmdbuf, m_queue, m_layer, m_current_drawable, m_current_draw);
++	TrackPerfBuffer(cmdbuf);
+ 	[cmdbuf commit];
+ }
+ 
+@@ -1889,7 +1984,15 @@ static bool RrvShouldSkipFloodedPresent()
+ 	{
+ 		RrvHostPresentScope host_present;
+ 		RrvTestPresentStall();
++		const bool perf = g_rrv_perf_callback.load(std::memory_order_relaxed) != nullptr;
++		const auto started = perf ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+ 		m_current_drawable = MRCRetain([m_layer nextDrawable]);
++		if (perf)
++		{
++			if (!m_perf_frame)
++				m_perf_frame = std::make_shared<RrvMetalPerfPending>();
++			m_perf_frame->frame.present_wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
++		}
+ 	}
+ 	if (s_rrv_metal_lifetime.enabled())
+ 	{
+@@ -1916,6 +2019,7 @@ static bool RrvShouldSkipFloodedPresent()
+ void GSDeviceMTL::EndPresent()
+ { @autoreleasepool {
+ 	pxAssertMsg(m_current_render.encoder && m_current_render_cmdbuf, "BeginPresent cmdbuf was destroyed");
++	const bool direct_present = m_current_drawable && m_window_info.surface_handle;
+ 	ImGui::Render();
+ 	RenderImGui(ImGui::GetDrawData());
+ 	EndRenderPass();
+@@ -1955,6 +2059,8 @@ static bool RrvShouldSkipFloodedPresent()
+ 			GSRrvRecordDirectPresent();
+ 	}
+ 	FlushEncoders();
++	if (direct_present)
++		SealPerfFrame();
+ 	FrameCompleted();
+ 	m_current_drawable = nullptr;
+ 	if (m_capture_start_frame)
+diff --git a/pcsx2/GS/Renderers/Metal/GSTextureMTL.mm b/pcsx2/GS/Renderers/Metal/GSTextureMTL.mm
+index e785a927d1a24cb84e057a9a91fc0925e67fa576..588a5a16e7b7eea944403e99992ee3b37d898423 100644
+--- a/pcsx2/GS/Renderers/Metal/GSTextureMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSTextureMTL.mm
+@@ -112,6 +112,8 @@
+ 	  destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
+ 
+ 	g_perfmon.Put(GSPerfMon::TextureUploads, 1);
++	if (g_rrv_perf_callback.load(std::memory_order_relaxed))
++		g_perfmon.Put(GSPerfMon::TextureUploadBytes, size);
+ 	return map.cpu_buffer;
+ }}
+ 
