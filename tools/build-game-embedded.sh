@@ -16,8 +16,10 @@ LLVM="${RX_LLVM:-$ROOT/tools/build/llvm19}"
 NINJA="$ROOT/tools/build/ninja-1.13.1/ninja"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 export ZERO_AR_DATE=1
+source "$ROOT/tools/embedded-cmake.sh"
 
-"$CMAKE" -S "$ROOT" -B "$BUILD" -G Ninja \
+embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" "$PLATFORM" "$LLVM" \
+  -S "$ROOT" -B "$BUILD" -G Ninja \
   -DCMAKE_MAKE_PROGRAM="$NINJA" \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
   -DRX_APPLE_PLATFORM="$PLATFORM" -DRX_LLVM="$LLVM" \

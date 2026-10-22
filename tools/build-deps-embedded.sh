@@ -22,6 +22,7 @@ BUILD="$ROOT/build/embedded/$PLATFORM/deps"
 LOG="$ROOT/build/embedded/logs"
 CCACHE="$ROOT/tools/build/ccache/ccache"
 CCACHE_DIR="$ROOT/build/embedded/$PLATFORM/ccache"
+source "$ROOT/tools/embedded-cmake.sh"
 mkdir -p "$CCACHE_DIR"
 export CCACHE_DIR CCACHE_CONFIGPATH="$ROOT/cmake/ccache-settings.txt" CCACHE_MAXSIZE=2G
 mkdir -p "$SRC" "$PREFIX" "$BUILD" "$LOG"
@@ -56,7 +57,8 @@ extract() { # archive directory
 }
 cmake_install() { # package source [options...]
   local name="$1" source="$2"; shift 2
-  "$CMAKE" -S "$source" -B "$BUILD/$name" -G Ninja \
+  embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" "$PLATFORM" "$LLVM" \
+    -S "$source" -B "$BUILD/$name" -G Ninja \
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
     -DRX_APPLE_PLATFORM="$PLATFORM" \

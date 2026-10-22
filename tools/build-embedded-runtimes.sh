@@ -18,6 +18,7 @@ SRC="$ROOT/tools/embedded/src/llvm-project"
 BUILD="$ROOT/build/embedded/$PLATFORM/libcxx"
 PREFIX="$ROOT/tools/embedded/$PLATFORM/libcxx"
 LOG="$ROOT/build/embedded/logs"
+source "$ROOT/tools/embedded-cmake.sh"
 mkdir -p "$ROOT/tools/embedded/src" "$BUILD" "$PREFIX" "$LOG"
 for tool in "$LLVM/bin/clang++" "$CMAKE" "$NINJA"; do
   [[ -x "$tool" ]] || { echo "Missing $tool" >&2; exit 2; }
@@ -28,7 +29,8 @@ fi
 [[ "$(git -C "$SRC" rev-parse HEAD)" == cd708029e0b2869e80abe31ddb175f7c35361f90 ]] || {
   echo "llvm-project is not at pinned LLVM 19.1.7 commit" >&2; exit 1;
 }
-  "$CMAKE" -U CMAKE_C_FLAGS -U CMAKE_CXX_FLAGS -S "$SRC/runtimes" -B "$BUILD" -G Ninja \
+  embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" "$PLATFORM" "$LLVM" \
+    -U CMAKE_C_FLAGS -U CMAKE_CXX_FLAGS -S "$SRC/runtimes" -B "$BUILD" -G Ninja \
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
     -DCMAKE_SYSTEM_NAME:STRING=Darwin \

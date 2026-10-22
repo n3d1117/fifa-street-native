@@ -22,13 +22,15 @@ PLATFORM_BUILD="$ROOT/build/embedded/$PLATFORM"
 BRIDGE_BUILD="$PLATFORM_BUILD/metal-bridge"
 SPU2_BUILD="$PLATFORM_BUILD/spu2-backend"
 LOG="$ROOT/build/embedded/logs"
+source "$ROOT/tools/embedded-cmake.sh"
 mkdir -p "$PLATFORM_BUILD" "$LOG"
 for tool in "$LLVM/bin/clang++" "$CMAKE" "$NINJA"; do
   [[ -x "$tool" ]] || { echo "Missing $tool" >&2; exit 2; }
 done
 git -C "$PCSX2" rev-parse --show-toplevel >/dev/null || { echo "Missing deps/pcsx2" >&2; exit 2; }
 
-"$CMAKE" -S "$PCSX2" -B "$BRIDGE_BUILD" -G Ninja \
+embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" "$PLATFORM" "$LLVM" \
+  -S "$PCSX2" -B "$BRIDGE_BUILD" -G Ninja \
   -DCMAKE_MAKE_PROGRAM="$NINJA" \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
   -DRX_APPLE_PLATFORM="$PLATFORM" \
@@ -44,7 +46,8 @@ git -C "$PCSX2" rev-parse --show-toplevel >/dev/null || { echo "Missing deps/pcs
 CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" "$CMAKE" --build "$BRIDGE_BUILD" --target rrv-pcsx2-gs-bridge \
   2>&1 | tee "$LOG/$PLATFORM-bridge-build.log"
 
-"$CMAKE" -S "$ROOT/bridge/spu2" -B "$SPU2_BUILD" -G Ninja \
+embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" "$PLATFORM" "$LLVM" \
+  -S "$ROOT/bridge/spu2" -B "$SPU2_BUILD" -G Ninja \
   -DCMAKE_MAKE_PROGRAM="$NINJA" \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
   -DRX_APPLE_PLATFORM="$PLATFORM" \
