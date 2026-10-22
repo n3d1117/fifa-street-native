@@ -752,9 +752,7 @@ def cmd_ipa(args):
             run.must(["bash", "tools/build-bridge-embedded.sh", platform], "embedded GS bridge and SPU2")
         elf = ROOT / "extracted/disc" / game.GAME["elf"]
         require(elf, "./rx disc <iso>")
-        runner = ROOT / f"build/embedded/{platform}/game/ps2recomp/ps2xRuntime/{game.GAME['executable']}.app/{game.GAME['executable']}"
-        if not links_embedded_runtime(runner):
-            run.must(["bash", "tools/build-game-embedded.sh", platform], "embedded game")
+        run.must(["bash", "tools/build-game-embedded.sh", platform], "embedded game")
         run.must([sys.executable, "tools/package/ios_app.py", platform], "assemble embedded app")
         if args.platform.endswith("-sim"):
             run.must([sys.executable, "tools/package/sim_boot.py", platform], "simulator boot")

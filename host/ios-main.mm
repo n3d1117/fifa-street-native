@@ -55,6 +55,12 @@ void startGameThread() {
 @property(nonatomic, strong) UIWindow* window;
 @end
 @implementation Ps2xAppDelegate
+#if TARGET_OS_IOS
+- (UIInterfaceOrientationMask)application:(UIApplication*)application
+    supportedInterfaceOrientationsForWindow:(UIWindow*)window {
+    return UIInterfaceOrientationMaskLandscape;
+}
+#endif
 - (BOOL)application:(UIApplication*)application didFinishLaunchingWithOptions:(NSDictionary*)options {
     [application setIdleTimerDisabled:YES];
     self.window = [[UIWindow alloc] initWithFrame:[[UIScreen mainScreen] bounds]];

@@ -98,6 +98,10 @@ void update_surface_size() {
 - (BOOL)prefersStatusBarHidden { return YES; }
 #if TARGET_OS_IOS
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
+- (BOOL)shouldAutorotate { return YES; }
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation {
+    return UIInterfaceOrientationLandscapeLeft;
+}
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
 #endif
 @end
