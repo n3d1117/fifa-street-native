@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 15:40:40 +0200
-Subject: [PATCH 88/93] runtime: include IOP service deadline in EE idle waits
+Subject: [PATCH 88/94] runtime: include IOP service deadline in EE idle waits
 
 
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp

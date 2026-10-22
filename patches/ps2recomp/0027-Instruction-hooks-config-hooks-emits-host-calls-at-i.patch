@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 18:46:42 +0200
-Subject: [PATCH 27/93] Instruction hooks: config [[hooks]] emits host calls at
+Subject: [PATCH 27/94] Instruction hooks: config [[hooks]] emits host calls at
  instruction addresses
 
 A hook is declared by address (before/after, optional redirect) in the recompiler
