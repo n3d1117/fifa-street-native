@@ -5,7 +5,12 @@
 // SDL-created view/layer as opaque handles and retain them through bridge
 // destruction. This adapter creates no application, window, or view.
 
+#import <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#import <UIKit/UIKit.h>
+#else
 #import <AppKit/AppKit.h>
+#endif
 #import <QuartzCore/CAMetalLayer.h>
 
 #include "rrv_pcsx2_gs_bridge.h"
@@ -41,11 +46,21 @@ extern "C" int rrv_pcsx2_gs_bridge_validate_macos_surface(
     {
         id view = (__bridge id)native_view;
         id layer = (__bridge id)native_layer;
+#if TARGET_OS_IPHONE
+        const bool valid_view = [view isKindOfClass:[UIView class]] ||
+                                [view isKindOfClass:[CAMetalLayer class]];
+        if (!view || !valid_view)
+        {
+            SetError(error, error_capacity, "direct presentation native_view is not a UIView or CAMetalLayer");
+            return 0;
+        }
+#else
         if (!view || ![view isKindOfClass:[NSView class]])
         {
             SetError(error, error_capacity, "direct presentation native_view is not an NSView");
             return 0;
         }
+#endif
         if (!layer || ![layer isKindOfClass:[CAMetalLayer class]])
         {
             SetError(error, error_capacity,
@@ -80,12 +95,27 @@ extern "C" int rrv_pcsx2_gs_bridge_prepare_owner_surface(
         if (!rrv_pcsx2_gs_bridge_validate_macos_surface(
                 surface->native_view, surface->native_layer, error, error_capacity))
             return 0;
+#if TARGET_OS_IPHONE
+        id view = (__bridge id)surface->native_view;
+        CAMetalLayer* layer = (__bridge CAMetalLayer*)surface->native_layer;
+        if ([view isKindOfClass:[UIView class]] && [(UIView*)view layer] != layer)
+        {
+            SetError(error, error_capacity, "GS owner surface layer is not attached to the UIKit view");
+            return 0;
+        }
+        if ([view isKindOfClass:[CAMetalLayer class]] && view != (__bridge id)layer)
+        {
+            SetError(error, error_capacity, "GS owner surface layer does not match the CAMetalLayer handle");
+            return 0;
+        }
+#else
         NSView* view = (__bridge NSView*)surface->native_view;
         if ([view layer] != (__bridge CAMetalLayer*)surface->native_layer)
         {
             SetError(error, error_capacity, "GS owner surface layer is not attached to the SDL view");
             return 0;
         }
+#endif
         surface->flags |= RRV_PCSX2_GS_SURFACE_FLAG_OWNER_THREAD;
         std::lock_guard<std::mutex> lock(s_preparation_mutex);
         s_prepared_surface = *surface;

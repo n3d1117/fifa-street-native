@@ -41,6 +41,17 @@ Open **Settings** from the app menu, then Save and restart the game to apply cha
 - Controller: rumble off by default; intensity defaults to 100% and matters when rumble is enabled.
 - Cheats: unlock all venues off by default; enabling it sets the game's own venue cheat flag.
 
+## iPhone, iPad and Apple TV (experimental)
+
+Needs Xcode 12.5.1 (iOS/tvOS 14.5 SDKs) at `~/Developer/Xcode-12.5.1/Xcode.app`, plus `./rx setup` and `./rx disc` done.
+
+```sh
+export DEVELOPER_DIR=~/Developer/Xcode-12.5.1/Xcode.app/Contents/Developer
+./rx ipa --platform ios        # or tvos, ios-sim, tvos-sim
+```
+
+Output: `build/embedded/<iphoneos|appletvos|iphonesimulator|appletvsimulator>/FIFA-Street-PS2-<ios|tvos>.ipa` (about 1.5 GB, game data included). Device builds are unsigned: install with a sideloading tool that signs (AltStore, Sideloadly) or sign with your own certificate. `-sim` platforms also boot the app in the Simulator and save a screenshot to `build/embedded/logs/`. The first build of a platform takes about an hour. Requires a game controller; there are no touch controls.
+
 ## Troubleshooting
 
 - **Game data missing or unsupported:** verify your own PAL disc with `./rx disc <path-to-iso>`, rebuild, and package again. The installed app looks for `SLES_530.64` in its bundled `Contents/Resources/game` folder.

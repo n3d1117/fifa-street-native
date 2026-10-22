@@ -5,6 +5,9 @@ add_library(rrv-pcsx2-gs-bridge SHARED
     bridge.cpp
     gsrunner_host.cpp
 )
+if(CMAKE_SYSTEM_NAME MATCHES "^(iOS|tvOS)$")
+    target_sources(rrv-pcsx2-gs-bridge PRIVATE embedded_platform_stubs.cpp)
+endif()
 
 if(APPLE)
     target_sources(rrv-pcsx2-gs-bridge PRIVATE metal_surface_adapter.mm)
@@ -23,6 +26,9 @@ target_include_directories(rrv-pcsx2-gs-bridge
 )
 
 target_link_libraries(rrv-pcsx2-gs-bridge PRIVATE PCSX2_FLAGS PCSX2)
+if(TARGET PCSX2_COMPILER_RT_VERSION_CHECK)
+    target_sources(rrv-pcsx2-gs-bridge PRIVATE $<TARGET_OBJECTS:PCSX2_COMPILER_RT_VERSION_CHECK>)
+endif()
 target_compile_definitions(rrv-pcsx2-gs-bridge PRIVATE RRV_PCSX2_GS_BRIDGE_BUILD=1)
 set_target_properties(rrv-pcsx2-gs-bridge PROPERTIES
     CXX_VISIBILITY_PRESET hidden

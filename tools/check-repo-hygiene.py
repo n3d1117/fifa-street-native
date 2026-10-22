@@ -19,7 +19,7 @@ def main():
     names = [n.decode() for n in git(*command).split(b'\0') if n]
     allowed_roots = {'bridge', 'host', 'cmake', 'tests', 'patches', 'tools', 'toolchain', 'config', 'docs', '.githooks'}
     allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', '.editorconfig', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json', 'requirements.txt', 'rx'}
-    allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml'}
+    allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml', '.in'}
     problems = []
     total = 0
     for name in names:
@@ -35,7 +35,7 @@ def main():
             reason = 'unexpected extension or binary/media artifact'
         elif path.parts[0] == 'config' and name != 'config/game.json' and not name.endswith('.template.toml'):
             reason = 'local/game-derived configuration'
-        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu/', 'tools/metal-deps/compat/', 'tools/probe/', 'tools/package/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/disc.py', 'tools/game.py', 'tools/generate.py', 'tools/where.py', 'tools/jobs.py', 'tools/check-repo-hygiene.py', 'tools/check-generated-includes.py'}:
+        elif path.parts[0] == 'tools' and not name.startswith(('tools/vu/', 'tools/metal-deps/compat/', 'tools/probe/', 'tools/package/')) and name not in {'tools/deps.py', 'tools/build-deps.sh', 'tools/build-embedded-runtimes.sh', 'tools/build-deps-embedded.sh', 'tools/build-bridge-embedded.sh', 'tools/build-game-embedded.sh', 'tools/disc.py', 'tools/game.py', 'tools/generate.py', 'tools/where.py', 'tools/jobs.py', 'tools/check-repo-hygiene.py', 'tools/check-generated-includes.py'}:
             reason = 'dependency/toolchain output'
         elif size > 1024 * 1024:
             reason = 'file exceeds 1 MiB'

@@ -17,10 +17,30 @@
 | Release polish | Package-time generated original icon, sectioned Settings window, launch alerts for missing or mismatched game data, and user setup/troubleshooting docs. `./rx package` audit clean; `./rx run --match --seconds 60` measured 50.0 gameplay FPS and 0 audio underruns. |
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
 | Unverified | Directional input response, memory-card saves, full Roma matches and additional teams, other venues/modes, NTSC startup/pacing under background load, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
-| Platforms | macOS arm64 |
+| Platforms | macOS arm64; iOS and tvOS arm64 app builds; iOS and tvOS Simulator launches reach the game’s language selection screen. |
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
 
 ## Backlog
 
-Architecture and CPU-efficiency reviews, iOS/tvOS.
+Architecture and CPU-efficiency reviews.
+
+### iOS/tvOS next
+
+Measured: iOS and tvOS Simulators boot to the language screen at 50 presents/s (`./rx ipa --platform ios-sim|tvos-sim`). Unverified: real devices, controller input, gameplay, audio, saves, frame rate and thermals on device.
+
+1. First device boot (A12 or newer): title screen, then the first match. Check memory headroom (jetsam) against the 1.5 GB bundle.
+2. Lifecycle: pause emulation and audio in background; flush memory cards on resign-active; `AVAudioSession` interruptions.
+3. Frame pacing from `CADisplayLink` (`preferredFramesPerSecond` on SDK 14.5); tvOS 50 Hz output via `AVDisplayManager.preferredDisplayCriteria`; game NTSC/60 mode as the opt-in for 60 Hz panels.
+4. Precompile PCSX2 Metal shaders to a `.metallib` and prewarm `pipelines-fifa.txt` (optionally `MTLBinaryArchive`) so play has no compile stalls.
+5. Apple GPU paths from ARMSX2 (each needs a switch and A/B): skip PS2 Z floor on Apple GPUs, framebuffer-fetch ordering instead of barriers, iOS barrier rules, late-upload encoder fix.
+6. Small settings overlay (video mode, scale, rumble) usable with a controller; TV-safe layout on tvOS.
+7. Watch `ProcessInfo.thermalState`; degrade optional extras only, never guest timing.
+8. Build scripts reconfigure stale CMake caches automatically (hash stamp per build dir); today a cached `CMAKE_SYSTEM_NAME` needs the build dir removed.
+
+### Embedded build efficiency
+
+- ccache for the embedded libc++, deps, ffmpeg and GS bridge builds; only the game uses it today (`cmake/ccache.cmake`). Bridge alone is about 330 s CPU per platform uncached (`.ninja_log` under `build/embedded/<platform>/metal-bridge`).
+- Build ffmpeg with `--disable-everything` plus only the MPEG-2 video decoder, `mpegvideo` parser and swscale: the MPEG HLE (`ps2xRuntime/.../Stubs/MPEG.cpp`) uses nothing else and `FEMOVIES/*.MPC` are raw MPEG-2 elementary streams. Verify movie playback after.
+- Build only what the GS bridge reaches from libPCSX2: vixl, DEV9, USB, ccc and DebugTools are compiled today but unused (about 40% of bridge CPU, inferred). If FullscreenUI/fonts and GameDatabase go too, freetype, harfbuzz, plutovg, plutosvg and rapidyaml can be dropped.
+- XcodeGen: commit only a `project.yml` with macOS, iOS and tvOS app targets that wrap the CMake-built runner, bridge and packaging; `./rx xcode` generates the gitignored `.xcodeproj`. Compilation stays in CMake (LLVM 19 is required; Xcode 12.5.1 has no LLVM 19 toolchain). Check an XcodeGen release runs on macOS 11 and emits projects Xcode 12.5.1 opens.

@@ -11,6 +11,9 @@ function(rx_collect_targets dir out)
 endfunction()
 
 function(rx_apply_relative_rpaths)
+    if(RX_EMBEDDED)
+        return()
+    endif()
     # Resolve symlinks first (/tmp -> /private/tmp): relative paths computed
     # from a symlinked spelling point at the wrong directory at run time.
     file(REAL_PATH "${RX_ROOT}" _root)

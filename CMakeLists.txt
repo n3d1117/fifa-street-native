@@ -5,6 +5,12 @@ if(NOT APPLE)
     message(FATAL_ERROR "This project builds only on macOS (Metal)")
 endif()
 
+# iOS and tvOS (cmake/toolchain-llvm19-embedded.cmake): UIKit host, app bundle, no AppKit.
+set(RX_EMBEDDED OFF)
+if(IOS OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
+    set(RX_EMBEDDED ON)
+endif()
+
 get_filename_component(RX_ROOT "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
 include("${RX_ROOT}/cmake/ccache.cmake")
 set(RX_PS2RECOMP_SOURCE_DIR "${RX_ROOT}/deps/ps2recomp")
@@ -50,9 +56,15 @@ endif()
 
 set(PS2X_BUILD_RECOMP ON CACHE BOOL "" FORCE)
 set(PS2X_BUILD_RUNTIME ON CACHE BOOL "" FORCE)
-set(PS2X_BUILD_ANALYZER ON CACHE BOOL "" FORCE)
-set(PS2X_BUILD_TEST ON CACHE BOOL "" FORCE)
-set(PS2X_IOP_BUILD_TESTS ON CACHE BOOL "" FORCE)
+if(RX_EMBEDDED)
+    set(PS2X_BUILD_ANALYZER OFF CACHE BOOL "" FORCE)
+    set(PS2X_BUILD_TEST OFF CACHE BOOL "" FORCE)
+    set(PS2X_IOP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+else()
+    set(PS2X_BUILD_ANALYZER ON CACHE BOOL "" FORCE)
+    set(PS2X_BUILD_TEST ON CACHE BOOL "" FORCE)
+    set(PS2X_IOP_BUILD_TESTS ON CACHE BOOL "" FORCE)
+endif()
 set(PS2X_BUILD_STUDIO OFF CACHE BOOL "" FORCE)
 set(PS2X_USE_METAL ON)
 set(PS2X_ENABLE_DEBUG_UI OFF CACHE BOOL "" FORCE)
@@ -120,6 +132,10 @@ foreach(runner_source IN LISTS PS2X_RUNNER_SOURCES)
     endif()
     list(APPEND RX_FILTERED_RUNNER_SOURCES "${runner_source}")
 endforeach()
+if(RX_EMBEDDED)
+    # launcher.cpp compiles without its main(); ios-main.mm owns UIApplicationMain.
+    list(APPEND RX_FILTERED_RUNNER_SOURCES "${RX_ROOT}/host/ios-main.mm")
+endif()
 list(APPEND RX_FILTERED_RUNNER_SOURCES "${RX_ROOT}/host/launcher.cpp" "${RX_ROOT}/host/boot-match.cpp"
     "${RX_ROOT}/host/poll-idle.cpp" "${RX_ROOT}/host/cheats.cpp" "${RX_ROOT}/host/video-mode.cpp" "${RX_ROOT}/host/ra-watch.cpp")
 set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${RX_FILTERED_RUNNER_SOURCES}")
@@ -130,6 +146,22 @@ set_source_files_properties("${RX_ROOT}/host/boot-match.cpp" "${RX_ROOT}/host/po
 set_source_files_properties("${RX_ROOT}/host/launcher.cpp" TARGET_DIRECTORY ps2EntryRunner PROPERTIES
     SKIP_UNITY_BUILD_INCLUSION ON
     COMPILE_DEFINITIONS "PS2X_APP_NAME=\"${RX_APP_NAME}\";PS2X_APP_EXECUTABLE=\"${RX_APP_EXECUTABLE}\";PS2X_GAME_ELF_SHA1=\"${RX_GAME_ELF_SHA1}\"")
+
+if(RX_EMBEDDED)
+    set_source_files_properties("${RX_ROOT}/host/ios-main.mm" TARGET_DIRECTORY ps2EntryRunner PROPERTIES
+        COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON
+        COMPILE_DEFINITIONS "PS2X_APP_EXECUTABLE=\"${RX_APP_EXECUTABLE}\"")
+    if(CMAKE_SYSTEM_NAME STREQUAL "tvOS")
+        set(RX_IOS_DEVICE_FAMILY_XML "<integer>3</integer>")
+    else()
+        set(RX_IOS_DEVICE_FAMILY_XML "<integer>1</integer><integer>2</integer>")
+    endif()
+    configure_file("${RX_ROOT}/host/ios/Info.plist.in" "${CMAKE_BINARY_DIR}/Info.plist" @ONLY)
+    set_target_properties(ps2EntryRunner PROPERTIES
+        MACOSX_BUNDLE ON
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_BINARY_DIR}/Info.plist"
+        OUTPUT_NAME "${RX_APP_EXECUTABLE}")
+endif()
 
 file(GLOB RX_GENERATED_SOURCES CONFIGURE_DEPENDS
     "${RX_GENERATED_DIR}/*.cpp")

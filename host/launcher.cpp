@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include <TargetConditionals.h>
 #include <mach-o/dyld.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <fcntl.h>
@@ -32,6 +33,7 @@ extern "C" void ps2x_show_error_alert(const char* message);
 
 namespace
 {
+#if !TARGET_OS_IPHONE
 // When this executable is Contents/MacOS/<name> of an app bundle, keep lookup
 // inside Contents/Resources/game even when the ELF is missing so validation
 // can explain how to repair the bundle instead of finding a checkout copy.
@@ -50,6 +52,7 @@ std::filesystem::path bundledGameElf()
         return elf;
     return {};
 }
+#endif
 
 // A GUI launch (LaunchServices) hands us /dev/null for stdout/stderr; keep the
 // runtime log in the user directory instead. Terminals and pipes are left alone.
@@ -100,6 +103,9 @@ std::string sha1(const std::filesystem::path& path)
 
 bool isBundledApp()
 {
+#if TARGET_OS_IPHONE
+    return true;  // ios-main.mm always runs from <App>.app with game/ beside the binary
+#else
     uint32_t size = 0;
     _NSGetExecutablePath(nullptr, &size);
     std::string exe(size, '\0');
@@ -107,6 +113,7 @@ bool isBundledApp()
     const auto macos = std::filesystem::path(exe.c_str()).lexically_normal().parent_path();
     return macos.filename() == "MacOS" && macos.parent_path().filename() == "Contents" &&
         macos.parent_path().parent_path().extension() == ".app";
+#endif
 }
 
 void validateGameElf(const std::filesystem::path& elf)
@@ -114,7 +121,7 @@ void validateGameElf(const std::filesystem::path& elf)
     std::error_code ec;
     if (!std::filesystem::is_regular_file(elf, ec)) {
         if (isBundledApp())
-            throw std::runtime_error("Game data is missing. This app expects your verified game files at Contents/Resources/game/SLES_530.64. Rebuild the app after running ./rx disc <path-to-iso>.");
+            throw std::runtime_error("Game data is missing. This app expects your verified game files at Contents/Resources/game/SLES_530.64 (game/SLES_530.64 on iOS and tvOS). Rebuild the app after running ./rx disc <path-to-iso>.");
         throw std::runtime_error("Game ELF is missing at " + elf.string() + ". Run ./rx disc <path-to-iso> to verify and extract your disc.");
     }
     const std::string actual = sha1(elf);
@@ -142,6 +149,7 @@ std::filesystem::path defaultUserDirectory()
     return std::filesystem::path(home) / "Library" / "Application Support" / PS2X_APP_EXECUTABLE;
 }
 
+#if !TARGET_OS_IPHONE
 // A relative default ELF is looked up from the executable's directory upward,
 // then from the working directory upward, so no checkout path is baked in.
 std::filesystem::path resolveDefaultElf(const std::filesystem::path &relative)
@@ -179,6 +187,7 @@ std::filesystem::path resolveDefaultElf(const std::filesystem::path &relative)
     }
     return relative;
 }
+#endif
 
 // PT_LOAD ranges of a 32-bit little-endian ELF.
 std::vector<std::pair<uint32_t, uint32_t>> elfLoadSegments(const std::filesystem::path &elf)
@@ -209,6 +218,7 @@ std::vector<std::pair<uint32_t, uint32_t>> elfLoadSegments(const std::filesystem
     return segments;
 }
 
+#if !TARGET_OS_IPHONE
 void printUsage(const char *program)
 {
     std::cerr << "Usage: " << program << " [--user-dir DIRECTORY] [GAME.ELF]\n";
@@ -263,7 +273,9 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
     }
     return true;
 }
+#endif
 
+#if !TARGET_OS_IPHONE
 void setupTerminateLogger()
 {
     std::set_terminate([]()
@@ -287,6 +299,7 @@ void setupTerminateLogger()
                            }
                            std::abort(); });
 }
+#endif
 }
 
 
@@ -388,6 +401,7 @@ void ps2x_app_stop(void)
     ps2x_metal_host_request_close();
 }
 
+#if !TARGET_OS_IPHONE  // iOS and tvOS enter through ios-main.mm
 int main(int argc, char *argv[])
 {
     setupTerminateLogger();
@@ -409,3 +423,4 @@ int main(int argc, char *argv[])
     std::cerr.flush();
     std::_Exit(status);
 }
+#endif

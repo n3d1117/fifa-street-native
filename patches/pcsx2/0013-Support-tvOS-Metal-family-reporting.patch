@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Thu, 22 Oct 2026 12:43:49 +0200
+Subject: [PATCH 13/13] Support tvOS Metal family reporting
+
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index 55a469ef03fb1ec6f2338e33b055a6b1d8c66af2..f08e03356589c14c7ee74fa8568896e1ae4e76ab 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -2608,15 +2608,21 @@ static MTLBlendOperation ConvertBlendOp(GSDevice::BlendOp generic)
+ {
+ 	const auto& f = device.features;
+ 	const char* family = "unknown";
+-	#if !TARGET_OS_TV
++#if TARGET_OS_TV
++	if ([device.dev supportsFamily:MTLGPUFamilyApple5]) family = "apple5";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple4]) family = "apple4";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple3]) family = "apple3";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple2]) family = "apple2";
++	else if ([device.dev supportsFamily:MTLGPUFamilyApple1]) family = "apple1";
++#else
+ 	if ([device.dev supportsFamily:MTLGPUFamilyApple7]) family = "apple7";
+ 	else if ([device.dev supportsFamily:MTLGPUFamilyApple6]) family = "apple6";
+-	#endif
+ 	else if ([device.dev supportsFamily:MTLGPUFamilyApple5]) family = "apple5";
+ 	else if ([device.dev supportsFamily:MTLGPUFamilyApple4]) family = "apple4";
+ 	else if ([device.dev supportsFamily:MTLGPUFamilyApple3]) family = "apple3";
+ 	else if ([device.dev supportsFamily:MTLGPUFamilyApple2]) family = "apple2";
+ 	else if ([device.dev supportsFamily:MTLGPUFamilyApple1]) family = "apple1";
++#endif
+ 	char tag[128];
+ 	snprintf(tag, sizeof(tag), "family=%s;shader=%u;fbf=%u;primid=%u;rov=%u;rrt=%u;rr32=%u;depth=%u;broken=%u", family,
+ 		static_cast<unsigned>(f.shader_version), unsigned(f.framebuffer_fetch), unsigned(f.primid), unsigned(f.rov),

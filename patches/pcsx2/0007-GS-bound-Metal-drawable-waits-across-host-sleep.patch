@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 17:04:58 +0200
-Subject: [PATCH 07/10] GS: bound Metal drawable waits across host sleep
+Subject: [PATCH 07/13] GS: bound Metal drawable waits across host sleep
 
 
 diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
