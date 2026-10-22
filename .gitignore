@@ -66,4 +66,5 @@
 *.o
 *.a
 *.dylib
+*.ipa
 .DS_Store
