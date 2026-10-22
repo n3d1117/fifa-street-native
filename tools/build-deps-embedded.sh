@@ -63,12 +63,11 @@ cmake_install() { # package source [options...]
   "$CMAKE" --install "$BUILD/$name"
 }
 
-# FFmpeg 7.1.2, matching tools/build-deps.sh. Do not write to tools/ffmpeg,
-# which is a symlink to the main checkout: copy its verified archive here.
+# FFmpeg 7.1.2, matching tools/build-deps.sh; reuse its verified archive.
 FFMPEG_VER=7.1.2
 FFMPEG_HASH=089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
 fetch "ffmpeg-$FFMPEG_VER.tar.xz" "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VER.tar.xz" "$FFMPEG_HASH" \
-  "$ROOT/tools/ffmpeg" "$ROOT/../fifa-street-native/tools/ffmpeg"
+  "$ROOT/tools/ffmpeg"
 extract "ffmpeg-$FFMPEG_VER.tar.xz" "ffmpeg-$FFMPEG_VER"
 FFMPEG_SOURCE="$SRC/ffmpeg-$FFMPEG_VER"
 FFMPEG_PREFIX="$PREFIX"
@@ -95,7 +94,7 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
   # This source tree is reused for all four Apple targets. FFmpeg's Makefile
   # does not track CFLAGS changes, so a prior platform's objects would survive
   # a plain reconfigure and contaminate the next static archive.
-  if [[ -f Makefile ]]; then make distclean; fi
+  if [[ -f ffbuild/config.mak ]]; then make distclean; fi
   for library in avcodec avformat avutil swscale swresample; do
     rm -f "lib$library/lib$library.a" "$FFMPEG_PREFIX/lib/lib$library.a"
   done
@@ -116,17 +115,17 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
 )
 
 # Same hashes and source revisions as build_metal_deps() in build-deps.sh.
-fetch lz4-1.10.0.tar.gz https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch zstd-1.5.7.tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch libpng-1.6.58.tar.xz https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz 28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch libjpeg-turbo-3.2.0.tar.gz https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0.tar.gz 6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch libwebp-1.6.0.tar.gz https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch SDL3-3.4.12.tar.gz https://libsdl.org/release/SDL3-3.4.12.tar.gz f07b958a9ac5020fb7a44cadb957f658b2149c3c8abb4f63145fac9303249db7 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch freetype-2.14.3.tar.xz https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/freetype-2.14.3.tar.xz/download 36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch harfbuzz-14.2.0.tar.gz https://github.com/harfbuzz/harfbuzz/archive/14.2.0/harfbuzz-14.2.0.tar.gz c652d5d94971031654ab3989891a490a895d3e3f2b71171c62692b28e94b1b93 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch plutovg-1.3.2.tar.gz https://github.com/sammycage/plutovg/archive/v1.3.2/plutovg-1.3.2.tar.gz 7bd4e79ce18b1d47517e7e91fbb7cf19d4f01942804a519bc7c0bf32b6325dd5 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch plutosvg-0.0.7.tar.gz https://github.com/sammycage/plutosvg/archive/v0.0.7/plutosvg-0.0.7.tar.gz 78561b571ac224030cdc450ca2986b4de915c2ba7616004a6d71a379bffd15f3 "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
-fetch rapidyaml-0.12.1-src.tgz https://github.com/biojppm/rapidyaml/releases/download/v0.12.1/rapidyaml-0.12.1-src.tgz e9efcdd17f86287748793cf21d106e461fcad8d103a3e5a23632afe93828660d "$ROOT/tools/metal-deps/src" "$ROOT/../fifa-street-native/tools/metal-deps/src"
+fetch lz4-1.10.0.tar.gz https://github.com/lz4/lz4/releases/download/v1.10.0/lz4-1.10.0.tar.gz 537512904744b35e232912055ccf8ec66d768639ff3abe5788d90d792ec5f48b "$ROOT/tools/metal-deps/src"
+fetch zstd-1.5.7.tar.gz https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3 "$ROOT/tools/metal-deps/src"
+fetch libpng-1.6.58.tar.xz https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz 28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775 "$ROOT/tools/metal-deps/src"
+fetch libjpeg-turbo-3.2.0.tar.gz https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.2.0/libjpeg-turbo-3.2.0.tar.gz 6f30092cef9fb839779646608f4ee14ae3cbac989c47fa05e841b0841f09878e "$ROOT/tools/metal-deps/src"
+fetch libwebp-1.6.0.tar.gz https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz e4ab7009bf0629fd11982d4c2aa83964cf244cffba7347ecd39019a9e38c4564 "$ROOT/tools/metal-deps/src"
+fetch SDL3-3.4.12.tar.gz https://libsdl.org/release/SDL3-3.4.12.tar.gz f07b958a9ac5020fb7a44cadb957f658b2149c3c8abb4f63145fac9303249db7 "$ROOT/tools/metal-deps/src"
+fetch freetype-2.14.3.tar.xz https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/freetype-2.14.3.tar.xz/download 36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f "$ROOT/tools/metal-deps/src"
+fetch harfbuzz-14.2.0.tar.gz https://github.com/harfbuzz/harfbuzz/archive/14.2.0/harfbuzz-14.2.0.tar.gz c652d5d94971031654ab3989891a490a895d3e3f2b71171c62692b28e94b1b93 "$ROOT/tools/metal-deps/src"
+fetch plutovg-1.3.2.tar.gz https://github.com/sammycage/plutovg/archive/v1.3.2/plutovg-1.3.2.tar.gz 7bd4e79ce18b1d47517e7e91fbb7cf19d4f01942804a519bc7c0bf32b6325dd5 "$ROOT/tools/metal-deps/src"
+fetch plutosvg-0.0.7.tar.gz https://github.com/sammycage/plutosvg/archive/v0.0.7/plutosvg-0.0.7.tar.gz 78561b571ac224030cdc450ca2986b4de915c2ba7616004a6d71a379bffd15f3 "$ROOT/tools/metal-deps/src"
+fetch rapidyaml-0.12.1-src.tgz https://github.com/biojppm/rapidyaml/releases/download/v0.12.1/rapidyaml-0.12.1-src.tgz e9efcdd17f86287748793cf21d106e461fcad8d103a3e5a23632afe93828660d "$ROOT/tools/metal-deps/src"
 
 extract lz4-1.10.0.tar.gz lz4-1.10.0
 cmake_install lz4 "$SRC/lz4-1.10.0/build/cmake" -DBUILD_SHARED_LIBS=OFF -DLZ4_BUILD_CLI=OFF -DLZ4_BUILD_LEGACY_LZ4C=OFF
