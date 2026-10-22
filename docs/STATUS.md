@@ -40,4 +40,4 @@ Measured: iOS and tvOS Simulators boot to the language screen at 50 presents/s (
 
 ### Embedded build efficiency
 
-- Build only what the GS bridge reaches from libPCSX2: vixl, DEV9, USB, ccc and DebugTools are compiled today but unused (about 40% of bridge CPU, inferred). If FullscreenUI/fonts and GameDatabase go too, freetype, harfbuzz, plutovg, plutosvg and rapidyaml can be dropped.
+- Deferred: trimming libPCSX2 for the bridge. vixl, ccc, DEV9, DebugTools and USB are 43% of a clean bridge's summed `.ninja_log` action time, but they are not dead: the arm64 `GSDrawScanlineCodeGenerator` includes VIXL, core sources (`Elfheader.cpp`, `Interpreter.cpp`) include ccc/SymbolGuardian headers, and GS startup calls ImGuiManager/FullscreenUI. With per-platform ccache a warm bridge rebuild takes about 9 s, so only cold builds would gain. DEV9 and USB alone remain a possible cut.
