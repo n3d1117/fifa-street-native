@@ -28,9 +28,9 @@ embedded_cmake_configure() {
       -DRX_BUILDING_LIBCXX=ON) expected_system="Darwin" ;;
     esac
   done
-  actual_system="$(sed -n 's/^CMAKE_SYSTEM_NAME:[^=]*=//p' "$build_dir/CMakeCache.txt" 2>/dev/null)"
-  actual_platform="$(sed -n 's/^RX_APPLE_PLATFORM:[^=]*=//p' "$build_dir/CMakeCache.txt" 2>/dev/null)"
-  actual_llvm="$(sed -n 's/^RX_LLVM:[^=]*=//p' "$build_dir/CMakeCache.txt" 2>/dev/null)"
+  actual_system="$(sed -n 's/^CMAKE_SYSTEM_NAME:[^=]*=//p' "$build_dir/CMakeCache.txt" 2>/dev/null || true)"
+  actual_platform="$(sed -n 's/^RX_APPLE_PLATFORM:[^=]*=//p' "$build_dir/CMakeCache.txt" 2>/dev/null || true)"
+  actual_llvm="$(sed -n 's/^RX_LLVM:[^=]*=//p' "$build_dir/CMakeCache.txt" 2>/dev/null || true)"
   if [[ -f "$build_dir/CMakeCache.txt" && -f "$stamp" && "$(<"$stamp")" == "$hash" &&
         ( -z "$actual_system" || "$actual_system" == "$expected_system" ) &&
         "$actual_platform" == "$platform" &&
