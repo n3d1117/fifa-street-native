@@ -1,3 +1,4 @@
+#include "autopilot.hpp"
 #include "app.hpp"
 #include "metal-host.hpp"
 #include "settings.hpp"
@@ -378,12 +379,14 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         ioPaths.mcRoot = memoryCardDirectory;
         PS2Runtime::setIoPaths(ioPaths);
 
+        bool bootMatchArmed = false;
         {
             // Diagnostic only: inert unless `./rx run --match` set PS2X_BOOT_MATCH.
             std::filesystem::path realUserDirectory;
             try { realUserDirectory = defaultUserDirectory(); } catch (const std::exception &) {}
-            ps2x_boot_match_install(runtime, elfPath, userDirectory, realUserDirectory);
+            bootMatchArmed = ps2x_boot_match_install(runtime, elfPath, userDirectory, realUserDirectory);
         }
+        ps2x_autopilot_install(runtime, elfPath, bootMatchArmed);
         ps2x_video_mode_install(runtime, elfPath, host::active_settings().videoMode);
         ps2x_poll_idle_install(runtime, elfPath);
         ps2x_ra_watch_install(runtime, elfPath);

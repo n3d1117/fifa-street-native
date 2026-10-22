@@ -17,6 +17,9 @@ constexpr auto kMaskLifetime = std::chrono::milliseconds(2500);
 
 std::atomic<uint32_t> s_keyMask{0};
 int s_fifo = -1;
+using InputProvider = uint32_t (*)();
+std::atomic<InputProvider> s_provider{nullptr};
+uint32_t s_fifoMask = 0;
 std::array<uint8_t, sizeof(uint32_t)> s_partial{};
 size_t s_partialSize = 0;
 std::chrono::steady_clock::time_point s_lastMessage{};
@@ -29,6 +32,7 @@ void closeFIFO() {
     }
     s_partialSize = 0;
     s_hasMessage = false;
+    s_fifoMask = 0;
     s_keyMask.store(0, std::memory_order_release);
 }
 
@@ -55,17 +59,22 @@ extern "C" void ps2x_diagnostic_input_configure(const char* path) {
     s_fifo = fd;
 }
 
+extern "C" void ps2x_diagnostic_input_set_provider(uint32_t (*provider)()) {
+    s_provider.store(provider, std::memory_order_release);
+}
+
 extern "C" void ps2x_diagnostic_input_poll() {
-    if (s_fifo < 0) return;
+    const auto provider = s_provider.load(std::memory_order_acquire);
+    if (s_fifo < 0 && !provider) return;
 
     size_t completed = 0;
-    while (completed < kMaxMessagesPerPoll) {
+    while (s_fifo >= 0 && completed < kMaxMessagesPerPoll) {
         const ssize_t count = read(s_fifo, s_partial.data() + s_partialSize,
                                    s_partial.size() - s_partialSize);
         if (count > 0) {
             s_partialSize += static_cast<size_t>(count);
             if (s_partialSize == s_partial.size()) {
-                s_keyMask.store(decodeLittleEndianMask(), std::memory_order_release);
+                s_fifoMask = decodeLittleEndianMask();
                 s_lastMessage = std::chrono::steady_clock::now();
                 s_hasMessage = true;
                 s_partialSize = 0;
@@ -78,9 +87,10 @@ extern "C" void ps2x_diagnostic_input_poll() {
     }
 
     if (s_hasMessage && std::chrono::steady_clock::now() - s_lastMessage >= kMaskLifetime) {
-        s_keyMask.store(0, std::memory_order_release);
+        s_fifoMask = 0;
         s_hasMessage = false;
     }
+    s_keyMask.store(s_fifoMask | (provider ? provider() : 0), std::memory_order_release);
 }
 
 extern "C" int ps2x_diagnostic_input_key_down(uint32_t key) {
@@ -89,5 +99,6 @@ extern "C" int ps2x_diagnostic_input_key_down(uint32_t key) {
 }
 
 extern "C" void ps2x_diagnostic_input_shutdown() {
+    s_provider.store(nullptr, std::memory_order_release);
     closeFIFO();
 }

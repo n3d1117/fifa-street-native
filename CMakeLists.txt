@@ -136,11 +136,11 @@ if(RX_EMBEDDED)
     # launcher.cpp compiles without its main(); ios-main.mm owns UIApplicationMain.
     list(APPEND RX_FILTERED_RUNNER_SOURCES "${RX_ROOT}/host/ios-main.mm")
 endif()
-list(APPEND RX_FILTERED_RUNNER_SOURCES "${RX_ROOT}/host/launcher.cpp" "${RX_ROOT}/host/boot-match.cpp"
+list(APPEND RX_FILTERED_RUNNER_SOURCES "${RX_ROOT}/host/launcher.cpp" "${RX_ROOT}/host/boot-match.cpp" "${RX_ROOT}/host/autopilot.cpp"
     "${RX_ROOT}/host/poll-idle.cpp" "${RX_ROOT}/host/cheats.cpp" "${RX_ROOT}/host/video-mode.cpp" "${RX_ROOT}/host/ra-watch.cpp")
 set_property(TARGET ps2EntryRunner PROPERTY SOURCES "${RX_FILTERED_RUNNER_SOURCES}")
 # The target lives in the ps2recomp directory: source properties must be set in its scope.
-set_source_files_properties("${RX_ROOT}/host/boot-match.cpp" "${RX_ROOT}/host/poll-idle.cpp"
+set_source_files_properties("${RX_ROOT}/host/autopilot.cpp" "${RX_ROOT}/host/boot-match.cpp" "${RX_ROOT}/host/poll-idle.cpp"
     "${RX_ROOT}/host/cheats.cpp" "${RX_ROOT}/host/video-mode.cpp" "${RX_ROOT}/host/ra-watch.cpp" TARGET_DIRECTORY ps2EntryRunner PROPERTIES
     SKIP_UNITY_BUILD_INCLUSION ON)
 set_source_files_properties("${RX_ROOT}/host/launcher.cpp" TARGET_DIRECTORY ps2EntryRunner PROPERTIES

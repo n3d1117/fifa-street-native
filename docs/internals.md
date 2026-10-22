@@ -44,6 +44,10 @@ Removing a config stub alone cannot restore guest execution: PS2Recomp also auto
 
 `PS2X_BOOT_MATCH=venue=5 ./rx run --match --seconds 120` selects Roma; an explicit venue is preserved by the probe. The `match-boot` route repeats Cross while the language screen remains visible because a single early press can be missed before pad polling begins.
 
+`PS2X_AUTOPILOT=match` requires an armed boot-match hook and drives the diagnostic input layer in-process: Cross for 80 ms every 2 s through language/front-end/intro, then keys 5,9,7,11,13,14 for 80 ms every 120 ms after confirmed play. `[autopilot] state=` logs transitions. No input provider is installed when unset.
+
+The opt-in HUD monitor (`PS2X_AUTOPILOT=match` or `PS2X_PERF_LOG=1`) wraps `0x271E30` and samples `float *(*(*0x47CDFC + 0x0C) + 0xC4)` on the game thread. That routine formats `%d:%.2d` for `SCOREBOX/CLOCKTEXT`; `0x1D4A60` advances the same seconds field by guest ticks × 1/60 unless `0x47E470` pauses it. All dependent retail words are verified. Two advances of at least half a guest second on the same bounded owner confirm gameplay; invalid/decreasing values reset observations. Confirmation stays latched through pauses/replays, as in the external probe. `autopilot` tests cover progression, reset, pulse boundaries and word mismatch refusal.
+
 ## VIF1 front end and op stream
 
 `PS2Memory::processVIF1Data` (`ps2_vif1_interpreter.cpp`) is split into a front end and a consumer. The front end parses commands and owns everything the EE can observe: VIF1 registers (including ROW, rewritten by STMOD 2/3 UNPACK), DBF/TOPS, stall and IRQ state, partial-command buffering, MSKPATH3 and the DIRECT continuation counters. It emits `Vif1Op`s in order: `Mpg`, `Unpack` (snapshot of CYCLE, MODE, MASK, ROW, COL plus payload), `Mscal`/`Mscnt` (start PC, TOP, ITOP), `Direct` (PATH2 bytes), `Path3Unmask`.

@@ -7,6 +7,7 @@
 // Inert without the variable, in the real save directory, or if any dependent guest
 // instruction word differs from the retail ELF.
 #include "boot-match.hpp"
+#include "autopilot.hpp"
 #include "elf-words.hpp"
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
@@ -58,6 +59,7 @@ void frontEndUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
     uint32_t setup = 0, slot = 0;
     std::memcpy(&setup, rdram + kGameSetupPtr, 4);
     std::memcpy(&slot, rdram + kResourceSlot, 4);
+    if (setup != 0 && slot != 0) ps2x_autopilot_front_end();
     if (!g_trigger.update(setup != 0 && slot != 0)) return;
     const uint32_t venue = static_cast<uint32_t>(g_config.venue);
     std::memcpy(rdram + setup + kVenueOffset, &venue, 4);
@@ -65,6 +67,7 @@ void frontEndUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
     // Side 1 (home) takes the first pad exactly as the Pick Sides handler (0x2E5B80) assigns it.
     callGuest(rdram, ctx, runtime, kSetControl, setup, 0, 0);
     callGuest(rdram, ctx, runtime, kPlaygame);
+    ps2x_autopilot_match_started();
 }
 
 }  // namespace
