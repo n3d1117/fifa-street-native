@@ -5,3 +5,4 @@
 // advances when no SDL audio device is available.
 bool ps2x_spu2_host_start();
 void ps2x_spu2_host_stop();
+void ps2x_spu2_host_pause(bool paused);

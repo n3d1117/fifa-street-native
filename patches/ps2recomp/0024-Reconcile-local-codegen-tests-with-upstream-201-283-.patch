@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:21:01 +0200
-Subject: [PATCH 24/95] Reconcile local codegen tests with upstream
+Subject: [PATCH 24/96] Reconcile local codegen tests with upstream
  #201/#283/#319 emission (QMTC2 text, LQ/SQ mask via READ128, LQC2 mmio rows)
 
 

@@ -18,6 +18,9 @@
 #include "diagnostic-input.hpp"
 #include "spu2-host.hpp"
 
+void ps2SetHostPaused(bool paused);
+void ps2WaitForHostPause();
+
 #include <memory>
 #include <span>
 #include <array>
@@ -36,6 +39,7 @@ CAMetalLayer* s_layer;
 RrvPcsx2GsBridgeSurface s_surface{};
 std::atomic_bool s_should_close{false};
 std::atomic_bool s_lifecycle_pending{false};
+std::atomic_bool s_guest_lifecycle_paused{false};
 std::atomic<uint32_t> s_resize_width{};
 std::atomic<uint32_t> s_resize_height{};
 std::atomic<float> s_resize_scale{1.0F};
@@ -196,11 +200,26 @@ extern "C" int ps2x_metal_host_start(const char*, uint32_t, uint32_t) {
             s_resignObserver = [[NSNotificationCenter defaultCenter]
                 addObserverForName:UIApplicationWillResignActiveNotification object:nil
                 queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification*) { ps2x_gamepad_set_active(0); }];
+                usingBlock:^(NSNotification*) {
+                    ps2x_gamepad_set_active(0);
+                    if (!s_guest_lifecycle_paused.exchange(true, std::memory_order_acq_rel)) {
+                        NSLog(@"[lifecycle] pausing guest for resign-active");
+                        ps2x_spu2_host_pause(true);
+                        ps2SetHostPaused(true);
+                        ps2WaitForHostPause();
+                    }
+                }];
             s_becomeObserver = [[NSNotificationCenter defaultCenter]
                 addObserverForName:UIApplicationDidBecomeActiveNotification object:nil
                 queue:[NSOperationQueue mainQueue]
-                usingBlock:^(NSNotification*) { ps2x_gamepad_set_active(1); }];
+                usingBlock:^(NSNotification*) {
+                    ps2x_gamepad_set_active(1);
+                    if (s_guest_lifecycle_paused.exchange(false, std::memory_order_acq_rel)) {
+                        ps2SetHostPaused(false);
+                        ps2x_spu2_host_pause(false);
+                        NSLog(@"[lifecycle] resumed guest after become-active");
+                    }
+                }];
             // SDL gamepad and diagnostic input are polled on main (as on macOS).
             s_inputTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 240.0 repeats:YES
                 block:^(NSTimer*) {

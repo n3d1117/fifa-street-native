@@ -17,7 +17,7 @@
 | Release polish | Package-time generated original icon, sectioned Settings window, launch alerts for missing or mismatched game data, and user setup/troubleshooting docs. `./rx package` audit clean; `./rx run --match --seconds 60` measured 50.0 gameplay FPS and 0 audio underruns. |
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
 | Unverified | Directional input response, memory-card saves, full Roma matches and additional teams, other venues/modes, NTSC startup/pacing under background load, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
-| Platforms | macOS arm64; iOS and tvOS arm64 app builds; iOS and tvOS Simulator launches reach the game’s language selection screen. |
+| Platforms | macOS arm64; iOS and tvOS arm64 app builds; iOS and tvOS Simulator launches reach the language screen and survive a background/resume cycle. |
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
 
@@ -30,13 +30,12 @@ Architecture and CPU-efficiency reviews.
 Measured: iOS and tvOS Simulators boot to the language screen at 50 presents/s (`./rx ipa --platform ios-sim|tvos-sim`). Unverified: real devices, controller input, gameplay, audio, saves, frame rate and thermals on device.
 
 1. First device boot (A12 or newer): title screen, then the first match. Check memory headroom (jetsam) against the 1.5 GB bundle.
-2. Lifecycle: pause emulation and audio in background; flush memory cards on resign-active; `AVAudioSession` interruptions.
-3. Frame pacing from `CADisplayLink` (`preferredFramesPerSecond` on SDK 14.5); tvOS 50 Hz output via `AVDisplayManager.preferredDisplayCriteria`; game NTSC/60 mode as the opt-in for 60 Hz panels.
-4. Precompile PCSX2 Metal shaders to a `.metallib` and prewarm `pipelines-fifa.txt` (optionally `MTLBinaryArchive`) so play has no compile stalls.
-5. Apple GPU paths from ARMSX2 (each needs a switch and A/B): skip PS2 Z floor on Apple GPUs, framebuffer-fetch ordering instead of barriers, iOS barrier rules, late-upload encoder fix.
-6. Small settings overlay (video mode, scale, rumble) usable with a controller; TV-safe layout on tvOS.
-7. Watch `ProcessInfo.thermalState`; degrade optional extras only, never guest timing.
-8. Real app icon for macOS, iOS and tvOS (today macOS uses the package-time generated placeholder from `tools/package/make-icon.m`; iOS/tvOS bundles have none; tvOS needs layered top-shelf/app images).
+2. Frame pacing from `CADisplayLink` (`preferredFramesPerSecond` on SDK 14.5); tvOS 50 Hz output via `AVDisplayManager.preferredDisplayCriteria`; game NTSC/60 mode as the opt-in for 60 Hz panels.
+3. Precompile PCSX2 Metal shaders to a `.metallib` and prewarm `pipelines-fifa.txt` (optionally `MTLBinaryArchive`) so play has no compile stalls.
+4. Apple GPU paths from ARMSX2 (each needs a switch and A/B): skip PS2 Z floor on Apple GPUs, framebuffer-fetch ordering instead of barriers, iOS barrier rules, late-upload encoder fix.
+5. Small settings overlay (video mode, scale, rumble) usable with a controller; TV-safe layout on tvOS.
+6. Watch `ProcessInfo.thermalState`; degrade optional extras only, never guest timing.
+7. Real app icon for macOS, iOS and tvOS (today macOS uses the package-time generated placeholder from `tools/package/make-icon.m`; iOS/tvOS bundles have none; tvOS needs layered top-shelf/app images).
 
 ### Embedded build efficiency
 

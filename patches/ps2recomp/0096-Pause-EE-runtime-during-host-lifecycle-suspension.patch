@@ -1,0 +1,263 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Thu, 22 Oct 2026 20:59:47 +0200
+Subject: [PATCH 96/96] Pause EE runtime during host lifecycle suspension
+
+
+diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
+index 0e85848cfd6ef4ac0c92d8c4e100528aaf08e61b..63ea10723788975601ec9c957e272584e522dce3 100644
+--- a/ps2xRuntime/include/ps2_runtime.h
++++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -18,6 +18,7 @@
+ #include <atomic>
+ #include <array>
+ #include <mutex>
++#include <condition_variable>
+ #include <filesystem>
+ #include <memory>
+ #include <unordered_map>
+@@ -46,6 +47,14 @@ class PS2IopTransport;
+ class EeScheduler;
+ struct EeEvent;
+ 
++// Host lifecycle pause. The scheduler applies this request at a guest-safe point.
++void ps2SetHostPaused(bool paused);
++bool ps2HostPauseRequested();
++void ps2WaitForHostPause();
++void ps2WaitForHostResume();
++void ps2SetHostPauseWake(std::condition_variable *wake);
++void ps2SetHostPausedAcknowledged(bool acknowledged);
++
+ inline constexpr uint32_t PS2_PATH_WATCH_ADDR = 0x01EFFFA0u;
+ inline constexpr uint32_t PS2_PATH_WATCH_BYTES = 0x200u;
+ 
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 1ba28df5006ef7df9e053f84f218a8657be4ab44..1c38c14a771ba9e33675d65ea96624e8475b37b5 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -2,6 +2,7 @@
+ #include "ps2x/iop/iop_subsystem.h"
+ #include "runtime/ps2_display_timing.h"
+ #include "runtime/ps2_host_arena.h"
++#include "Stubs/MemoryCard.h"
+ 
+ #include "ps2_log.h"
+ #include "../ps2_data_stream.h"
+@@ -64,6 +65,15 @@ namespace
+     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
+     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
+ 
++    struct WallClockState
++    {
++        const EeScheduler *owner = nullptr;
++        std::chrono::steady_clock::time_point start;
++        uint64_t baseCycle = 0u, lastCycle = 0u, sampledCycle = 0u;
++        uint32_t countdown = 0u;
++    };
++    thread_local WallClockState g_wallClock;
++
+     uint64_t vblankPeriodMicroseconds(uint64_t smode1)
+     {
+         const uint64_t defaultPeriodUs = ((smode1 >> 13u) & 0x3u) == 0x3u ? 20000u : 16667u;
+@@ -208,6 +218,7 @@ void EeScheduler::run()
+ {
+     assertExecutor();
+     m_running.store(true, std::memory_order_release);
++    ps2SetHostPauseWake(&m_eventCv);
+     static const bool includeIopServiceDeadline = [] {
+         const char *value = std::getenv("PS2X_EE_IOP_IDLE");
+         return !value || value[0] != '0' || value[1] != '\0';
+@@ -215,6 +226,26 @@ void EeScheduler::run()
+ 
+     while (!m_stopRequested.load(std::memory_order_acquire))
+     {
++        if (ps2HostPauseRequested())
++        {
++            ps2_stubs::flushMemoryCards();
++            m_runtime.memory().dataStream().barrier("host lifecycle pause");
++            const auto pausedAt = std::chrono::steady_clock::now();
++            ps2SetHostPausedAcknowledged(true);
++            std::fprintf(stderr, "[lifecycle] guest paused\n");
++            ps2WaitForHostResume();
++            ps2SetHostPausedAcknowledged(false);
++            const auto resumedAt = std::chrono::steady_clock::now();
++            const auto pausedFor = resumedAt - pausedAt;
++            {
++                std::lock_guard lock(m_eventMutex);
++                for (ScheduledEvent &event : m_deadlines)
++                    event.hostDeadline += pausedFor;
++            }
++            if (g_wallClock.owner == this)
++                g_wallClock.start += pausedFor;
++            std::fprintf(stderr, "[lifecycle] guest resumed\n");
++        }
+         processPendingEvents();
+         if (m_stopRequested.load(std::memory_order_acquire))
+         {
+@@ -420,6 +451,7 @@ void EeScheduler::run()
+ 
+     m_guestExecuting.store(false, std::memory_order_release);
+     m_running.store(false, std::memory_order_release);
++    ps2SetHostPauseWake(nullptr);
+     copyMainContextToRuntime();
+     publishSnapshot();
+ }
+@@ -491,14 +523,7 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+     uint64_t next = m_eeCycle + std::max<uint64_t>(1u, cycles);
+     if (wallClock)
+     {
+-        struct WallClockState
+-        {
+-            const EeScheduler *owner = nullptr;
+-            std::chrono::steady_clock::time_point start;
+-            uint64_t baseCycle = 0u, lastCycle = 0u, sampledCycle = 0u;
+-            uint32_t countdown = 0u;
+-        };
+-        static thread_local WallClockState wall;
++        WallClockState &wall = g_wallClock;
+         if (wall.owner != this || m_eeCycle < wall.lastCycle)
+         {
+             wall = {};
+@@ -2029,8 +2054,10 @@ void EeScheduler::processDueDeadlines()
+             {
+                 m_eventCv.wait_until(lock, pacingDeadline, [this]()
+                                      { return !m_events.empty() ||
+-                                              m_stopRequested.load(std::memory_order_acquire); });
+-                if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
++                                              m_stopRequested.load(std::memory_order_acquire) ||
++                                              ps2HostPauseRequested(); });
++                if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire) ||
++                    ps2HostPauseRequested())
+                 {
+                     updateNextDeadline();
+                     return;
+@@ -2244,7 +2271,8 @@ void EeScheduler::waitForEvent(uint64_t serviceCycles, std::chrono::steady_clock
+     if (m_deadlines.empty() && !hasTimerDeadline)
+     {
+         m_eventCv.wait(lock, [this]()
+-                       { return !m_events.empty() || m_stopRequested.load(std::memory_order_acquire); });
++                       { return !m_events.empty() || m_stopRequested.load(std::memory_order_acquire) ||
++                                ps2HostPauseRequested(); });
+         return;
+     }
+ 
+@@ -2276,7 +2304,8 @@ void EeScheduler::waitForEvent(uint64_t serviceCycles, std::chrono::steady_clock
+ 
+     const bool signaled = m_eventCv.wait_until(lock, hostDeadline, [this]()
+                                                { return !m_events.empty() ||
+-                                                        m_stopRequested.load(std::memory_order_acquire); });
++                                                        m_stopRequested.load(std::memory_order_acquire) ||
++                                                        ps2HostPauseRequested(); });
+     if (!signaled)
+     {
+         const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
+index 564d87381a934f57112782f7fc638c5c366a92fd..b7e4dc209e06ab6ab69ddfeb531a1cd530cd1085 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp
+@@ -1,6 +1,14 @@
+ #include "Common.h"
+ #include "MemoryCard.h"
+ 
++#include <cerrno>
++#include <cstdio>
++#if defined(_WIN32)
++#include <io.h>
++#else
++#include <unistd.h>
++#endif
++
+ namespace ps2_stubs
+ {
+     namespace
+@@ -509,6 +517,24 @@ namespace ps2_stubs
+         return snapshot;
+     }
+ 
++    void flushMemoryCards()
++    {
++        std::lock_guard<std::mutex> lock(g_mcStateMutex);
++        for (const auto &[fd, openFile] : g_mcFiles)
++        {
++            if (!openFile.file)
++                continue;
++            const int flushResult = std::fflush(openFile.file);
++#if defined(_WIN32)
++            const int syncResult = _commit(_fileno(openFile.file));
++#else
++            const int syncResult = ::fsync(::fileno(openFile.file));
++#endif
++            if (flushResult != 0 || syncResult != 0)
++                std::fprintf(stderr, "[memcard] flush failed fd=%d errno=%d\n", fd, errno);
++        }
++    }
++
+     void sceMcChangeThreadPriority(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         setReturnS32(ctx, 0);
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h
+index 2a71bb2cb5e285e3809a943d303791e13a8820eb..eb36044061a0c78411028f3f0a81ca74b72d0220 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.h
+@@ -37,6 +37,7 @@ namespace ps2_stubs
+     };
+ 
+     MemoryCardDebugSnapshot getMemoryCardDebugSnapshot();
++    void flushMemoryCards();
+     void sceMcChangeThreadPriority(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMcChdir(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+     void sceMcClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index 345818096e9e579313d49ff8c505371c21b3ae28..dbeef3084d7bbe6ceb794cf7436cbe2310415b3b 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -413,6 +413,49 @@ namespace
+ namespace
+ {
+     PS2HostConfig g_hostConfig;
++    std::atomic<bool> g_hostPaused{false};
++    std::atomic<bool> g_hostPausedAcknowledged{false};
++    std::mutex g_hostPauseMutex;
++    std::condition_variable g_hostPauseCv;
++    std::atomic<std::condition_variable *> g_hostPauseWake{nullptr};
++}
++
++void ps2SetHostPaused(bool paused)
++{
++    if (paused)
++        g_hostPausedAcknowledged.store(false, std::memory_order_release);
++    g_hostPaused.store(paused, std::memory_order_release);
++    g_hostPauseCv.notify_all();
++    if (auto *wake = g_hostPauseWake.load(std::memory_order_acquire))
++        wake->notify_all();
++}
++
++bool ps2HostPauseRequested()
++{
++    return g_hostPaused.load(std::memory_order_acquire);
++}
++
++void ps2WaitForHostPause()
++{
++    std::unique_lock lock(g_hostPauseMutex);
++    g_hostPauseCv.wait(lock, [] { return g_hostPausedAcknowledged.load(std::memory_order_acquire); });
++}
++
++void ps2WaitForHostResume()
++{
++    std::unique_lock lock(g_hostPauseMutex);
++    g_hostPauseCv.wait(lock, [] { return !g_hostPaused.load(std::memory_order_acquire); });
++}
++
++void ps2SetHostPauseWake(std::condition_variable *wake)
++{
++    g_hostPauseWake.store(wake, std::memory_order_release);
++}
++
++void ps2SetHostPausedAcknowledged(bool acknowledged)
++{
++    g_hostPausedAcknowledged.store(acknowledged, std::memory_order_release);
++    g_hostPauseCv.notify_all();
+ }
+ 
+ void ps2SetHostConfig(const PS2HostConfig &config)

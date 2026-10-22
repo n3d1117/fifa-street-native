@@ -409,6 +409,18 @@ bool ps2x_spu2_host_start() {
     return true;
 }
 
+void ps2x_spu2_host_pause(bool paused) {
+    if (!g_audio_stream)
+        return;
+    if (paused) {
+        SDL_PauseAudioStreamDevice(g_audio_stream);
+        SDL_ClearAudioStream(g_audio_stream);
+    } else {
+        SDL_ClearAudioStream(g_audio_stream);
+        SDL_ResumeAudioStreamDevice(g_audio_stream);
+    }
+}
+
 void ps2x_spu2_host_stop() {
     if (!g_spu2)
         return;
