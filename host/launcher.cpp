@@ -58,12 +58,20 @@ std::filesystem::path bundledGameElf()
 #endif
 
 // A GUI launch (LaunchServices) hands us /dev/null for stdout/stderr; keep the
-// runtime log in the user directory instead. Terminals and pipes are left alone.
+// runtime log in the user directory instead.
 void redirectLogsIfDetached(const std::filesystem::path &userDirectory)
 {
     struct stat devNull{}, err{};
-    if (stat("/dev/null", &devNull) != 0 || fstat(STDERR_FILENO, &err) != 0 ||
-        !S_ISCHR(err.st_mode) || err.st_rdev != devNull.st_rdev)
+#if TARGET_OS_IPHONE
+    const char* perf = std::getenv("PS2X_PERF_LOG");
+    const char* autopilot = std::getenv("PS2X_AUTOPILOT");
+    const bool requested = (perf && std::strcmp(perf, "1") == 0) ||
+        (autopilot && std::strcmp(autopilot, "match") == 0);
+#else
+    const bool requested = false;
+#endif
+    if (!requested && (stat("/dev/null", &devNull) != 0 || fstat(STDERR_FILENO, &err) != 0 ||
+        !S_ISCHR(err.st_mode) || err.st_rdev != devNull.st_rdev))
         return;
     std::error_code ec;
     const std::filesystem::path logs = userDirectory / "Logs";

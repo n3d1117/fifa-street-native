@@ -13,6 +13,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -420,6 +421,7 @@ def do_install(args):
         not args.force
         and prior.get("hash") == src_hash
         and prior.get("lean") == args.lean
+        and prior.get("udid") == udid
     ):
         print("installed app unchanged; skipped")
         return
@@ -430,6 +432,7 @@ def do_install(args):
         "lean": args.lean,
         "bundle": bundle,
         "source": str(app),
+        "udid": udid,
     }
     state_write(state)
     print(f"installed {bundle} ({'lean' if args.lean else 'full'})")
@@ -462,35 +465,36 @@ def do_push(args):
         )
     state = state_read()
     manifest = game_manifest(game)
-    previous = state.get("game_manifest", {})
     bundle = installed_bundle(
         udid, info_plist(app), state.get("install", {}).get("bundle")
     )
-    changed = [rel for rel, meta in manifest.items() if previous.get(rel) != meta]
-    for rel in changed:
-        pmd(
-            "apps",
-            "push",
-            bundle,
-            str(game / rel),
-            f"Documents/game/{rel}",
-            *global_device_args(udid),
-            timeout=180,
-        )
-    manifest_text = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-    mf = ROOT / "build/device/.rx-manifest.json"
-    mf.parent.mkdir(parents=True, exist_ok=True)
-    mf.write_bytes(manifest_text)
-    pmd(
-        "apps",
-        "push",
-        bundle,
-        str(mf),
-        "Documents/game/.rx-manifest.json",
-        *global_device_args(udid),
-        timeout=60,
+    target = {"udid": udid, "bundle": bundle}
+    previous = (
+        state.get("game_manifest", {})
+        if state.get("game_manifest_target") == target else {}
     )
+    changed = [rel for rel, meta in manifest.items() if previous.get(rel) != meta]
+    staging_root = ROOT / "build/device"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="data-", dir=staging_root) as temporary:
+        staged_game = Path(temporary) / "game"
+        staged_game.mkdir()
+        for rel in changed:
+            destination = staged_game / rel
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(game / rel, destination)
+            except OSError:
+                shutil.copy2(game / rel, destination)
+        (staged_game / ".rx-manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        )
+        pmd(
+            "apps", "push", bundle, str(staged_game), "Documents",
+            *global_device_args(udid), timeout=900,
+        )
     state["game_manifest"] = manifest
+    state["game_manifest_target"] = target
     state_write(state)
     print(f"pushed game data: {len(changed)} changed of {len(manifest)} files")
 
@@ -559,29 +563,38 @@ def summarize(run_dir):
         if (root / "native.log").exists()
         else ""
     )
+    launch_time = run_meta.get("launch_host_time")
+    summaries = [r for r in perf if r.get("type") == "summary" and "wall_time" in r]
+    if summaries and launch_time is not None:
+        fresh = [r for r in summaries if r["wall_time"] >= launch_time - 5]
+        if not fresh:
+            perf = []
+        summaries = fresh
+    offsets = [r["wall_time"] - r["t"] for r in summaries if "t" in r]
+    clock_offset = statistics.median(offsets) if offsets else None
+
+    def host_time(row):
+        for key in ("_host_time", "host_time", "timestamp"):
+            if isinstance(row.get(key), (int, float)):
+                return row[key]
+        if clock_offset is not None and isinstance(row.get("t"), (int, float)):
+            return row["t"] + clock_offset
+        return None
+
     confirmed = []
     for row in perf:
         if (
-            row.get("gameplay_confirmed")
+            row.get("gameplay") is True
+            or row.get("gameplay_confirmed")
             or row.get("event") in ("gameplay_confirmed", "gameplay-start")
             or row.get("type") in ("gameplay_confirmed", "gameplay-start")
         ):
-            raw = row.get(
-                "_host_time",
-                row.get("host_time", row.get("timestamp", row.get("t", 0))),
-            )
-            try:
-                raw = float(raw)
-                if "_host_time" in row or "host_time" in row or raw > 1e9:
-                    confirmed.append(raw)
-                elif run_meta.get("launch_host_time") is not None:
-                    confirmed.append(
-                        float(run_meta["launch_host_time"])
-                        + raw / (1e9 if raw > 1e12 else 1)
-                    )
-            except (TypeError, ValueError):
-                pass
+            when = host_time(row)
+            if when is not None and (launch_time is None or when >= launch_time):
+                confirmed.append(when)
     start = min(confirmed) if confirmed else None
+    if start is not None and launch_time is not None:
+        start = max(start, launch_time + run_meta.get("warmup_s", 0))
     fps_rows = [r for r in jsonl(root / "gpu.jsonl") if "_error" not in r]
     sys_rows = [r for r in jsonl(root / "sysmon.jsonl") if "_error" not in r]
     bat = [r for r in jsonl(root / "battery.jsonl") if "_error" not in r]
@@ -638,12 +651,13 @@ def summarize(run_dir):
     if thermal:
         out["thermal_state_max"] = max(thermal)
     numeric = {}
+    summary_numbers = {}
 
     def number_fields(obj, prefix=""):
         found = {}
         if isinstance(obj, dict):
             for key, value in obj.items():
-                if key in ("type", "timestamp", "t", "_host_time"):
+                if key in ("type", "timestamp", "t", "_host_time", "wall_time"):
                     continue
                 name = f"{prefix}.{key}" if prefix else str(key)
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -654,7 +668,7 @@ def summarize(run_dir):
 
     for row in perf:
         if row.get("type") == "summary":
-            numeric.update(number_fields(row))
+            summary_numbers.update(number_fields(row))
     frame_rows = [
         r
         for r in perf
@@ -665,6 +679,11 @@ def summarize(run_dir):
             if k not in ("timestamp", "t")
         )
     ]
+    if start is not None:
+        frame_rows = [
+            r for r in frame_rows
+            if host_time(r) is not None and host_time(r) >= start
+        ]
     for row in frame_rows:
         for k, v in number_fields(row).items():
             numeric.setdefault(k, []).append(v)
@@ -673,6 +692,8 @@ def summarize(run_dir):
             numeric[k] = {"mean": statistics.mean(vals), "p95": percentile(vals, 95)}
     if numeric:
         out["in_app_perf"] = numeric
+    if summary_numbers:
+        out["in_app_summary"] = summary_numbers
     (root / "summary.json").write_text(json.dumps(out, indent=2) + "\n")
     print_summary(out)
     return out
@@ -884,10 +905,12 @@ def do_run(args):
                 check=False,
             )
     env = [] if args.no_match else ["PS2X_BOOT_MATCH=venue=3", "PS2X_AUTOPILOT=match"]
-    env += ["PS2X_PERF_LOG=1", "PS2X_USER_DIR=rx-run"] + args.env
+    env += ["PS2X_PERF_LOG=1", f"PS2X_USER_DIR=rx-run-{stamp}"] + args.env
     launch = ["developer", "dvt", "launch", "--tunnel", udid]
     for e in env:
         launch += ["--env", e]
+    launch_monotonic = time.monotonic()
+    launch_host_time = time.time()
     result = pmd(*launch, bundle, timeout=60)
     match = re.search(r"pid\s+(\d+)", result.stdout, re.I)
     if not match:
@@ -896,8 +919,6 @@ def do_run(args):
         )
     pid = int(match.group(1))
     stop = threading.Event()
-    launch_monotonic = time.monotonic()
-    launch_host_time = time.time()
     (out / "run.json").write_text(
         json.dumps(
             {
@@ -943,6 +964,7 @@ def do_run(args):
                 f"pid={pid}",
                 "--choose",
                 "first",
+                "--keep-monitoring",
                 "--key",
                 "pid",
                 "--key",
@@ -1007,7 +1029,12 @@ def do_run(args):
     stop.set()
     for t in threads:
         t.join(timeout=5)
-    remote = "Library/Application Support/FIFAStreetPS2/Logs/native.log"
+    effective_env = dict(value.split("=", 1) for value in env)
+    user_name = effective_env.get("PS2X_USER_DIR")
+    remote = (
+        f"Documents/{user_name}/Logs/native.log" if user_name
+        else f"Library/Application Support/{info['CFBundleExecutable']}/Logs/native.log"
+    )
     pulled = pmd(
         "apps",
         "pull",
