@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>@RX_APP_EXECUTABLE@</string>
+    <key>CFBundleIdentifier</key><string>com.fifastreet.ps2native</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>@RX_APP_NAME@</string>
+    <key>CFBundleDisplayName</key><string>@RX_APP_NAME@</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>MinimumOSVersion</key><string>14.0</string>
+    <key>LSRequiresIPhoneOS</key><true/>
+    <key>UIDeviceFamily</key>
+    <array>@RX_IOS_DEVICE_FAMILY_XML@</array>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array><string>arm64</string></array>
+    <key>UIRequiresFullScreen</key><true/>
+    <key>UIStatusBarHidden</key><true/>
+    <key>UIViewControllerBasedStatusBarAppearance</key><true/>
+    <key>UILaunchScreen</key><dict/>
+    <key>GCSupportsControllerUserInteraction</key><true/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+    <key>UISupportedInterfaceOrientations~ipad</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+    </array>
+</dict>
+</plist>

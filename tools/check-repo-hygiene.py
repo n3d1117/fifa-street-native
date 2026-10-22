@@ -19,7 +19,7 @@ def main():
     names = [n.decode() for n in git(*command).split(b'\0') if n]
     allowed_roots = {'bridge', 'host', 'cmake', 'tests', 'patches', 'tools', 'toolchain', 'config', 'docs', '.githooks'}
     allowed_root_files = {'.gitignore', 'AGENTS.md', 'README.md', 'LICENSE', 'THIRD_PARTY.md', '.gitattributes', '.editorconfig', 'deps.lock', 'CMakeLists.txt', 'CMakePresets.json', 'requirements.txt', 'rx'}
-    allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml'}
+    allowed_extensions = {'.py', '.sh', '.m', '.mm', '.c', '.cc', '.cpp', '.cxx', '.h', '.hh', '.hpp', '.cmake', '.md', '.txt', '.patch', '.diff', '.json', '.toml', '.yml', '.in'}
     problems = []
     total = 0
     for name in names:

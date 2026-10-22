@@ -1,16 +1,33 @@
 # Native Cocoa/Metal host for the recompiled game plus its tests. The host
 # library and smoke runners exist only once the generated game sources do.
-set(RX_METAL_BRIDGE "${RX_ROOT}/build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
+# Embedded (iOS/tvOS) builds keep their dependencies per platform:
+# build/embedded/<RX_APPLE_PLATFORM>/..., SDL3 under tools/embedded/<platform>/prefix.
+if(RX_EMBEDDED)
+    if(NOT RX_APPLE_PLATFORM)
+        message(FATAL_ERROR "Set RX_APPLE_PLATFORM (see cmake/toolchain-llvm19-embedded.cmake)")
+    endif()
+    set(RX_DEPS_BUILD "${RX_ROOT}/build/embedded/${RX_APPLE_PLATFORM}")
+    set(RX_BRIDGE_DEFAULT "${RX_DEPS_BUILD}/metal-bridge/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib")
+    set(RX_SOUNDTOUCH_DEFAULT "${RX_DEPS_BUILD}/metal-bridge/3rdparty/soundtouch/libpcsx2-soundtouch.a")
+    set(RX_SPU2_DEFAULT "${RX_DEPS_BUILD}/spu2-backend/librrv_pcsx2_spu2.a")
+    set(RX_SDL3_DEFAULT "${RX_ROOT}/tools/embedded/${RX_APPLE_PLATFORM}/prefix")
+else()
+    set(RX_BRIDGE_DEFAULT "${RX_ROOT}/build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib")
+    set(RX_SOUNDTOUCH_DEFAULT "${RX_ROOT}/build/metal-bridge/pcsx2/3rdparty/soundtouch/libpcsx2-soundtouch.a")
+    set(RX_SPU2_DEFAULT "${RX_ROOT}/build/spu2-backend/librrv_pcsx2_spu2.a")
+    set(RX_SDL3_DEFAULT "${RX_ROOT}/tools/metal-deps/prefix")
+endif()
+set(RX_METAL_BRIDGE "${RX_BRIDGE_DEFAULT}"
     CACHE FILEPATH "Pinned PCSX2 GS bridge dylib")
 if(NOT EXISTS "${RX_METAL_BRIDGE}")
     message(FATAL_ERROR "Missing pinned PCSX2 Metal bridge: ${RX_METAL_BRIDGE}")
 endif()
-set(RX_SPU2_BACKEND "${RX_ROOT}/build/spu2-backend/librrv_pcsx2_spu2.a"
+set(RX_SPU2_BACKEND "${RX_SPU2_DEFAULT}"
     CACHE FILEPATH "Built pinned PCSX2 SPU2 static library")
 if(NOT EXISTS "${RX_SPU2_BACKEND}")
     message(FATAL_ERROR "Missing PCSX2 SPU2 backend; run tools/build-deps.sh: ${RX_SPU2_BACKEND}")
 endif()
-set(RX_SOUNDTOUCH_LIBRARY "${RX_ROOT}/build/metal-bridge/pcsx2/3rdparty/soundtouch/libpcsx2-soundtouch.a"
+set(RX_SOUNDTOUCH_LIBRARY "${RX_SOUNDTOUCH_DEFAULT}"
     CACHE FILEPATH "Built pinned PCSX2 SoundTouch static library")
 if(NOT EXISTS "${RX_SOUNDTOUCH_LIBRARY}")
     message(FATAL_ERROR "Missing pinned PCSX2 SoundTouch library: ${RX_SOUNDTOUCH_LIBRARY}")
@@ -19,11 +36,24 @@ set(RX_LIBCXX_INCLUDE "${RX_LLVM}/include/c++/v1")
 
 if(RX_GAME_READY)
     target_include_directories(ps2EntryRunner PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(RX_EMBEDDED)
+        set(RX_HOST_PLATFORM_SOURCES
+            "${CMAKE_CURRENT_SOURCE_DIR}/ios-host.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm")
+        set(RX_HOST_ARC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/ios-host.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm")
+        set(RX_HOST_MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ios-host.mm")
+    else()
+        set(RX_HOST_PLATFORM_SOURCES
+            "${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/keyboard-controls.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/settings-window.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm")
+        set(RX_HOST_ARC_SOURCES ${RX_HOST_PLATFORM_SOURCES})
+        set(RX_HOST_MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm")
+    endif()
     add_library(metalHost STATIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/keyboard-controls.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/settings-window.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm"
+        ${RX_HOST_PLATFORM_SOURCES}
         "${CMAKE_CURRENT_SOURCE_DIR}/diagnostic-input.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/spu2-host.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp")
@@ -38,26 +68,32 @@ if(RX_GAME_READY)
     target_compile_options(metalHost PRIVATE
         -stdlib=libc++ -nostdinc++ -isystem "${RX_LIBCXX_INCLUDE}")
     set_target_properties(metalHost PROPERTIES UNITY_BUILD OFF)
-    set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm" APPEND PROPERTY COMPILE_DEFINITIONS
+    set_property(SOURCE "${RX_HOST_MAIN_SOURCE}" APPEND PROPERTY COMPILE_DEFINITIONS
         "PS2X_APP_NAME=\"${RX_APP_NAME}\"")
-    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/metal-host.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/keyboard-controls.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/settings-window.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/settings.mm" PROPERTIES
+    set_source_files_properties(${RX_HOST_ARC_SOURCES} PROPERTIES
         COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp" PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/spu2-host.cpp" PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION ON SKIP_PRECOMPILE_HEADERS ON)
     target_link_options(metalHost PRIVATE -stdlib=libc++)
-    target_link_libraries(metalHost PUBLIC
-        "${RX_METAL_BRIDGE}"
-        "-framework AppKit" "-framework QuartzCore" "-framework Metal" "-framework CoreGraphics")
+    if(RX_EMBEDDED)
+        target_link_libraries(metalHost PUBLIC
+            "${RX_METAL_BRIDGE}"
+            "-framework UIKit" "-framework Foundation" "-framework QuartzCore" "-framework Metal"
+            "-framework CoreGraphics" "-framework AVFoundation" "-framework GameController"
+            "-framework CoreHaptics")
+    else()
+        target_link_libraries(metalHost PUBLIC
+            "${RX_METAL_BRIDGE}"
+            "-framework AppKit" "-framework QuartzCore" "-framework Metal" "-framework CoreGraphics")
+    endif()
     find_package(Threads REQUIRED)
     target_link_libraries(metalHost PRIVATE "${RX_SPU2_BACKEND}" Threads::Threads ps2_iop)
     target_link_libraries(metalHost PRIVATE "${RX_SOUNDTOUCH_LIBRARY}")
 endif()
 
+if(NOT RX_EMBEDDED)
 add_executable(audioStretcherTest
     "${RX_ROOT}/bridge/spu2/rrv_audio_stretcher.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/audio-stretcher-test.cpp")
@@ -70,18 +106,21 @@ target_compile_features(audioStretcherTest PRIVATE cxx_std_20)
 target_link_options(audioStretcherTest PRIVATE -stdlib=libc++)
 target_link_libraries(audioStretcherTest PRIVATE "${RX_SOUNDTOUCH_LIBRARY}")
 add_test(NAME audio_stretcher COMMAND audioStretcherTest)
+endif()
 
 if(RX_GAME_READY)
     target_link_libraries(ps2EntryRunner PRIVATE metalHost)
-    add_executable(metalHostSmoke "${CMAKE_CURRENT_SOURCE_DIR}/metal-host-smoke.cpp")
-    target_include_directories(metalHostSmoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_features(metalHostSmoke PRIVATE cxx_std_20)
-    target_link_options(metalHostSmoke PRIVATE -stdlib=libc++)
-    target_link_libraries(metalHostSmoke PRIVATE metalHost)
+    if(NOT RX_EMBEDDED)
+        add_executable(metalHostSmoke "${CMAKE_CURRENT_SOURCE_DIR}/metal-host-smoke.cpp")
+        target_include_directories(metalHostSmoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_features(metalHostSmoke PRIVATE cxx_std_20)
+        target_link_options(metalHostSmoke PRIVATE -stdlib=libc++)
+        target_link_libraries(metalHostSmoke PRIVATE metalHost)
+    endif()
 
     # SDL is used only for its Gamepad/Joystick subsystem; no SDL video or
     # raylib window backend is enabled.
-    set(RX_SDL3_PREFIX "${RX_ROOT}/tools/metal-deps/prefix" CACHE PATH
+    set(RX_SDL3_PREFIX "${RX_SDL3_DEFAULT}" CACHE PATH
         "Local SDL3 static dependency prefix")
     if(NOT EXISTS "${RX_SDL3_PREFIX}/lib/cmake/SDL3/SDL3Config.cmake")
         message(FATAL_ERROR "Missing pinned SDL3 package under ${RX_SDL3_PREFIX}")
@@ -107,30 +146,42 @@ if(RX_GAME_READY)
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON
         SKIP_PRECOMPILE_HEADERS ON)
 
-    # Standalone input smoke; it creates no SDL window or renderer.
-    add_executable(gamepadSmoke
-        "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-smoke.mm")
-    target_include_directories(gamepadSmoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_features(gamepadSmoke PRIVATE cxx_std_20)
-    target_compile_options(gamepadSmoke PRIVATE -stdlib=libc++ -nostdinc++
-        -isystem "${RX_LIBCXX_INCLUDE}")
-    target_link_options(gamepadSmoke PRIVATE -stdlib=libc++)
-    # Match the runner: its SDL entry points resolve from the GS bridge.
-    target_link_libraries(gamepadSmoke PRIVATE "${RX_METAL_BRIDGE}" SDL3::SDL3-static
-        compilerAvailability "-framework AppKit")
-    set_source_files_properties(
-        "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm"
-        "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-smoke.mm"
-        PROPERTIES COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON
-        SKIP_PRECOMPILE_HEADERS ON)
+    if(NOT RX_EMBEDDED)
+        # Standalone input smoke; it creates no SDL window or renderer.
+        add_executable(gamepadSmoke
+            "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-smoke.mm")
+        target_include_directories(gamepadSmoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_compile_features(gamepadSmoke PRIVATE cxx_std_20)
+        target_compile_options(gamepadSmoke PRIVATE -stdlib=libc++ -nostdinc++
+            -isystem "${RX_LIBCXX_INCLUDE}")
+        target_link_options(gamepadSmoke PRIVATE -stdlib=libc++)
+        # Match the runner: its SDL entry points resolve from the GS bridge.
+        target_link_libraries(gamepadSmoke PRIVATE "${RX_METAL_BRIDGE}" SDL3::SDL3-static
+            compilerAvailability "-framework AppKit")
+        set_source_files_properties(
+            "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-input.mm"
+            "${CMAKE_CURRENT_SOURCE_DIR}/gamepad-smoke.mm"
+            PROPERTIES COMPILE_OPTIONS "-fobjc-arc" SKIP_UNITY_BUILD_INCLUSION ON
+            SKIP_PRECOMPILE_HEADERS ON)
 
-    set_property(TARGET ps2EntryRunner APPEND PROPERTY INSTALL_RPATH
-        "@loader_path/../Frameworks" "@loader_path/../Resources/pcsx2-gs-bridge")
+    endif()
 
-    add_test(NAME metal_host_smoke COMMAND metalHostSmoke)
-    add_test(NAME gamepad_smoke COMMAND gamepadSmoke)
-    set_tests_properties(metal_host_smoke gamepad_smoke PROPERTIES LABELS gui)
+    if(RX_EMBEDDED)
+        # Flat bundle: <App>.app/Frameworks holds the bridge dylib.
+        target_link_options(ps2EntryRunner PRIVATE "-Wl,-rpath,@executable_path/Frameworks")
+    else()
+        set_property(TARGET ps2EntryRunner APPEND PROPERTY INSTALL_RPATH
+            "@loader_path/../Frameworks" "@loader_path/../Resources/pcsx2-gs-bridge")
+
+        add_test(NAME metal_host_smoke COMMAND metalHostSmoke)
+        add_test(NAME gamepad_smoke COMMAND gamepadSmoke)
+        set_tests_properties(metal_host_smoke gamepad_smoke PROPERTIES LABELS gui)
+    endif()
+endif()
+
+if(RX_EMBEDDED)
+    return()  # the remaining targets are macOS command-line tests
 endif()
 
 # Host unit tests that need neither a window nor a device.
