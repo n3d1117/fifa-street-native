@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#pragma once// GS calls shared by metal-host.mm (AppKit) and ios-host.mm (UIKit). Included
+#pragma once
+// GS calls shared by metal-host.mm (AppKit) and ios-host.mm (UIKit). Included
 // after the host's statics: s_view, s_layer, s_surface, s_lifecycle_pending and
 // the s_resize_* atomics. Nothing here touches AppKit or UIKit types.
 
