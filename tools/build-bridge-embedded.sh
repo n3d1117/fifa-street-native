@@ -2,7 +2,8 @@
 # Build PCSX2's Metal GS bridge, SoundTouch, and the SPU2 backend for one
 # embedded Apple platform.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
+export PWD="$ROOT"
 PLATFORM="${1:-}"
 case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;

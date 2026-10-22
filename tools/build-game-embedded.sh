@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+export PWD="$ROOT"
 PLATFORM="${1:-}"
 case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;

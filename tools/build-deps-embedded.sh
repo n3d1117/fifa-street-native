@@ -2,7 +2,8 @@
 # Build the static libraries linked by the native GS/SPU2 bridge for an Apple
 # embedded platform. All mutable sources and outputs stay in this worktree.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
+export PWD="$ROOT"
 PLATFORM="${1:-}"
 case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;
@@ -19,6 +20,10 @@ SRC="$BASE/src"
 PREFIX="$BASE/$PLATFORM/prefix"
 BUILD="$ROOT/build/embedded/$PLATFORM/deps"
 LOG="$ROOT/build/embedded/logs"
+CCACHE="$ROOT/tools/build/ccache/ccache"
+CCACHE_DIR="$ROOT/build/embedded/$PLATFORM/ccache"
+mkdir -p "$CCACHE_DIR"
+export CCACHE_DIR CCACHE_CONFIGPATH="$ROOT/cmake/ccache-settings.txt" CCACHE_MAXSIZE=2G
 mkdir -p "$SRC" "$PREFIX" "$BUILD" "$LOG"
 for tool in "$LLVM/bin/clang++" "$CMAKE" "$NINJA"; do
   [[ -x "$tool" ]] || { echo "Missing $tool" >&2; exit 2; }
@@ -98,7 +103,10 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
   for library in avcodec avformat avutil swscale swresample; do
     rm -f "lib$library/lib$library.a" "$FFMPEG_PREFIX/lib/lib$library.a"
   done
-  export CC="$LLVM/bin/clang" AR="$(xcrun --find ar)" NM="$(xcrun --find nm)"
+  export CC="$LLVM/bin/clang"
+  BUILD_CC="$CC"
+  if [[ -x "$CCACHE" ]]; then BUILD_CC="$CCACHE $CC"; fi
+  export AR="$(xcrun --find ar)" NM="$(xcrun --find nm)"
   export RANLIB="$(xcrun --find ranlib)" STRIP="$(xcrun --find strip)"
   export CFLAGS="--target=$TARGET $CPU_FLAG -isysroot $SDK $MIN_FLAG -ffile-prefix-map=$ROOT=."
   export ASFLAGS="$CFLAGS"
@@ -110,8 +118,8 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
     --disable-network --disable-autodetect --disable-x86asm --disable-encoders \
     --disable-muxers --disable-filters --disable-devices --enable-pic \
     2>&1 | tee "$LOG/$PLATFORM-ffmpeg-configure.log"
-  make -j"$NCPU" 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-build.log"
-  make install 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-install.log"
+  make -j"$NCPU" CC="$BUILD_CC" 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-build.log"
+  make install CC="$BUILD_CC" 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-install.log"
 )
 
 # Same hashes and source revisions as build_metal_deps() in build-deps.sh.

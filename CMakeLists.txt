@@ -11,7 +11,7 @@ if(IOS OR CMAKE_SYSTEM_NAME STREQUAL "tvOS")
     set(RX_EMBEDDED ON)
 endif()
 
-get_filename_component(RX_ROOT "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}" RX_ROOT)
 include("${RX_ROOT}/cmake/ccache.cmake")
 set(RX_PS2RECOMP_SOURCE_DIR "${RX_ROOT}/deps/ps2recomp")
 

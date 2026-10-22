@@ -1,0 +1,1 @@
+sloppiness = pch_defines,time_macros,include_file_mtime,include_file_ctime

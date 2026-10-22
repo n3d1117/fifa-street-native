@@ -1,7 +1,7 @@
 # Cross toolchain for the Apple embedded platforms used by the native bridge.
 # Select one with RX_APPLE_PLATFORM (iphonesimulator, iphoneos, appletvos,
 # appletvsimulator). Xcode 12.5.1 supplies the 14.5 SDKs and Darwin tools.
-get_filename_component(RX_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
+file(REAL_PATH "${CMAKE_CURRENT_LIST_DIR}/.." RX_ROOT)
 if(NOT RX_LLVM)
     if(DEFINED ENV{RX_LLVM} AND NOT "$ENV{RX_LLVM}" STREQUAL "")
         set(RX_LLVM "$ENV{RX_LLVM}")
@@ -76,6 +76,25 @@ set(CMAKE_C_COMPILER "${RX_LLVM}/bin/clang")
 set(CMAKE_CXX_COMPILER "${RX_LLVM}/bin/clang++")
 set(CMAKE_OBJC_COMPILER "${RX_LLVM}/bin/clang")
 set(CMAKE_OBJCXX_COMPILER "${RX_LLVM}/bin/clang++")
+set(_rx_pch_timestamp_flag "")
+find_program(RX_CCACHE ccache HINTS "${RX_ROOT}/tools/build/ccache")
+if(CMAKE_BINARY_DIR MATCHES "/CMakeFiles/CMakeScratch/TryCompile-")
+    # These throwaway compiler feature checks have unique source paths and
+    # cannot reuse entries across configure runs.
+    set(RX_CMAKE_TRY_COMPILE ON)
+endif()
+if(RX_CCACHE AND NOT RX_CMAKE_TRY_COMPILE)
+    set(_rx_pch_timestamp_flag " -Xclang -fno-pch-timestamp")
+    file(MAKE_DIRECTORY "${RX_ROOT}/build/embedded/${RX_APPLE_PLATFORM}/ccache")
+    set(_rx_cache_launcher "${CMAKE_COMMAND}" -E env
+        "CCACHE_DIR=${RX_ROOT}/build/embedded/${RX_APPLE_PLATFORM}/ccache"
+        "CCACHE_CONFIGPATH=${RX_ROOT}/cmake/ccache-settings.txt"
+        "CCACHE_MAXSIZE=2G"
+        "${RX_CCACHE}")
+    foreach(_lang IN ITEMS C CXX OBJC OBJCXX)
+        set(CMAKE_${_lang}_COMPILER_LAUNCHER "${_rx_cache_launcher}")
+    endforeach()
+endif()
 set(CMAKE_C_COMPILER_TARGET "${_rx_target}")
 set(CMAKE_CXX_COMPILER_TARGET "${_rx_target}")
 set(CMAKE_OBJC_COMPILER_TARGET "${_rx_target}")
@@ -105,10 +124,10 @@ if(NOT RX_BUILDING_LIBCXX)
 endif()
 set(_rx_common "--target=${_rx_target}${_rx_cpu} -isysroot ${CMAKE_OSX_SYSROOT}")
 set(_rx_prefix_map "-ffile-prefix-map=${RX_ROOT}=.")
-set(CMAKE_C_FLAGS_INIT "${_rx_common} ${_rx_prefix_map}")
-set(CMAKE_OBJC_FLAGS_INIT "${_rx_common} ${_rx_prefix_map}")
-set(CMAKE_CXX_FLAGS_INIT "${_rx_common} ${_rx_libcxx} ${_rx_prefix_map}")
-set(CMAKE_OBJCXX_FLAGS_INIT "${_rx_common} ${_rx_libcxx} ${_rx_prefix_map}")
+set(CMAKE_C_FLAGS_INIT "${_rx_common} ${_rx_prefix_map}${_rx_pch_timestamp_flag}")
+set(CMAKE_OBJC_FLAGS_INIT "${_rx_common} ${_rx_prefix_map}${_rx_pch_timestamp_flag}")
+set(CMAKE_CXX_FLAGS_INIT "${_rx_common} ${_rx_libcxx} ${_rx_prefix_map}${_rx_pch_timestamp_flag}")
+set(CMAKE_OBJCXX_FLAGS_INIT "${_rx_common} ${_rx_libcxx} ${_rx_prefix_map}${_rx_pch_timestamp_flag}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${_rx_common} ${_rx_link}")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${_rx_common} ${_rx_link}")
 set(CMAKE_MODULE_LINKER_FLAGS_INIT "${_rx_common} ${_rx_link}")

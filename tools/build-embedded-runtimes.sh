@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build LLVM 19 libc++/libc++abi for one Apple embedded platform.
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
+export PWD="$ROOT"
 PLATFORM="${1:-}"
 case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;
