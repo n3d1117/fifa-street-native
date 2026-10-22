@@ -120,6 +120,9 @@ void validateGameElf(const std::filesystem::path& elf)
 {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(elf, ec)) {
+#if TARGET_OS_IPHONE
+        throw std::runtime_error("Game data is missing. Copy your verified extracted disc files to Documents/game (including SLES_530.64), or install an app containing game/. Extract your own supported disc with ./rx disc <path-to-iso>.");
+#endif
         if (isBundledApp())
             throw std::runtime_error("Game data is missing. This app expects your verified game files at Contents/Resources/game/SLES_530.64 (game/SLES_530.64 on iOS and tvOS). Rebuild the app after running ./rx disc <path-to-iso>.");
         throw std::runtime_error("Game ELF is missing at " + elf.string() + ". Run ./rx disc <path-to-iso> to verify and extract your disc.");

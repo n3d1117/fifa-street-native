@@ -32,8 +32,13 @@ void* gameThreadMain(void*) {
 
 void startGameThread() {
     NSString* bundle = [[NSBundle mainBundle] bundlePath];
-    s_elfPath = std::string([bundle fileSystemRepresentation]) + "/game/" +
-        std::filesystem::path(PS2X_DEFAULT_BOOT_ELF).filename().string();
+    std::filesystem::path game = std::filesystem::path([bundle fileSystemRepresentation]) / "game";
+    if (!std::filesystem::is_directory(game)) {
+        NSURL* documents = [[NSFileManager defaultManager] URLForDirectory:NSDocumentDirectory
+            inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
+        game = std::filesystem::path([[documents path] fileSystemRepresentation]) / "game";
+    }
+    s_elfPath = (game / std::filesystem::path(PS2X_DEFAULT_BOOT_ELF).filename()).string();
     NSURL* support = [[NSFileManager defaultManager] URLForDirectory:NSApplicationSupportDirectory
         inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
     NSString* dir = [[support path] stringByAppendingPathComponent:@PS2X_APP_EXECUTABLE];
