@@ -97,6 +97,9 @@ def save_hash(support):
 def parse_log(text):
     """Derive every metric from lines the runtime already logs. Missing -> absent key."""
     out = {}
+    video_mode = re.findall(r"\[settings\] videoMode=(pal|ntsc)\b", text)
+    if video_mode:
+        out["video_mode"] = video_mode[-1]
     vu = re.findall(r"\[vu1rec\] \w+: .*?fallback=(\d+) ", text)
     if vu:
         out["vu_fallbacks"] = int(vu[-1])
@@ -862,6 +865,7 @@ def main():
             fps_game = sorted(play)[len(play) // 2]
     summary = {
         "reached": reached, "target": target, "seconds": elapsed,
+        "video_mode": metrics.get("video_mode"),
         "fps_game": fps_game,
         "fps_game_series": metrics.get("fps_game_series"),
         "gpu_presents_per_sec": metrics.get("gpu_presents_per_sec"),

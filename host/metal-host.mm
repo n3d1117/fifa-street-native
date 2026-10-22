@@ -160,6 +160,8 @@ extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t
         // The launcher normally configured settings already; this is a no-op then.
         host::configure_settings(nullptr);
         const host::Settings& settings = host::active_settings();
+        if (!std::getenv("RRV_PCSX2_GS_PRESENT_HZ"))
+            setenv("RRV_PCSX2_GS_PRESENT_HZ", settings.videoMode == host::VideoMode::NTSC ? "59.94" : "50", 0);
         ps2x_gamepad_set_rumble_settings(settings.rumble, static_cast<uint8_t>(settings.rumbleIntensity));
         s_game_aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? 16.0 / 9.0 : 4.0 / 3.0;
         keyboard_controls_configure(host::user_directory().empty() ? nullptr : host::user_directory().c_str());

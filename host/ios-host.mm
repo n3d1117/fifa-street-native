@@ -144,8 +144,8 @@ void configure_settings(const char* userDirectory) {
     Settings settings = load_settings_file(s_userDirectory);
     apply_env_overrides(settings, [](const char* name) -> const char* { return std::getenv(name); });
     s_active = settings;
-    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d uiUpscale=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
-                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.smoothUiTextures, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
+    std::fprintf(stderr, "[settings] videoMode=%s scale=%d anisotropy=%d sharp=%d uiUpscale=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
+                 settings.videoMode == VideoMode::NTSC ? "ntsc" : "pal", settings.renderScale, settings.anisotropy, settings.sharperImage, settings.smoothUiTextures, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
 }
 const Settings& active_settings() { return s_active; }
 const std::string& user_directory() { return s_userDirectory; }
@@ -162,6 +162,8 @@ extern "C" int ps2x_metal_host_start(const char*, uint32_t, uint32_t) {
     @autoreleasepool {
         host::configure_settings(nullptr);
         const host::Settings& settings = host::active_settings();
+        if (!std::getenv("RRV_PCSX2_GS_PRESENT_HZ"))
+            setenv("RRV_PCSX2_GS_PRESENT_HZ", settings.videoMode == host::VideoMode::NTSC ? "59.94" : "50", 0);
         ps2x_gamepad_set_rumble_settings(settings.rumble, static_cast<uint8_t>(settings.rumbleIntensity));
         ps2x_diagnostic_input_configure(std::getenv("PS2X_DIAGNOSTIC_INPUT_FIFO"));
         const char* aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? "16:9" :

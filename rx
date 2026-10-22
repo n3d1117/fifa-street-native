@@ -573,9 +573,12 @@ def cmd_run(args):
         if s["save_dir_changed"]:
             run.failed.append("save dir changed")
             run.notes.append("FAIL: the real save dir changed during the run")
-        if s.get("scene") == "match_play" and (s.get("fps_game") or 0) < 49.5:
-            run.failed.append("gameplay fps")  # measured: the match renders a new frame every PAL vsync
-            run.notes.append(f"FAIL: gameplay fps_game {s.get('fps_game')} (median of play windows) below 50")
+        if s.get("scene") == "match_play":
+            video_mode = s.get("video_mode", "ntsc")
+            minimum_fps = 49.5 if video_mode == "pal" else 58.5
+            if (s.get("fps_game") or 0) < minimum_fps:
+                run.failed.append("gameplay fps")  # measured: match renders one new frame per mode VBlank
+                run.notes.append(f"FAIL: gameplay fps_game {s.get('fps_game')} (median of play windows) below {minimum_fps:g} for {video_mode.upper()}")
         if s["audio_underruns"]:
             run.failed.append("audio underruns")
             run.notes.append(f"FAIL: {s['audio_underruns']} steady-state audio underruns")

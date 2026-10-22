@@ -4,7 +4,7 @@ Mechanisms, invariants and constants that the code relies on. Commands are in `A
 
 ## Timing invariants
 
-- PAL: VBlank 50 Hz. Movies are PTS-driven. Nothing may assume 59.94/60 Hz.
+- PAL mode: VBlank 50 Hz; NTSC mode: VBlank approximately 60 Hz. Movies are PTS-driven. Nothing may assume one video mode's cadence for another.
 - Guest clocks (EE, COP0 Count, IOP, SPU) are never changed and the game is never sped up to raise a frame rate.
 - Interactive hardware time follows the monotonic host clock. `PS2X_WALLCLOCK=0` selects deterministic estimated-cycle time instead. Estimated block costs never accelerate time.
 - Synchronous guest IOP RPCs must not advance the SPU timeline on top of the EE-issued IOP budget. The scheduler keeps an absolute issued target and credits work already executed; reset clears the target and the fractional 1:8 carry; the SPU epoch stays monotonic. With live host audio, outside-thread delay, semaphore and event-flag waits pace IOP progress against elapsed host time so a wait cannot overflow the output ring before EE accounting catches up. Without a playback device, pacing is disabled.
@@ -12,7 +12,7 @@ Mechanisms, invariants and constants that the code relies on. Commands are in `A
 - `EeScheduler::idlePoll` yields a guest poll loop to the earliest event (EE timer or IOP/SPU2 idle deadline); pending SPU2 IRQs invalidate the IOP bound and wall-clock sampling accounts slept time. Its one caller is the vblank poll below.
 - When every EE thread is blocked, `EeScheduler::run` also waits to the next IOP service deadline (using the same 1 ms wall-clock sample when the IOP cannot safely skip); omitting this deadline caused warm audio underruns during sound-heavy input. `PS2X_EE_IOP_IDLE=0` restores the old wait path.
 - iOS/tvOS lifecycle pause flushes open memory-card files and drains the GS data stream at an EE dispatch safe point. Resume shifts scheduled host deadlines and rebases the wall-clock EE epoch by the paused duration; SDL's CoreAudio backend owns AVAudioSession interruption handling.
-- Game frames, host presents and vsyncs are different metrics. FIFA Street never changes DISPFB, so DISPFB change rate is useless. `fps_game` in `./rx run` is the median of fully post-confirmation 5 s gameplay windows; `./rx run --match` fails below 49.5. It counts GS FRAME_1/2 writes that retarget a context onto the displayed (DISPFB) buffer (`m_game_frames` in `deps/pcsx2` GSState, logged as `[gs-game]` every 5 s). `gpu_presents_per_sec` is the vsync rate. The probe reports bridge presents, HUD-clock observations and approximate state-dump VBlank/EE progress separately. Route profiling starts after gameplay confirmation; a successful route finishes after its gameplay observation tail. Menu inputs wait for OCR scene labels; movie skip waits for `INTRO.MPC` to open, and match-intro Cross requires the Marseille title plus commentary data.
+- Game frames, host presents and vsyncs are different metrics. FIFA Street never changes DISPFB, so DISPFB change rate is useless. `fps_game` in `./rx run` is the median of fully post-confirmation 5 s gameplay windows; `./rx run --match` checks against 49.5 in PAL mode and 58.5 in NTSC mode. It counts GS FRAME_1/2 writes that retarget a context onto the displayed (DISPFB) buffer (`m_game_frames` in `deps/pcsx2` GSState, logged as `[gs-game]` every 5 s). `gpu_presents_per_sec` is the vsync rate. The probe reports bridge presents, HUD-clock observations and approximate state-dump VBlank/EE progress separately. Route profiling starts after gameplay confirmation; a successful route finishes after its gameplay observation tail. Menu inputs wait for OCR scene labels; movie skip waits for `INTRO.MPC` to open, and match-intro Cross requires the Marseille title plus commentary data.
 
 The PAL renderer constructor (`0x294178`) initializes selector `1` at owner + `0x44C` and width/height `512` at +`0x450`/+`0x454`. `host/video-mode.cpp` wraps that constructor only for Settings NTSC, preserves incoming `a0` across the original call, then sets selector `0` **and height `448`**. Every dependent constructor store and setup load/call is ELF-word verified before installing. PAL installs no wrapper. `0x295820/24/28` pass width, height and selector to `0x295218`; selector `0` reaches `0x3C4FD8` with OMode `2`, then `sceGsResetGraph` through `0x3C28BC`. Selector `1` selects OMode `3`. The game owns allocation, projection, movie timing and VBlank selection; guest clocks and instructions are unchanged.
 
@@ -105,7 +105,7 @@ VU0 runs interpreted. VU1 native code comes from disc-derived programs; the inte
 
 `tools/probe/probe.py` reads macOS `proc_pid_rusage` RUSAGE_INFO_V4 around the bounded run when available. `energy_per_s` is billed energy in nJ/s; `wakeups_per_s` is package-idle plus interrupt wakeups per second. Both are null when the API or either sample is unavailable. They are process counters, not whole-system power readings.
 
-One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `videoMode` (`pal` default or `ntsc`), `renderScale` (1..6, native by default), `anisotropy` (0, 2, 4, 8 or 16; off by default), `sharperImage`, `smoothUiTextures` (off by default), and `displayAspect` (`auto`, `4:3`, or `16:9`). Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
+One `host::Settings` struct (`host/settings.hpp`, defaults there) loads from `<user dir>/settings.plist`. Keys: `videoMode` (`ntsc` default or `pal`), `renderScale` (1..6, native by default), `anisotropy` (0, 2, 4, 8 or 16; off by default), `sharperImage`, `smoothUiTextures` (off by default), and `displayAspect` (`auto`, `4:3`, or `16:9`). Settings are applied at start; the window and settings UI are in `host/settings-window.mm`. The runtime receives host config through `PS2HostConfig`, not the environment. Keyboard bindings live in `keyboard.plist`.
 
 `host/metal-host.mm` derives bridge variables from `Settings`.
 
@@ -121,7 +121,7 @@ Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C`
 | `PS2X_POLL_IDLE=0` / `verify` | spin in the vblank poll / check its loop registers and wait context (never measure verify mode) |
 | `PS2X_EE_IOP_IDLE=0` | disable the IOP service deadline in the all-EE-threads-blocked wait path |
 | `PS2X_CHEAT_UNLOCK_VENUES=1` | the game's own venue cheat flag (Settings checkbox; off by default) |
-| `PS2X_VIDEO_MODE=pal\|ntsc` | original PAL 50 Hz / opt-in game NTSC 60 Hz with 448-line render height (Settings; restart to apply) |
+| `PS2X_VIDEO_MODE=pal\|ntsc` | original PAL 50 Hz / game's NTSC approximately 60 Hz mode with 448-line render height (Settings; restart to apply; NTSC is default) |
 | `PS2X_ASPECT=auto|4:3|16:9` | display aspect override (Settings menu; defaults to `auto`) |
 | `PS2X_UI_UPSCALE=0|1` | opt in to small paletted UI texture xBRZ scaling (Settings checkbox; off by default) |
 | `PS2X_SCALE=1..4`, `PS2X_ANISO=0|2|4|8|16`, `PS2X_SHARP=1` | override render scale, anisotropic filtering and sharpening for this process |
@@ -133,6 +133,7 @@ Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C`
 | `PS2X_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture |
 | `PS2X_AUDIO_STRETCH=1` | enable adaptive audio time stretching (off by default) |
 | `RRV_PCSX2_GS_PRESENT_MIN_US=<us>` | minimum interval between host presents (default 8000, 0 disables); frames closer than this are skipped so a burst of catch-up VBlanks cannot block the EE on `nextDrawable` |
+| `RRV_PCSX2_GS_PRESENT_HZ=50|59.94|60|120` | override host present pacing; otherwise each host passes the selected game's 50 Hz PAL or 59.94 Hz NTSC rate |
 | `RRV_PCSX2_GS_TEST_PRESENT_STALL_MS=<ms>` | inject one Metal present stall; the StreamRing watchdog excludes only this host drawable-acquisition interval |
 | `RRV_PCSX2_GS_PIPELINE_PREWARM=0` | disable recorded Metal pipeline pre-warm and automatic learning |
 | `RRV_PCSX2_GS_PIPELINE_RECORD=<path>` | record lazily created Metal pipeline keys to a file for coverage collection |

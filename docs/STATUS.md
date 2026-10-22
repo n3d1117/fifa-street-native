@@ -4,8 +4,8 @@
 
 | Area | State |
 |---|---|
-| Frame rate | Measured 50 game frames/s in default PAL and 60 in opt-in NTSC during confirmed play. `fps_game` is the median of fully post-confirmation 5 s windows (`./rx run --match --profile`). `--match` fails below 49.5. |
-| Video mode | Settings PAL 50 Hz (original, default) / NTSC 60 Hz; uses the game's selector with the matching render height. The selector-only black pitch is fixed. Confirmed Marseille play (`./rx run --match --seconds 60`): visible pitch, PAL 50.0 / NTSC 60.0 fps, HUD-clock slopes inferred from OCR of PAL 0.997 / NTSC 0.997–0.999 seconds/wall second, and zero audio underruns. Set `PS2X_VIDEO_MODE=ntsc` for the NTSC probe. Roma intro coverage is listed below. |
+| Frame rate | Measured 60.0 game frames/s and 60.0 presents/s in the default NTSC mode and 50.0/50.0 in opt-in PAL during confirmed play, zero audio underruns in two quiet NTSC runs (runs during a concurrent build underran; measure on an idle machine). `fps_game` is the median of fully post-confirmation 5 s windows (`./rx run --match --seconds 60`); `--match` checks 58.5 NTSC / 49.5 PAL. |
+| Video mode | NTSC 60 Hz (default) / PAL 50 Hz (original, opt-in); the host selects the game's own mode and supplies its 59.94/50 Hz rate to the Metal present pacer. NTSC uses selector 0 with the matching 448-line render height; the selector-only black pitch is fixed. Explicit `PS2X_VIDEO_MODE=pal` remains supported. iOS and tvOS Simulator builds reach the language screen; gameplay cadence is not measured by those boot runs. Roma intro coverage is listed below. |
 | CPU | Measured with `./rx run --match --profile`: GameThread about 0.43 cores plus worker about 0.49 cores. |
 | Audio | The all-EE-threads-blocked wait honors IOP service deadlines (`PS2X_EE_IOP_IDLE=0` restores the old path). Warm button-spam A/B: legacy wait 0 and 171 underruns; current path 0 and 0. Cold Metal cache: two pre-warmed runs had 0 underruns and 0 runtime pipeline compiles; the cold kill-switch run had 6,304 underruns and 98 runtime compiles. All measured 50.0 FPS. |
 | Graphics | PCSX2 upstream master; Metal renderer. Boot pre-warms 250 measured FIFA HW pipeline keys on the GS worker (Apple7 feature tag, PCSX2 pin checked by `./rx check`). Cold pre-warm was 1.51 s; warm was 10–11 ms. A three-pair unprofiled warm A/B measured 50.0 FPS median in both arms and median time-to-play of 25.780 s pre-warm vs 25.837 s control. Median CPU was +0.9%; estimated energy was +17% in this probe and varied in the two-pair profile probe. One candidate run had 217 underruns; the other two had zero. Disable with `RRV_PCSX2_GS_PIPELINE_PREWARM=0`. The dashed-texel grid is fixed upstream; user confirmation is pending. |
@@ -28,10 +28,10 @@ Architecture and CPU-efficiency reviews.
 
 ### iOS/tvOS next
 
-Measured: iOS and tvOS Simulators boot to the language screen at 50 presents/s (`./rx ipa --platform ios-sim|tvos-sim`). Unverified: real devices, controller input, gameplay, audio, saves, frame rate and thermals on device.
+Measured: iOS and tvOS Simulator builds render the language screen. Unverified: real devices, controller input, gameplay, audio, saves, frame rate and thermals on device.
 
 1. First device boot (A12 or newer): title screen, then the first match. Check memory headroom (jetsam) against the 1.5 GB bundle.
-2. Frame pacing from `CADisplayLink` (`preferredFramesPerSecond` on SDK 14.5); tvOS 50 Hz output via `AVDisplayManager.preferredDisplayCriteria`; game NTSC/60 mode as the opt-in for 60 Hz panels.
+2. Verify NTSC game and present cadence during a real device match; confirm the PAL opt-in still paces at 50 Hz.
 3. Precompile PCSX2 Metal shaders to a `.metallib` and prewarm `pipelines-fifa.txt` (optionally `MTLBinaryArchive`) so play has no compile stalls.
 4. Apple GPU paths from ARMSX2 (each needs a switch and A/B): skip PS2 Z floor on Apple GPUs, framebuffer-fetch ordering instead of barriers, iOS barrier rules, late-upload encoder fix.
 5. Small settings overlay (video mode, scale, rumble) usable with a controller; TV-safe layout on tvOS.

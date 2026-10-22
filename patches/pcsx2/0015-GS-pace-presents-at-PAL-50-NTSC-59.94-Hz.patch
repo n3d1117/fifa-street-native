@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Thu, 22 Oct 2026 21:10:53 +0200
+Subject: [PATCH 15/15] GS: pace presents at PAL 50 / NTSC 59.94 Hz
+
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index f08e03356589c14c7ee74fa8568896e1ae4e76ab..df156ce972f84bae93f240363f0e08f3d745e1eb 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -54,6 +54,8 @@
+ // frame earlier otherwise, re-anchors after a pause or a burst). Host-only:
+ // the guest never sees it. Measured on a 120 Hz display, v136: frames held for
+ // the wrong number of refreshes 3-21% -> 0-4%, at +6-9 ms display latency.
++// The host sets RRV_PCSX2_GS_PRESENT_HZ once from its selected game mode
++// (50 for PAL, 59.94 for NTSC); a pre-set value remains an explicit override.
+ // RRV_PCSX2_GS_PRESENT_PACING=0 turns it off; RRV_PCSX2_GS_PRESENT_MARGIN_US
+ // (default 2000) is the submit-to-target margin; RRV_PCSX2_GS_PRESENT_CREEP_US
+ // (default 2; 20 or 60 cut ~2-4 ms of latency but bring back 10-13% judder). RRV_PCSX2_GS_PRESENT_TRACE=<path> writes one line per present
+@@ -61,10 +63,10 @@
+ // drawable's on-screen time, 0 if it was never shown) at exit.
+ struct RrvPresentPacer
+ {
+-	static constexpr double kPeriod = 1001.0 / 60000.0;
++	static constexpr double kNtscPeriod = 1001.0 / 60000.0;
+ 	static constexpr size_t kTraceRows = 1u << 20;
+ 	bool configured = false, pace = true, have = false;
+-	double margin = 0.002, creep = 2e-6, target = 0.0, period = kPeriod;
++	double margin = 0.002, creep = 2e-6, target = 0.0, period = kNtscPeriod;
+ 	u64 presents = 0, late = 0, reanchors = 0;
+ 	std::string trace_path;
+ 	std::unique_ptr<double[]> submit, planned;
+@@ -74,10 +76,15 @@ void Configure()
+ 		if (configured)
+ 			return;
+ 		configured = true;
+-        // Match the opt-in guest cadence; the original pacer stays unchanged.
+-        if (const char* hz = std::getenv("RRV_PCSX2_GS_PRESENT_HZ"); hz &&
+-            (std::strcmp(hz, "60") == 0 || std::strcmp(hz, "120") == 0))
+-            period = 1.0 / std::strtod(hz, nullptr);
++		if (const char* hz = std::getenv("RRV_PCSX2_GS_PRESENT_HZ"); hz && hz[0])
++		{
++			if (std::strcmp(hz, "50") == 0)
++				period = 1.0 / 50.0;
++			else if (std::strcmp(hz, "59.94") == 0)
++				period = kNtscPeriod;
++			else if (std::strcmp(hz, "60") == 0 || std::strcmp(hz, "120") == 0)
++				period = 1.0 / std::strtod(hz, nullptr);
++		}
+ 
+ 		if (const char* v = std::getenv("RRV_PCSX2_GS_PRESENT_PACING"); v && v[0] == '0')
+ 			pace = false;
+@@ -92,8 +99,8 @@ void Configure()
+ 			planned = std::make_unique<double[]>(kTraceRows);
+ 			shown = std::make_unique<std::atomic<double>[]>(kTraceRows);
+ 		}
+-		std::fprintf(stderr, "[pcsx2-gs-bridge] present pacing=%d margin_us=%.0f trace=%s\n", pace ? 1 : 0,
+-			margin * 1e6, trace_path.empty() ? "off" : trace_path.c_str());
++		std::fprintf(stderr, "[pcsx2-gs-bridge] present pacing=%d period_us=%.3f margin_us=%.0f trace=%s\n", pace ? 1 : 0,
++			period * 1e6, margin * 1e6, trace_path.empty() ? "off" : trace_path.c_str());
+ 		static const bool at_exit = [] { std::atexit([] { Get().Write(); }); return true; }();
+ 		(void)at_exit;
+ 	}

@@ -14,7 +14,7 @@ enum class VideoMode { PAL, NTSC };
 enum class DisplayAspect { Auto, FourThree, SixteenNine };
 
 struct Settings {
-    VideoMode videoMode = VideoMode::PAL;
+    VideoMode videoMode = VideoMode::NTSC;
     int renderScale = 1;           // 1..6
     int anisotropy = 0;            // 0, 2, 4, 8 or 16
     bool sharperImage = false;

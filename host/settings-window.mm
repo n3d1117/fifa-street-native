@@ -103,10 +103,10 @@ void showWindowOnMain() {
     [modeLabel setFrame:NSMakeRect(22, 642, 210, 22)];
     [content addSubview:modeLabel];
     s_videoModePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 638, 248, 28) pullsDown:NO];
-    [s_videoModePopup addItemWithTitle:@"PAL 50 Hz (original, default)"];
-    [[s_videoModePopup lastItem] setTag:static_cast<NSInteger>(host::VideoMode::PAL)];
-    [s_videoModePopup addItemWithTitle:@"NTSC 60 Hz"];
+    [s_videoModePopup addItemWithTitle:@"NTSC 60 Hz (default)"];
     [[s_videoModePopup lastItem] setTag:static_cast<NSInteger>(host::VideoMode::NTSC)];
+    [s_videoModePopup addItemWithTitle:@"PAL 50 Hz (original)"];
+    [[s_videoModePopup lastItem] setTag:static_cast<NSInteger>(host::VideoMode::PAL)];
     [s_videoModePopup setTarget:s_actions];
     [s_videoModePopup setAction:@selector(videoModeChanged:)];
     [content addSubview:s_videoModePopup];
@@ -286,8 +286,8 @@ void configure_settings(const char* userDirectory) {
     apply_env_overrides(settings, [](const char* name) -> const char* { return std::getenv(name); });
     s_active = settings;
     s_pending = settings;
-    std::fprintf(stderr, "[settings] scale=%d anisotropy=%d sharp=%d uiUpscale=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
-                 settings.renderScale, settings.anisotropy, settings.sharperImage, settings.smoothUiTextures, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
+    std::fprintf(stderr, "[settings] videoMode=%s scale=%d anisotropy=%d sharp=%d uiUpscale=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
+                 settings.videoMode == VideoMode::NTSC ? "ntsc" : "pal", settings.renderScale, settings.anisotropy, settings.sharperImage, settings.smoothUiTextures, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
 }
 
 const Settings& active_settings() { return s_active; }

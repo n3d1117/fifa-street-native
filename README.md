@@ -31,13 +31,13 @@ cd fifa-street-native
 
 ## Play
 
-Open **FIFA Street PS2.app** from Applications. A supported PAL disc must be verified with `./rx disc` before packaging; the app bundle contains the extracted game data. If building from this checkout, `./rx disc <path-to-iso>`, `./rx build`, then `./rx package --install`.
+Open **FIFA Street PS2.app** from Applications. A supported PAL disc must be verified with `./rx disc` before packaging; the app bundle contains the extracted game data. If building from this checkout, `./rx disc <path-to-iso>`, `./rx build`, then `./rx package --install`. New settings files default to NTSC; an existing saved `videoMode=pal` setting remains PAL.
 
 Use a gamepad or the default keyboard bindings: arrows move; Cross X/Space, Circle C/Escape, Square Z/keypad 0, Triangle V/keypad 1, L1 Q, R1 W, L2 E, R2 R, Start Return, Select Tab. Open **Controls** from the app menu to view or rebind keys.
 
 Open **Settings** from the app menu, then Save and restart the game to apply changes:
 
-- Video mode: PAL 50 Hz (default) or the game's NTSC 60 Hz mode. Aspect: Auto (default), 4:3 or 16:9.
+- Video mode: the game's NTSC 60 Hz mode (default) or PAL 50 Hz (original). Aspect: Auto (default), 4:3 or 16:9.
 - Enhancements: internal scale 1× (default) to 6×; anisotropic filtering off by default; sharper image, FXAA and Smooth UI textures (xBRZ) off by default. These affect presentation; larger scales use more memory.
 - Controller: rumble off by default; intensity defaults to 100% and matters when rumble is enabled.
 - Cheats: unlock all venues off by default; enabling it sets the game's own venue cheat flag.

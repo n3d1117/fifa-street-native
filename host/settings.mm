@@ -68,7 +68,7 @@ Settings load_settings_file(const std::string& user_dir) {
         s.smoothUiTextures = flag(plist, @"smoothUiTextures");
         s.unlockAllVenues = flag(plist, @"unlockAllVenues");
         s.videoMode = [plist[@"videoMode"] isKindOfClass:[NSString class]] &&
-            [plist[@"videoMode"] isEqualToString:@"ntsc"] ? VideoMode::NTSC : VideoMode::PAL;
+            [plist[@"videoMode"] isEqualToString:@"pal"] ? VideoMode::PAL : VideoMode::NTSC;
         s.displayAspect = display_aspect(plist[@"displayAspect"]);
         if (const int scale = valid_render_scale(plist[@"renderScale"])) s.renderScale = scale;
         if (const int aniso = valid_anisotropy(plist[@"anisotropy"]); aniso >= 0) s.anisotropy = aniso;

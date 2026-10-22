@@ -27,6 +27,7 @@ int main() {
 
         // Missing file: defaults.
         assert(host::load_settings_file(dir) == Settings{});
+        assert(Settings{}.videoMode == host::VideoMode::NTSC);
 
         // Every field survives save -> load.
         Settings all;
@@ -101,8 +102,10 @@ int main() {
         }
         for (id value in @[@YES, @60, @[], @{}]) {
             assert([@{@"videoMode": value} writeToFile:path atomically:YES]);
-            assert(host::load_settings_file(dir).videoMode == host::VideoMode::PAL);
+            assert(host::load_settings_file(dir).videoMode == host::VideoMode::NTSC);
         }
+        assert([@{@"videoMode": @"pal"} writeToFile:path atomically:YES]);
+        assert(host::load_settings_file(dir).videoMode == host::VideoMode::PAL);
 
         [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
     }
