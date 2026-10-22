@@ -820,7 +820,9 @@ def cmd_where(args):
 
 def cmd_device(args):
     run = Run("device", args.verbose)
-    rc = run.sh([sys.executable, str(ROOT / "tools/device/device.py"), *args.device_args])
+    script = "report.py" if args.device_args[:1] == ["report"] else "device.py"
+    device_args = args.device_args[1:] if script == "report.py" else args.device_args
+    rc = run.sh([sys.executable, str(ROOT / "tools/device" / script), *device_args])
     message = run.last_message() if rc else None
     if rc not in (0, 1, 2):
         rc = 1
