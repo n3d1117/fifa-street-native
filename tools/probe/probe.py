@@ -601,7 +601,7 @@ def main():
     env.setdefault("RRV_PCSX2_GS_PIPELINE_MANIFEST", str(ROOT / "bridge/gs/pipelines-fifa.txt"))
     fifo_path = out / "input.fifo"
     if args.match:
-        env["PS2X_BOOT_MATCH"] = "venue=3"
+        env.setdefault("PS2X_BOOT_MATCH", "venue=3")
     else:
         env.pop("PS2X_BOOT_MATCH", None)
     if args.route:
