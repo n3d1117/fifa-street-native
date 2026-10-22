@@ -54,9 +54,16 @@ def main():
     device_id = device_matches[0]
     listed = run(["xcrun", "simctl", "list", "devices", "booted"], True)
     ids = re.findall(r"\(([0-9A-Fa-f-]{36})\) \(Booted\)", listed)
-    for device_id in ids:
-        run(["xcrun", "simctl", "shutdown", device_id])
-    run(["xcrun", "simctl", "boot", device_id])
+    for booted_id in ids:
+        run(["xcrun", "simctl", "shutdown", booted_id])
+    # simctl boot can exit 0 and leave the device shut down (Xcode 12.5.1, cold start); retry until listed as booted.
+    for _ in range(30):
+        subprocess.run(["xcrun", "simctl", "boot", device_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(1)
+        if re.search(re.escape(device_id) + r"\) \(Booted\)", run(["xcrun", "simctl", "list", "devices", "booted"], True)):
+            break
+    else:
+        raise RuntimeError(f"{device_name} simulator did not boot")
     simulator_app = Path(os.environ["DEVELOPER_DIR"]) / "Applications/Simulator.app"
     run(["open", "-a", simulator_app])
     run(["xcrun", "simctl", "bootstatus", device_id, "-b"])
