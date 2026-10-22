@@ -8,6 +8,8 @@
 #include "app.hpp"
 #include "ios-host.h"
 
+extern "C" void ps2x_show_error_alert(const char* message);
+
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -42,8 +44,22 @@ void startGameThread() {
     NSURL* support = [[NSFileManager defaultManager] URLForDirectory:NSApplicationSupportDirectory
         inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
     NSString* dir = [[support path] stringByAppendingPathComponent:@PS2X_APP_EXECUTABLE];
-    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES
-        attributes:nil error:nil];
+    if (const char* name = std::getenv("PS2X_USER_DIR"); name && *name) {
+        const std::filesystem::path relative(name);
+        if (relative.has_parent_path() || relative == "." || relative == "..") {
+            ps2x_show_error_alert("PS2X_USER_DIR must be a directory name within Documents.");
+            return;
+        }
+        NSURL* documents = [[NSFileManager defaultManager] URLForDirectory:NSDocumentDirectory
+            inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
+        dir = [[documents path] stringByAppendingPathComponent:[NSString stringWithUTF8String:name]];
+    }
+    NSError* directoryError = nil;
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES
+        attributes:nil error:&directoryError]) {
+        ps2x_show_error_alert([[directoryError localizedDescription] UTF8String]);
+        return;
+    }
     s_userDir = [dir fileSystemRepresentation];
 
     pthread_attr_t attr;
