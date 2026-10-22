@@ -16,7 +16,7 @@
 | Release polish | Package-time generated original icon, sectioned Settings window, launch alerts for missing or mismatched game data, and user setup/troubleshooting docs. `./rx package` audit clean; `./rx run --match --seconds 60` measured 50.0 gameplay FPS and 0 audio underruns. |
 | Replay | Post-goal REWIND sequences animate and return to live play (fixed in `af239cd`). |
 | Unverified | Directional input response, memory-card saves, other stadiums and modes, HBlank-gated EE timers (`docs/internals.md` faithfulness notes) |
-| Platforms | macOS arm64 |
+| Platforms | macOS arm64; iOS and tvOS arm64 app builds; iOS and tvOS Simulator launches reach the game’s language selection screen. |
 
 `./rx run` writes the current measurements to its summary; its fields and meanings are documented in `AGENTS.md` and `docs/internals.md`.
 
@@ -24,7 +24,7 @@
 
 Architecture and CPU-efficiency reviews.
 
-### iOS/tvOS build (future work)
+### Embedded build efficiency
 
 - ccache for the embedded libc++, deps, ffmpeg and GS bridge builds; only the game uses it today (`cmake/ccache.cmake`). Bridge alone is about 330 s CPU per platform uncached (`.ninja_log` under `build/embedded/<platform>/metal-bridge`).
 - Build ffmpeg with `--disable-everything` plus only the MPEG-2 video decoder, `mpegvideo` parser and swscale: the MPEG HLE (`ps2xRuntime/.../Stubs/MPEG.cpp`) uses nothing else and `FEMOVIES/*.MPC` are raw MPEG-2 elementary streams. Verify movie playback after.
