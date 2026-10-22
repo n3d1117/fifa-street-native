@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import plistlib
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -83,23 +82,25 @@ def main():
     stem = "ios" if args.platform == "iphonesimulator" else "tvos"
     screenshot = logs / f"{stem}-simulator.png"
     console = logs / f"{stem}-simulator-console.log"
+    native_log = logs / f"{stem}-simulator-native.log"
     screenshot.unlink(missing_ok=True)
-    with console.open("wb") as output:
-        process = subprocess.Popen(["xcrun", "simctl", "launch", "--console-pty", device_id, bundle],
-                                   stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+    console.unlink(missing_ok=True)
+    native_log.unlink(missing_ok=True)
+    launch = subprocess.run(["xcrun", "simctl", "launch", f"--stderr={native_log}", device_id, bundle],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    console.write_text(launch.stdout)
+    if launch.returncode != 0:
+        raise RuntimeError("simctl launch failed: " + launch.stdout.strip())
+    try:
         time.sleep(args.seconds)
-        capture = subprocess.run(["xcrun", "simctl", "io", "booted", "screenshot", str(screenshot)],
+        capture = subprocess.run(["xcrun", "simctl", "io", device_id, "screenshot", str(screenshot)],
                                  text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if capture.returncode != 0 or not screenshot.is_file():
             detail = (capture.stdout + capture.stderr).strip()
             raise RuntimeError("simctl screenshot failed: " + detail)
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
+    finally:
+        subprocess.run(["xcrun", "simctl", "terminate", device_id, bundle],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"screenshot={screenshot}")
     print(f"console={console}")
     print(f"data={data}")

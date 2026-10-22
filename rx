@@ -444,11 +444,24 @@ def cmd_check(args):
         run.must([sys.executable, "tools/check-repo-hygiene.py", mode], "hygiene")
         run.must([sys.executable, "tools/check-generated-includes.py"], "generated include boundary")
         manifest = ROOT / "bridge/gs/pipelines-fifa.txt"
-        manifest_pin = next((line.split("=", 1)[1] for line in manifest.read_text().splitlines() if line.startswith("# pcsx2-pin=")), None)
+        manifest_lines = manifest.read_text().splitlines()
+        manifest_pin = next((line.split("=", 1)[1] for line in manifest_lines if line.startswith("# pcsx2-pin=")), None)
         pcsx2_pin = next((line.split()[2] for line in (ROOT / "deps.lock").read_text().splitlines()
                           if line.split() and line.split()[0] == "pcsx2"), None)
         if manifest_pin != pcsx2_pin:
             raise Failed(f"FIFA Metal pipeline manifest pin {manifest_pin} differs from deps.lock PCSX2 pin {pcsx2_pin}; refresh the manifest")
+        feature_sections = [line for line in manifest_lines if line.startswith("# features=")]
+        if not feature_sections or any("family=" in line for line in feature_sections) or not any(
+                line.startswith("# family=") for line in manifest_lines):
+            raise Failed("FIFA Metal pipeline manifest must have feature-only sections and an informational family comment")
+        selectors_by_section = set()
+        for line in manifest_lines:
+            if line.startswith("# features="):
+                selectors_by_section = set()
+            elif line.startswith("vs="):
+                if line in selectors_by_section:
+                    raise Failed("FIFA Metal pipeline manifest contains duplicate selectors in a feature section")
+                selectors_by_section.add(line)
         if not args.tracked:
             staged = subprocess.run(["git", "diff", "--cached", "--name-only", "--", "patches"],
                                     capture_output=True, text=True).stdout.split()
