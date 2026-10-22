@@ -24,7 +24,7 @@ struct Settings {
     bool smoothUiTextures = false;
     bool wallClock = true;         // pace guest time from the host clock (PS2X_WALLCLOCK=0 turns it off)
     bool unlockAllVenues = false;  // cheat: raise the game's own venue cheat flag
-    DisplayAspect displayAspect = DisplayAspect::Auto;
+    DisplayAspect displayAspect = DisplayAspect::SixteenNine;
 
     friend bool operator==(const Settings&, const Settings&) = default;
 };

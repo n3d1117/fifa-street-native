@@ -2,16 +2,21 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
 
 namespace host::video {
 
-inline constexpr uint32_t kConstructor = 0x294178u;
-inline constexpr uint32_t kSelectorOffset = 0x44cu;
-inline constexpr uint32_t kHeightOffset = 0x454u;
+inline constexpr uint32_t kModeSetup = 0x295218u;
 
 struct Word { uint32_t address, value; };
 inline constexpr Word kExpected[] = {
+    {0x295218u, 0x27BDFF90u},
+    {0x29521Cu, 0x44866000u},
+    {0x295228u, 0x44876800u},
+    {0x295244u, 0x0080902Du},
+    {0x29524Cu, 0x00A0982Du},
+    {0x295258u, 0xAE460450u},
+    {0x29525Cu, 0xAE470454u},
+    {0x295264u, 0xAE53044Cu},
     {0x294178u, 0x27BDFFC0u}, // renderer constructor
     {0x294188u, 0x0080882Du}, // incoming a0 is the renderer owner
     {0x294268u, 0x24020200u}, // PAL dimensions: 512
@@ -36,15 +41,6 @@ bool verify(ReadWord readWord, uint32_t& failedAddress) {
         }
     }
     return true;
-}
-
-inline void selectNtsc(uint8_t* owner) {
-    // The PAL constructor leaves 512 lines even after selecting NTSC. Its wider
-    // NTSC GS allocation leaves the pitch with an invalid descriptor (TEX0 = -1).
-    // Pair the game's NTSC selector with the NTSC 448-line render height.
-    const uint32_t selector = 0, height = 448;
-    std::memcpy(owner + kSelectorOffset, &selector, sizeof(selector));
-    std::memcpy(owner + kHeightOffset, &height, sizeof(height));
 }
 
 } // namespace host::video

@@ -117,7 +117,7 @@ void showWindowOnMain() {
     [aspectLabel setFrame:NSMakeRect(22, 578, 210, 22)];
     [content addSubview:aspectLabel];
     s_displayAspectPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(250, 574, 248, 28) pullsDown:NO];
-    const char* aspectTitles[] = {"Auto (4:3; choose 16:9 for in-game widescreen)", "4:3", "16:9"};
+    const char* aspectTitles[] = {"Auto (GS mode)", "4:3", "16:9 (default)"};
     for (NSInteger aspect = 0; aspect < 3; ++aspect) {
         [s_displayAspectPopup addItemWithTitle:[NSString stringWithUTF8String:aspectTitles[aspect]]];
         [[s_displayAspectPopup lastItem] setTag:aspect];

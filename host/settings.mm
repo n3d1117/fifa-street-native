@@ -35,10 +35,11 @@ int valid_rumble_intensity(id value) {
     return level >= 25 && level <= 100 ? static_cast<int>(level) : -1;
 }
 DisplayAspect display_aspect(id value) {
-    if (![value isKindOfClass:[NSString class]]) return DisplayAspect::Auto;
+    if (![value isKindOfClass:[NSString class]]) return Settings{}.displayAspect;
     if ([value isEqualToString:@"4:3"]) return DisplayAspect::FourThree;
     if ([value isEqualToString:@"16:9"]) return DisplayAspect::SixteenNine;
-    return DisplayAspect::Auto;
+    if ([value isEqualToString:@"auto"]) return DisplayAspect::Auto;
+    return Settings{}.displayAspect;
 }
 NSString* display_aspect_name(DisplayAspect aspect) {
     switch (aspect) {

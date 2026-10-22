@@ -11,12 +11,12 @@
 #include <vector>
 
 namespace {
-PS2Runtime::RecompiledFunction g_constructor = nullptr;
+PS2Runtime::RecompiledFunction g_setup = nullptr;
 
-void rendererConstructor(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
-    const uint32_t owner = GPR_U32(ctx, 4);
-    g_constructor(rdram, ctx, runtime);
-    host::video::selectNtsc(rdram + owner);
+void rendererSetup(uint8_t* rdram, R5900Context* ctx, PS2Runtime* runtime) {
+    SET_GPR_U32(ctx, 5, 0);
+    SET_GPR_U32(ctx, 7, 448);
+    g_setup(rdram, ctx, runtime);
 }
 } // namespace
 
@@ -31,9 +31,9 @@ bool ps2x_video_mode_install(PS2Runtime& runtime, const std::filesystem::path& e
         std::fprintf(stderr, "[video-mode] refused: retail ELF mismatch at 0x%x\n", failedAddress);
         return false;
     }
-    g_constructor = runtime.lookupFunction(host::video::kConstructor);
-    if (!g_constructor || !runtime.replaceFunction(host::video::kConstructor, rendererConstructor)) {
-        std::fprintf(stderr, "[video-mode] refused: no generated renderer constructor\n");
+    g_setup = runtime.lookupFunction(host::video::kModeSetup);
+    if (!g_setup || !runtime.replaceFunction(host::video::kModeSetup, rendererSetup)) {
+        std::fprintf(stderr, "[video-mode] refused: no generated mode setup\n");
         return false;
     }
     std::fprintf(stderr, "[video-mode] NTSC: game's selector 0, render height 448\n");

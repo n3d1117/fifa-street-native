@@ -28,6 +28,15 @@ int main() {
         // Missing file: defaults.
         assert(host::load_settings_file(dir) == Settings{});
         assert(Settings{}.videoMode == host::VideoMode::NTSC);
+        assert(Settings{}.displayAspect == host::DisplayAspect::SixteenNine);
+        for (const char* aspect : {"auto", "4:3"}) {
+            Settings selected;
+            g_env = {{"PS2X_ASPECT", aspect}};
+            host::apply_env_overrides(selected, fake_env);
+            assert(selected.displayAspect == (std::string(aspect) == "auto" ? host::DisplayAspect::Auto : host::DisplayAspect::FourThree));
+            assert(host::save_settings_file(dir, selected));
+            assert(host::load_settings_file(dir) == selected);
+        }
 
         // Every field survives save -> load.
         Settings all;
