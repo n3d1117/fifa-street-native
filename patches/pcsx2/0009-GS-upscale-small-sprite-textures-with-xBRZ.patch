@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Thu, 22 Oct 2026 00:52:48 +0200
-Subject: [PATCH 9/9] GS: upscale small sprite textures with xBRZ
+Subject: [PATCH 09/10] GS: upscale small sprite textures with xBRZ
 
 Port PPSSPP's xBRZ scaler into the GS texture cache. Gate it behind the host UI-upscale setting and restrict it to small sprite textures at render scales above 1x. Include CLUT state in the cache key so palette changes invalidate scaled pixels.
 
