@@ -23,6 +23,7 @@ LOG="$ROOT/build/embedded/logs"
 CCACHE="$ROOT/tools/build/ccache/ccache"
 CCACHE_DIR="$ROOT/build/embedded/$PLATFORM/ccache"
 source "$ROOT/tools/embedded-cmake.sh"
+source "$ROOT/tools/ffmpeg-minimal-components.sh"
 mkdir -p "$CCACHE_DIR"
 export CCACHE_DIR CCACHE_CONFIGPATH="$ROOT/cmake/ccache-settings.txt" CCACHE_MAXSIZE=2G
 mkdir -p "$SRC" "$PREFIX" "$BUILD" "$LOG"
@@ -117,7 +118,7 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
     --arch=aarch64 --target-os=darwin --enable-cross-compile --cc="$CC" \
     --ar="$AR" --nm="$NM" --ranlib="$RANLIB" --strip="$STRIP" --sysroot="$SDK" \
     --disable-shared --enable-static --disable-programs --disable-doc --disable-debug \
-    --disable-network --disable-autodetect --disable-x86asm --disable-encoders \
+    --disable-network --disable-autodetect --disable-x86asm "${FFMPEG_COMPONENT_FLAGS[@]}" \
     --disable-muxers --disable-filters --disable-devices --enable-pic \
     2>&1 | tee "$LOG/$PLATFORM-ffmpeg-configure.log"
   make -j"$NCPU" CC="$BUILD_CC" 2>&1 | tee "$LOG/$PLATFORM-ffmpeg-build.log"

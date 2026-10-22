@@ -40,5 +40,4 @@ Measured: iOS and tvOS Simulators boot to the language screen at 50 presents/s (
 
 ### Embedded build efficiency
 
-- Build ffmpeg with `--disable-everything` plus only the MPEG-2 video decoder, `mpegvideo` parser and swscale: the MPEG HLE (`ps2xRuntime/.../Stubs/MPEG.cpp`) uses nothing else and `FEMOVIES/*.MPC` are raw MPEG-2 elementary streams. Verify movie playback after.
 - Build only what the GS bridge reaches from libPCSX2: vixl, DEV9, USB, ccc and DebugTools are compiled today but unused (about 40% of bridge CPU, inferred). If FullscreenUI/fonts and GameDatabase go too, freetype, harfbuzz, plutovg, plutosvg and rapidyaml can be dropped.

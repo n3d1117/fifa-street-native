@@ -7,6 +7,7 @@
 # Needs: toolchain/bootstrap.sh done (or RX_LLVM set), `python3 tools/deps.py sync` done.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/tools/ffmpeg-minimal-components.sh"
 LLVM="${RX_LLVM:-$ROOT/tools/build/llvm19}"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 CTEST="$(dirname "$CMAKE")/ctest"
@@ -62,7 +63,7 @@ build_ffmpeg() {
       --arch=aarch64 --target-os=darwin --enable-cross-compile \
       --cc="$CC" --ar="$AR" --nm="$NM" --ranlib="$RANLIB" --strip="$STRIP" --sysroot="$SDK" \
       --disable-shared --enable-static --disable-programs --disable-doc --disable-debug \
-      --disable-network --disable-autodetect --disable-x86asm --disable-encoders \
+      --disable-network --disable-autodetect --disable-x86asm "${FFMPEG_COMPONENT_FLAGS[@]}" \
       --disable-muxers --disable-filters --disable-devices --enable-pic \
       2>&1 | tee "$LOGS/ffmpeg-configure.log"
     make -j"$NCPU" V=1 2>&1 | tee "$LOGS/ffmpeg-build.log"
