@@ -699,6 +699,259 @@ def summarize(run_dir):
     return out
 
 
+def gameplay_rows(run_dir):
+    rows = []
+    for path in sorted((Path(run_dir) / "perf").glob("**/*.jsonl")):
+        rows.extend(r for r in jsonl(path) if isinstance(r, dict))
+    return [r for r in rows if r.get("type") != "summary" and r.get("gameplay") is True]
+
+
+def _metric_value(row, name):
+    """Find a numeric perf field, including fields nested by subsystem/thread."""
+    if name in row and isinstance(row[name], (int, float)) and not isinstance(row[name], bool):
+        return row[name]
+    found = []
+    def visit(value, path=""):
+        if not isinstance(value, dict):
+            return
+        for key, item in value.items():
+            current = f"{path}.{key}" if path else key
+            if (key == name or current.endswith("." + name)) and isinstance(item, (int, float)) and not isinstance(item, bool):
+                found.append(item)
+            elif isinstance(item, dict):
+                visit(item, current)
+    visit(row)
+    return found[-1] if found else None
+
+
+def _thread_cpu(row, thread):
+    values = []
+    def visit(value, path=""):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                here = f"{path}.{key}" if path else key
+                if key == "thread_cpu_s" and isinstance(item, dict):
+                    for name, seconds in item.items():
+                        if thread is None or name == thread:
+                            if isinstance(seconds, (int, float)):
+                                values.append(float(seconds))
+                elif key == "thread_cpu_s" and isinstance(item, (int, float)) and thread is None:
+                    values.append(float(item))
+                elif key in ("GameThread", "VU1GSWorker") and thread == key and isinstance(item, (int, float)):
+                    values.append(float(item))
+                elif isinstance(item, dict):
+                    visit(item, here)
+    visit(row)
+    return values[-1] if values else None
+
+
+def run_metrics(run_dir):
+    root = Path(run_dir)
+    rows = gameplay_rows(root)
+    metrics = {}
+    times = [v for r in rows for v in [_metric_value(r, "t")] if v is not None]
+    seconds = max(times) - min(times) if len(times) > 1 else 0.0
+    if rows and seconds > 0:
+        metrics["fps"] = len(rows) / seconds
+    frame_fields = {
+        "present_dt_ms": ("p50", "p95", "p99"), "cpu_game_ms": ("p50", "p95"),
+        "vu1_ms": ("p50", "p95"), "gs_submit_ms": ("p50",),
+        "gpu_ms": ("p50", "p95"), "present_wait_ms": ("p50",),
+    }
+    for field, quantiles in frame_fields.items():
+        vals = [v for r in rows for v in [_metric_value(r, field)] if v is not None]
+        for q in quantiles:
+            if vals:
+                metrics[f"{field}_{q}"] = percentile(vals, {"p50": 50, "p95": 95, "p99": 99}[q])
+    present = [v for r in rows for v in [_metric_value(r, "present_dt_ms")] if v is not None]
+    if present:
+        metrics["late_frames_over_18_pct"] = 100 * sum(v > 18 for v in present) / len(present)
+        metrics["late_frames_over_25_pct"] = 100 * sum(v > 25 for v in present) / len(present)
+    perf_rows = []
+    for path in sorted((root / "perf").glob("**/*.jsonl")):
+        perf_rows.extend(r for r in jsonl(path) if isinstance(r, dict))
+    summaries = sorted((r for r in perf_rows if r.get("type") == "summary"), key=lambda r: r.get("t", 0))
+    for field in ("audio_underruns", "pipeline_compiles"):
+        vals = [_metric_value(r, field) for r in rows]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            metrics[field + "_delta_gameplay"] = (sum(vals) if field == "pipeline_compiles" else vals[-1] - vals[0])
+        run_vals = [_metric_value(r, field) for r in summaries]
+        run_vals = [v for v in run_vals if v is not None]
+        if run_vals:
+            metrics[field + "_delta_run"] = run_vals[-1] - run_vals[0] if len(run_vals) > 1 else run_vals[-1]
+    if seconds > 0 and times and summaries:
+        start_t, end_t = min(times), max(times)
+        before = [r for r in summaries if r.get("t", float("inf")) <= start_t]
+        after = [r for r in summaries if r.get("t", float("-inf")) >= end_t]
+        first = before[-1] if before else min(summaries, key=lambda r: abs(r.get("t", start_t) - start_t))
+        last = after[0] if after else min(summaries, key=lambda r: abs(r.get("t", end_t) - end_t))
+        a, b = first.get("thread_cpu_s", {}), last.get("thread_cpu_s", {})
+        for thread, label in (("GameThread", "gamethread_cores"), ("VU1GSWorker", "vu1gsworker_cores")):
+            if isinstance(a, dict) and isinstance(b, dict) and thread in a and thread in b:
+                metrics[label] = (b[thread] - a[thread]) / seconds
+        if isinstance(a, dict) and isinstance(b, dict):
+            names = a.keys() & b.keys()
+            if names:
+                metrics["process_cores"] = sum(b[n] - a[n] for n in names) / seconds
+    summary = json.loads((root / "summary.json").read_text()) if (root / "summary.json").exists() else {}
+    if "thermal_state_max" in summary:
+        metrics["thermal_state_max"] = summary["thermal_state_max"]
+    bt = summary.get("battery_temperature", {})
+    if "delta" in bt:
+        metrics["battery_temp_delta_c"] = bt["delta"]
+    offsets = [r["wall_time"] - r["t"] for r in summaries if isinstance(r.get("wall_time"), (int, float)) and isinstance(r.get("t"), (int, float))]
+    if times and offsets:
+        start_host, end_host = min(times) + statistics.median(offsets), max(times) + statistics.median(offsets)
+        gpu_rows = [r for r in jsonl(root / "gpu.jsonl") if start_host <= r.get("_host_time", -1) <= end_host]
+        util = [r.get("Device Utilization %") for r in gpu_rows if isinstance(r.get("Device Utilization %"), (int, float))]
+        if util:
+            metrics["gpu_device_utilization_mean_pct"] = statistics.mean(util)
+        ca = [r.get("CoreAnimationFramesPerSecond") for r in gpu_rows if isinstance(r.get("CoreAnimationFramesPerSecond"), (int, float))]
+        if ca:
+            metrics["core_animation_fps_median"] = statistics.median(ca)
+            metrics["core_animation_fps_p5"] = percentile(ca, 5)
+        footprints = [r.get("physFootprint") for r in jsonl(root / "sysmon.jsonl")
+                      if start_host <= r.get("_host_time", -1) <= end_host and isinstance(r.get("physFootprint"), (int, float))]
+        if footprints:
+            metrics["phys_footprint_peak"] = max(footprints)
+    return metrics
+
+
+def aggregate_metrics(run_metrics_list):
+    keys = sorted(set().union(*(m.keys() for m in run_metrics_list))) if run_metrics_list else []
+    result = {}
+    for key in keys:
+        vals = [m[key] for m in run_metrics_list if key in m and isinstance(m[key], (int, float))]
+        if vals:
+            result[key] = statistics.median(vals)
+    return result
+
+
+def compare_metrics(control_runs, candidate_runs):
+    control, candidate = aggregate_metrics(control_runs), aggregate_metrics(candidate_runs)
+    common = sorted(control.keys() & candidate.keys())
+    table, verdicts = {}, {}
+    for key in common:
+        c, n = control[key], candidate[key]
+        vals = [m[key] for m in control_runs if key in m]
+        noise = max(vals) - min(vals) if vals else 0
+        delta = n - c
+        threshold = noise
+        higher_is_better = key == "fps" or key.startswith("core_animation_fps_")
+        verdict = "no-change" if abs(delta) <= threshold else ("better" if (delta > 0 if higher_is_better else delta < 0) else "worse")
+        table[key] = {"control": c, "candidate": n, "delta": delta,
+                      "delta_pct": (delta / c * 100) if c else None, "control_noise": noise}
+        verdicts[key] = verdict
+    return table, verdicts
+
+
+def abba_order(pairs):
+    return [arm for i in range(pairs) for arm in (("control", "candidate") if i % 2 == 0 else ("candidate", "control"))]
+
+
+def env_pairs(values):
+    env = {}
+    for value in values:
+        if "=" not in value or not value.split("=", 1)[0]:
+            raise Failed(f"environment override must be KEY=VALUE: {value}")
+        key, val = value.split("=", 1)
+        env[key] = val
+    return env
+
+
+def device_battery_temp(udid):
+    result = pmd("diagnostics", "battery", "single", *global_device_args(udid), timeout=15, check=False)
+    try:
+        obj = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    value = obj.get("Temperature", obj.get("VirtualTemperature"))
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def cooldown(udid, target, max_wait=180):
+    start = time.monotonic()
+    while True:
+        temp = device_battery_temp(udid)
+        waited = time.monotonic() - start
+        if temp is not None and target is not None and abs(temp - target) <= 1.0:
+            return {"seconds": waited, "temperature_c": temp, "target_c": target, "timed_out": False}
+        if waited >= max_wait:
+            return {"seconds": waited, "temperature_c": temp, "target_c": target, "timed_out": True}
+        time.sleep(min(10, max_wait - waited))
+
+
+def _battery_start(path):
+    vals = [r.get("Temperature", r.get("VirtualTemperature")) for r in jsonl(Path(path) / "battery.jsonl")]
+    vals = [v for v in vals if isinstance(v, (int, float))]
+    return vals[0] if vals else None
+
+
+def render_ab_text(data):
+    if data["kind"] == "baseline":
+        lines = [f"baseline: {data['label']} ({data['pairs']} runs)", f"{'Metric':<36} {'Median':>12}"]
+        lines.extend(f"{key:<36} {value:>12.3f}" for key, value in data["metrics"].items())
+        return "\n".join(lines) + "\n"
+    lines = [f"{data['kind']}: {data['label']} ({data['pairs']} runs)",
+             f"{'Metric':<36} {'Control':>10} {'Candidate':>10} {'Delta':>10} {'Delta%':>9} {'Noise':>10}"]
+    for key, row in data["metrics"].items():
+        pct = "n/a" if row["delta_pct"] is None else f"{row['delta_pct']:.1f}%"
+        lines.append(f"{key:<36} {row['control']:>10.3f} {row['candidate']:>10.3f} {row['delta']:>10.3f} {pct:>9} {row['control_noise']:>10.3f}")
+    verdict = ", ".join(f"{k}: {v}" for k, v in data["verdicts"].items()) or "no comparable metrics"
+    lines.extend(("Verdict: " + verdict, ""))
+    return "\n".join(lines)
+
+
+def run_experiment(args, kind):
+    runs = args.pairs if kind == "ab" else args.runs
+    if args.seconds < 1 or args.warmup < 0 or runs < 1:
+        raise Failed("runs/pairs and seconds must be positive, warmup non-negative")
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "-", args.label).strip("-") or "run"
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    ab_dir = ROOT / "build/device-ab" / f"{stamp}-{label}"
+    ab_dir.mkdir(parents=True, exist_ok=False)
+    udid = choose_udid(args.udid)
+    if kind == "ab":
+        arms = {"control": env_pairs(args.control), "candidate": env_pairs(args.candidate)}
+        order = abba_order(args.pairs)
+    else:
+        arms = {"baseline": env_pairs(args.env)}
+        order = ["baseline"] * args.runs
+    run_dirs, values, waits = [], {arm: [] for arm in arms}, []
+    first_temp = None
+    for index, arm in enumerate(order):
+        if index:
+            waits.append(cooldown(udid, first_temp))
+        run_args = argparse.Namespace(seconds=args.seconds, warmup=args.warmup,
+            label=f"{label}-{arm}-{index + 1:02d}",
+            env=[f"{k}={v}" for k, v in arms[arm].items()], no_match=False,
+            shots_every=0, app=None, udid=udid, _stamp=stamp)
+        run_dir = do_run(run_args)
+        if first_temp is None:
+            first_temp = _battery_start(run_dir)
+        run_dirs.append(str(run_dir.relative_to(ROOT)))
+        values[arm].append(run_metrics(run_dir))
+    if kind == "ab":
+        metrics, verdicts = compare_metrics(values["control"], values["candidate"])
+    else:
+        metrics, verdicts = aggregate_metrics(values["baseline"]), {}
+    data = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": kind, "label": label,
+            "control": arms.get("control", arms.get("baseline")), "candidate": arms.get("candidate"),
+            "pairs": args.pairs if kind == "ab" else args.runs, "seconds": args.seconds,
+            "warmup": args.warmup,
+            "git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                capture_output=True, text=True, check=False).stdout.strip(),
+            "metrics": metrics, "verdicts": verdicts, "run_dirs": run_dirs, "cooldowns": waits}
+    (ab_dir / "ab.json").write_text(json.dumps(data, indent=2) + "\n")
+    (ab_dir / "ab.txt").write_text(render_ab_text(data))
+    ledger = ROOT / "build/device-ab/ledger.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    with ledger.open("a") as f:
+        f.write(json.dumps(data, separators=(",", ":")) + "\n")
+    print((ab_dir / "ab.txt").read_text(), end="")
+
+
 def print_summary(data):
     print("Metric                         Value")
     print("------------------------------------")
@@ -869,6 +1122,7 @@ def do_run(args):
     bundle = installed_bundle(udid, info, state.get("install", {}).get("bundle"))
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     label = re.sub(r"[^A-Za-z0-9_.-]+", "-", args.label or "run").strip("-") or "run"
+    stamp = getattr(args, "_stamp", None) or stamp
     out = ROOT / "build/device-runs" / f"{stamp}-{label}"
     out.mkdir(parents=True, exist_ok=False)
     (out / "shots").mkdir()
@@ -1062,6 +1316,7 @@ def do_run(args):
     print(
         f"run: {out.relative_to(ROOT)}; pid {pid}; native.log {'pulled' if pulled.returncode==0 else 'unavailable'}"
     )
+    return out
 
 
 def do_compare(a, b):
@@ -1120,6 +1375,21 @@ def main(argv=None):
     c = sub.add_parser("compare")
     c.add_argument("runA")
     c.add_argument("runB")
+    ab = sub.add_parser("ab")
+    ab.add_argument("--control", action="append", required=True)
+    ab.add_argument("--candidate", action="append", required=True)
+    ab.add_argument("--pairs", type=int, required=True)
+    ab.add_argument("--seconds", type=int, required=True)
+    ab.add_argument("--label", required=True)
+    ab.add_argument("--warmup", type=float, default=0)
+    ab.add_argument("--udid")
+    baseline = sub.add_parser("baseline")
+    baseline.add_argument("--runs", type=int, required=True)
+    baseline.add_argument("--seconds", type=int, required=True)
+    baseline.add_argument("--label", required=True)
+    baseline.add_argument("--env", action="append", default=[])
+    baseline.add_argument("--warmup", type=float, default=0)
+    baseline.add_argument("--udid")
     args = ap.parse_args(argv)
     try:
         if args.sub == "doctor":
@@ -1134,6 +1404,8 @@ def main(argv=None):
             summarize(args.run_dir)
         elif args.sub == "compare":
             do_compare(args.runA, args.runB)
+        elif args.sub in ("ab", "baseline"):
+            run_experiment(args, args.sub)
         return 0
     except Missing as e:
         print(f"MISSING: {e}", file=sys.stderr)

@@ -13,6 +13,43 @@ import device
 
 
 class DeviceHarnessTests(unittest.TestCase):
+    def test_abba_order_and_control_noise_verdict(self):
+        self.assertEqual(device.abba_order(3), ["control", "candidate", "candidate", "control", "control", "candidate"])
+        table, verdicts = device.compare_metrics(
+            [{"fps": 50.0, "present_dt_ms_p50": 20.0}, {"fps": 51.0, "present_dt_ms_p50": 19.0}],
+            [{"fps": 55.0, "present_dt_ms_p50": 17.0}, {"fps": 55.0, "present_dt_ms_p50": 17.0}],
+        )
+        self.assertEqual(table["fps"]["control_noise"], 1.0)
+        self.assertEqual(verdicts, {"fps": "better", "present_dt_ms_p50": "better"})
+        _, stable = device.compare_metrics([{"fps": 50.0}, {"fps": 51.0}], [{"fps": 51.0}])
+        self.assertEqual(stable["fps"], "no-change")
+
+    def test_run_metrics_filters_frames_to_gameplay_window(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            perf = root / "perf"
+            perf.mkdir()
+            rows = [
+                {"t": 0, "gameplay": False, "present_dt_ms": 100, "audio_underruns": 0},
+                {"t": 1, "gameplay": True, "present_dt_ms": 16, "cpu_game_ms": 5,
+                 "vu1_ms": 2, "gs_submit_ms": 3, "gpu_ms": 4, "present_wait_ms": 1,
+                 "audio_underruns": 1, "pipeline_compiles": 2},
+                {"t": 2, "gameplay": True, "present_dt_ms": 20, "cpu_game_ms": 7,
+                 "vu1_ms": 4, "gs_submit_ms": 5, "gpu_ms": 6, "present_wait_ms": 2,
+                 "audio_underruns": 3, "pipeline_compiles": 1},
+                {"t": 3, "type": "summary", "thread_cpu_s": {"GameThread": 2, "VU1GSWorker": 1}},
+                {"t": 4, "type": "summary", "thread_cpu_s": {"GameThread": 4, "VU1GSWorker": 2},
+                 "audio_underruns": 4, "pipeline_compiles": 5},
+            ]
+            (perf / "frames.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            metrics = device.run_metrics(root)
+        self.assertEqual(metrics["fps"], 2.0)
+        self.assertEqual(metrics["present_dt_ms_p50"], 18.0)
+        self.assertEqual(metrics["late_frames_over_18_pct"], 50.0)
+        self.assertEqual(metrics["audio_underruns_delta_gameplay"], 2)
+        self.assertEqual(metrics["audio_underruns_delta_run"], 4)
+        self.assertEqual(metrics["pipeline_compiles_delta_gameplay"], 3)
+
     def test_profile_selection_matches_identity_and_udid(self):
         now = dt.datetime.now(dt.timezone.utc)
         identity = "A" * 40
