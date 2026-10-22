@@ -82,7 +82,9 @@ void update_surface_size() {
 - (void)loadView {
     Ps2xMetalView* view = [[Ps2xMetalView alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     [view setBackgroundColor:[UIColor blackColor]];
+#if TARGET_OS_IOS
     [view setMultipleTouchEnabled:NO];
+#endif
     CAMetalLayer* layer = (CAMetalLayer*)[view layer];
     [layer setPixelFormat:MTLPixelFormatBGRA8Unorm];
     [layer setFramebufferOnly:YES];
