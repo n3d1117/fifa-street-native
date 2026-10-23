@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 19:53:47 +0200
-Subject: [PATCH 52/99] Kernel: SetupHeap(-1) and EndOfHeap end the heap at the
- main thread's stack bottom; SIF RPC packet pool base set by the host (default
- kept for fixtures)
+Subject: [PATCH 052/100] Kernel: SetupHeap(-1) and EndOfHeap end the heap at
+ the main thread's stack bottom; SIF RPC packet pool base set by the host
+ (default kept for fixtures)
 
 The game's malloc asks for all memory up to 0x1FEC000 and sbrk fails against EndOfHeap, which was a fixed 0x1F00000; the failed malloc returned NULL and EA's allocator then handed out memory from address 0 (.text, then .data), memset to 0xCC55CC55.
 

@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:56:00 +0200
-Subject: [PATCH 59/99] Loadfile client HLE: _lf_bind (bound, no server needed)
- and sceSifSearchModuleByName (by the IRX's embedded IOPMOD name); IOP modules
- record their embedded names
+Subject: [PATCH 059/100] Loadfile client HLE: _lf_bind (bound, no server
+ needed) and sceSifSearchModuleByName (by the IRX's embedded IOPMOD name); IOP
+ modules record their embedded names
 
 Identity: _lf_bind@0x44A588 sits 0x190 before sceSifLoadFileReset@0x44A718 as in the Tarzan port and is in ps2_analyzer's SDK 2.8.0 database; 0x44A958 calls _lf_bind then CallRpc function 9 (search module by name).
 

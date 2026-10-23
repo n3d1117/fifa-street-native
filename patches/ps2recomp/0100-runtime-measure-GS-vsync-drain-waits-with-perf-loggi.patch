@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Fri, 23 Oct 2026 08:03:21 +0200
+Subject: [PATCH 100/100] runtime: measure GS vsync drain waits with perf
+ logging
+
+Keep the drain and all guest ordering unchanged. Under PS2X_PERF_LOG, record cumulative GameThread drain wall time and whether prior worker work remains before queuing vsync, for per-present telemetry.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_perf.h b/ps2xRuntime/include/runtime/ps2_perf.h
+index 884b85630f2410f89d5a5b8d278c29d88b9ab070..57554d285296bc2c1d6e3815365f6f8d199150b9 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf.h
++++ b/ps2xRuntime/include/runtime/ps2_perf.h
+@@ -7,9 +7,13 @@ struct Ps2PerfSnapshot
+ {
+     double vu1_seconds = 0.0;
+     uint64_t vu_fallbacks = 0;
++    double drain_wait_seconds = 0.0;
++    uint64_t vsync_drains = 0;
++    uint64_t vsync_worker_busy = 0;
+ };
+ 
+ Ps2PerfSnapshot ps2GetPerfSnapshot();
+ void ps2PublishPerfSnapshot();
++void ps2RecordVsyncDrain(double seconds, bool workerBusy);
+ 
+ #endif
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.cpp b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+index efba67b0d6162d390790d43ef4e6b88ba342fd93..f091e4ddd0dd6f7146a3413ca0ab59b85f1ffb20 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.cpp
++++ b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+@@ -6,6 +6,7 @@
+ #include "runtime/ps2_perf.h"
+ #include "ThreadNaming.h"
+ 
++#include <chrono>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -386,9 +387,20 @@ void DataStream::gsVsync(uint64_t tick)
+                    bridgeCsr ? 1u : 0u};
+     if (deferred())
+     {
++        const bool workerBusy = m_perfEnabled && !m_ring->idle();
+         m_ring->push(OpGsVsync, tick, &args, sizeof(args));
+         m_ring->publish();
+-        m_ring->drain("GS vsync");
++        if (m_perfEnabled)
++        {
++            const auto start = std::chrono::steady_clock::now();
++            m_ring->drain("GS vsync");
++            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
++            ps2RecordVsyncDrain(seconds, workerBusy);
++        }
++        else
++        {
++            m_ring->drain("GS vsync");
++        }
+     }
+     else
+     {
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index b1f66e1ecf476c0b7d84694f3ffee0e11ff42769..e66bc1f90c42cc0b5891cabaa41c1f1f3a130476 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -118,6 +118,9 @@ namespace
+ {
+     std::atomic<double> g_perfVu1Seconds{0.0};
+     std::atomic<uint64_t> g_perfVuFallbacks{0};
++    std::atomic<double> g_perfDrainWaitSeconds{0.0};
++    std::atomic<uint64_t> g_perfVsyncDrains{0};
++    std::atomic<uint64_t> g_perfVsyncWorkerBusy{0};
+ 
+     Vu1NativeDispatcher &vu1NativeDispatcher()
+     {
+@@ -619,7 +622,19 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+ Ps2PerfSnapshot ps2GetPerfSnapshot()
+ {
+     return {g_perfVu1Seconds.load(std::memory_order_acquire),
+-            g_perfVuFallbacks.load(std::memory_order_acquire)};
++            g_perfVuFallbacks.load(std::memory_order_acquire),
++            g_perfDrainWaitSeconds.load(std::memory_order_acquire),
++            g_perfVsyncDrains.load(std::memory_order_acquire),
++            g_perfVsyncWorkerBusy.load(std::memory_order_acquire)};
++}
++
++void ps2RecordVsyncDrain(double seconds, bool workerBusy)
++{
++    g_perfDrainWaitSeconds.store(g_perfDrainWaitSeconds.load(std::memory_order_relaxed) + seconds,
++                                 std::memory_order_release);
++    g_perfVsyncDrains.fetch_add(1, std::memory_order_release);
++    if (workerBusy)
++        g_perfVsyncWorkerBusy.fetch_add(1, std::memory_order_release);
+ }
+ 
+ void ps2PublishPerfSnapshot()

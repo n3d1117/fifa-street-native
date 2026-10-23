@@ -1,8 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 18:24:44 +0200
-Subject: [PATCH 49/99] CD: sceCdCallback records the EE callback; a successful
- sceCdRead completes through it after returning (EA's file layer waits on it)
+Subject: [PATCH 049/100] CD: sceCdCallback records the EE callback; a
+ successful sceCdRead completes through it after returning (EA's file layer
+ waits on it)
 
 
 diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h

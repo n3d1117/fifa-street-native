@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 17:54:46 +0200
-Subject: [PATCH 90/99] Pad: DualShock 2 shoulder pressure bytes are L1, R1,
+Subject: [PATCH 090/100] Pad: DualShock 2 shoulder pressure bytes are L1, R1,
  L2, R2
 
 Bytes 17/18 carried L2 and R1 swapped, so games that read shoulder buttons by

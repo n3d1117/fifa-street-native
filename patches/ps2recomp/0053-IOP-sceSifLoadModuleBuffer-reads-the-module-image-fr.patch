@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:05:22 +0200
-Subject: [PATCH 53/99] IOP: sceSifLoadModuleBuffer reads the module image from
- IOP RAM (where AllocIopHeap + SifSetDma put it), not EE RDRAM; tag by IOP
- bytes; PS2X_TRACE_RPC logs loads
+Subject: [PATCH 053/100] IOP: sceSifLoadModuleBuffer reads the module image
+ from IOP RAM (where AllocIopHeap + SifSetDma put it), not EE RDRAM; tag by
+ IOP bytes; PS2X_TRACE_RPC logs loads
 
 
 diff --git a/ps2xIOP/include/ps2x/iop/iop_subsystem.h b/ps2xIOP/include/ps2x/iop/iop_subsystem.h

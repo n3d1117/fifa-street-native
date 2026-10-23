@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 17:08:24 +0200
-Subject: [PATCH 44/99] Neutral names for the Metal host seam and debug knobs;
- drop Tarzan-only traces
+Subject: [PATCH 044/100] Neutral names for the Metal host seam and debug
+ knobs; drop Tarzan-only traces
 
 TARZAN_USE_METAL -> PS2X_USE_METAL, tarzan_metal_*/tarzan_gamepad_* ->
 ps2x_metal_*/ps2x_gamepad_*, TARZAN_TRACE_* -> PS2X_TRACE_*, the FFmpeg hint

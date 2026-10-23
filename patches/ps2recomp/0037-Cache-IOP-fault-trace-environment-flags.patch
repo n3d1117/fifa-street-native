@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 23:43:04 +0200
-Subject: [PATCH 37/99] Cache IOP fault trace environment flags
+Subject: [PATCH 037/100] Cache IOP fault trace environment flags
 
 
 diff --git a/ps2xIOP/src/emulator/core/iop_cpu.cpp b/ps2xIOP/src/emulator/core/iop_cpu.cpp

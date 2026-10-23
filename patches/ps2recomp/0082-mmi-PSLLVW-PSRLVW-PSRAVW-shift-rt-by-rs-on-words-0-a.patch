@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 16:25:44 +0200
-Subject: [PATCH 82/99] mmi: PSLLVW/PSRLVW/PSRAVW shift rt by rs on words 0 and
- 2 with 64-bit sign-extended results; PADDUH/PSUBUH saturate unsigned (PCSX2
- MMI.cpp semantics)
+Subject: [PATCH 082/100] mmi: PSLLVW/PSRLVW/PSRAVW shift rt by rs on words 0
+ and 2 with 64-bit sign-extended results; PADDUH/PSUBUH saturate unsigned
+ (PCSX2 MMI.cpp semantics)
 
 
 diff --git a/ps2xRecomp/src/lib/mmi_translation_helpers.cpp b/ps2xRecomp/src/lib/mmi_translation_helpers.cpp

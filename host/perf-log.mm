@@ -40,8 +40,8 @@ double threadCpu(thread_t thread) {
 }
 struct Row {
     RrvPcsx2GsPerfFrame gs;
-    double cpu = -1, vu1 = 0, submit = 0;
-    uint64_t underruns = 0, fallbacks = 0;
+    double cpu = -1, vu1 = 0, submit = 0, drainWait = 0;
+    uint64_t underruns = 0, fallbacks = 0, vsyncDrains = 0, vsyncWorkerBusy = 0;
     bool gameplay = false;
 };
 struct PerfLog {
@@ -52,7 +52,8 @@ struct PerfLog {
     std::thread writer;
     std::atomic<bool> running{true};
     std::atomic<thread_t> gameThread{MACH_PORT_NULL};
-    double previousCpu = -1, previousVu = 0, previousSubmit = 0;
+    double previousCpu = -1, previousVu = 0, previousSubmit = 0, previousDrainWait = 0;
+    uint64_t previousVsyncDrains = 0, previousVsyncWorkerBusy = 0;
     uint64_t dropped = 0;
     FILE* file = nullptr;
     bool (*gameplay)() = nullptr;
@@ -143,6 +144,8 @@ struct PerfLog {
                         @"tex_upload_bytes": @(f.tex_upload_bytes), @"readbacks": @(f.readbacks),
                         @"pipeline_compiles": @(f.pipeline_compiles), @"vu1_ms": @(row.vu1),
                         @"gs_submit_ms": @(row.submit), @"present_wait_ms": @(f.present_wait_ms),
+                        @"drain_wait_ms": @(row.drainWait), @"vsync_drains": @(row.vsyncDrains),
+                        @"vsync_worker_busy": @(row.vsyncWorkerBusy),
                         @"audio_underruns": @(row.underruns)});
                     lastCompiles += f.pipeline_compiles;
                     lastFallbacks = row.fallbacks;
@@ -196,6 +199,12 @@ struct PerfLog {
         previousVu = runtime.vu1_seconds;
         row.submit = std::max(0.0, submit - previousSubmit) * 1000;
         previousSubmit = submit;
+        row.drainWait = std::max(0.0, runtime.drain_wait_seconds - previousDrainWait) * 1000;
+        previousDrainWait = runtime.drain_wait_seconds;
+        row.vsyncDrains = runtime.vsync_drains - previousVsyncDrains;
+        previousVsyncDrains = runtime.vsync_drains;
+        row.vsyncWorkerBusy = runtime.vsync_worker_busy - previousVsyncWorkerBusy;
+        previousVsyncWorkerBusy = runtime.vsync_worker_busy;
         row.fallbacks = runtime.vu_fallbacks;
         if (inFlight.size() < 8192) inFlight.emplace(frame.game_frame, row);
         else ++dropped;

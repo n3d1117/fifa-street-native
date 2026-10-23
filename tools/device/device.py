@@ -768,6 +768,7 @@ def run_metrics(run_dir):
     frame_fields = {
         "present_dt_ms": ("p50", "p95", "p99"), "cpu_game_ms": ("p50", "p95"),
         "vu1_ms": ("p50", "p95"), "gs_submit_ms": ("p50",),
+        "drain_wait_ms": ("p50", "p95"),
         "gpu_ms": ("p50", "p95"), "present_wait_ms": ("p50",),
     }
     for field, quantiles in frame_fields.items():
@@ -775,6 +776,14 @@ def run_metrics(run_dir):
         for q in quantiles:
             if vals:
                 metrics[f"{field}_{q}"] = percentile(vals, {"p50": 50, "p95": 95, "p99": 99}[q])
+    drains = sum(r.get("vsync_drains", 0) for r in rows)
+    if drains:
+        metrics["vsync_worker_busy_pct"] = 100 * sum(r.get("vsync_worker_busy", 0) for r in rows) / drains
+    drain_cpu_rows = [r for r in rows if isinstance(r.get("drain_wait_ms"), (int, float))
+                      and isinstance(r.get("cpu_game_ms"), (int, float))]
+    cpu_ms = sum(r["cpu_game_ms"] for r in drain_cpu_rows)
+    if cpu_ms > 0:
+        metrics["drain_wait_to_cpu_game_pct"] = 100 * sum(r["drain_wait_ms"] for r in drain_cpu_rows) / cpu_ms
     present = [v for r in rows for v in [_metric_value(r, "present_dt_ms")] if v is not None]
     if present:
         metrics["late_frames_over_18_pct"] = 100 * sum(v > 18 for v in present) / len(present)

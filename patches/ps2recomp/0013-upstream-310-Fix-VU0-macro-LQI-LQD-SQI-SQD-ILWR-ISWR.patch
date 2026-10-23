@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 17:11:26 +0200
-Subject: [PATCH 13/99] upstream #310: Fix VU0 macro LQI/LQD/SQI/SQD/ILWR/ISWR
- operand decoding and memory target
+Subject: [PATCH 013/100] upstream #310: Fix VU0 macro
+ LQI/LQD/SQI/SQD/ILWR/ISWR operand decoding and memory target
 
 
 diff --git a/ps2xRecomp/src/lib/vu_translation_helpers.cpp b/ps2xRecomp/src/lib/vu_translation_helpers.cpp

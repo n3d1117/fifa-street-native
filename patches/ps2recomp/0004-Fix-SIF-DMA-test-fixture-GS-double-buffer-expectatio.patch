@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 15:38:16 +0200
-Subject: [PATCH 04/99] Fix SIF DMA test fixture, GS double-buffer expectations
- and Metal-config tests
+Subject: [PATCH 004/100] Fix SIF DMA test fixture, GS double-buffer
+ expectations and Metal-config tests
 
 
 diff --git a/ps2xTest/src/ps2_gs_tests.cpp b/ps2xTest/src/ps2_gs_tests.cpp

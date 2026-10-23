@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 14:21:56 +0200
-Subject: [PATCH 42/99] Data-side worker: VU1, GIF arbiter and the GS bridge
+Subject: [PATCH 042/100] Data-side worker: VU1, GIF arbiter and the GS bridge
  run on a worker thread fed by an ordered SPSC op ring; EE barriers at VU1
  memory, GS CSR, vsync and shutdown (PS2X_VU1_WORKER=0 restores inline)
 
