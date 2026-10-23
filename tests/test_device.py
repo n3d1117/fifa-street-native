@@ -134,6 +134,9 @@ class DeviceHarnessTests(unittest.TestCase):
     def test_summary_reads_gpu_battery_and_generic_perf_samples(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
+            (root / "shots").mkdir()
+            (root / "shots/0000.png").write_bytes(b"\x89PNG\r\n\x1a\nimage")
+            (root / "shots/0001.png").write_bytes(b"")
             (root / "gpu.jsonl").write_text(
                 '{"Device Utilization %":20,"CoreAnimationFramesPerSecond":60,"_host_time":10}\n'
                 '{"Device Utilization %":40,"CoreAnimationFramesPerSecond":30,"_host_time":20}\n')
@@ -150,7 +153,27 @@ class DeviceHarnessTests(unittest.TestCase):
             self.assertEqual(result["battery_temperature"]["delta"], 4)
             self.assertEqual(result["in_app_summary"]["avg_guest_fps"], 55)
             self.assertEqual(result["in_app_perf"]["guest_fps"]["mean"], 55)
+            self.assertEqual(result["shots_count"], 1)
             self.assertTrue((root / "summary.json").is_file())
+
+    def test_capture_screenshot_checks_output_and_reports_tunnel_command(self):
+        with tempfile.TemporaryDirectory() as temp:
+            dest = pathlib.Path(temp) / "shot.png"
+            png = b"\x89PNG\r\n\x1a\nimage"
+
+            def screenshot(*args, **kwargs):
+                self.assertEqual(args, ("developer", "dvt", "screenshot", "--tunnel", "device", str(dest)))
+                self.assertEqual(kwargs, {"timeout": 25})
+                dest.write_bytes(png)
+
+            with patch.object(device, "pmd", side_effect=screenshot):
+                device.capture_screenshot("device", dest)
+            self.assertEqual(dest.read_bytes(), png)
+
+            dest.unlink()
+            with patch.object(device, "pmd"):
+                with self.assertRaisesRegex(device.Failed, "without writing"):
+                    device.capture_screenshot("device", dest)
 
 
     def test_h2_summary_uses_device_clock_and_separates_counters(self):

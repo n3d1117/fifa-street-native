@@ -60,7 +60,11 @@ def command(args, timeout=30, check=True, text=True):
             env=env,
         )
     except subprocess.TimeoutExpired as e:
-        raise Failed(f"timed out after {timeout}s: {args[0]}") from e
+        stderr = e.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        detail = f": {str(stderr)[-1000:]}" if stderr else ""
+        raise Failed(f"timed out after {timeout}s: {args[0]}{detail}") from e
     if check and p.returncode:
         out = p.stderr if text else b""
         raise Failed(
@@ -620,6 +624,10 @@ def summarize(run_dir):
             sys_rows = [r for r in sys_rows if r.get("_host_time", 0) >= cutoff]
     out = {
         "run": str(root),
+        "shots_count": sum(
+            1 for shot in (root / "shots").glob("*.png")
+            if shot.is_file() and shot.stat().st_size > 0
+        ),
         "gpu": metric_summary(
             fps_rows,
             ["Device Utilization %", "Renderer Utilization %", "Tiler Utilization %"],
@@ -1034,6 +1042,18 @@ def print_summary(data):
         "Samples GPU/sysmon/battery",
         " / ".join(str(data["samples"][k]) for k in ("gpu", "sysmon", "battery")),
     )
+    row("Screenshots", data.get("shots_count", 0))
+
+
+def capture_screenshot(udid, dest):
+    pmd(
+        "developer", "dvt", "screenshot", "--tunnel", udid, str(dest), timeout=25
+    )
+    if not dest.is_file() or dest.stat().st_size == 0:
+        raise Failed(f"screenshot command returned without writing {dest}")
+    with dest.open("rb") as image:
+        if image.read(8) != b"\x89PNG\r\n\x1a\n":
+            raise Failed(f"screenshot command wrote an invalid PNG: {dest}")
 
 
 def stream(cmd, output, stop, ready_event=None, device=False):
@@ -1319,15 +1339,7 @@ def do_run(args):
         if args.shots_every > 0 and now - began >= (shots + 1) * args.shots_every:
             dest = out / "shots" / f"{shots:04d}.png"
             try:
-                pmd(
-                    "developer",
-                    "dvt",
-                    "screenshot",
-                    "--tunnel",
-                    udid,
-                    str(dest),
-                    timeout=25,
-                )
+                capture_screenshot(udid, dest)
             except Exception as e:
                 (out / "shots" / f"{shots:04d}.error").write_text(str(e))
             shots += 1
@@ -1369,6 +1381,8 @@ def do_run(args):
     print(
         f"run: {out.relative_to(ROOT)}; pid {pid}; native.log {'pulled' if pulled.returncode==0 else 'unavailable'}"
     )
+    if data["shots_count"] == 0:
+        print("WARNING: no screenshots captured (check --shots-every and shots/*.error)")
     return out
 
 
