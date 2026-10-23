@@ -1,0 +1,251 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Fri, 23 Oct 2026 12:17:23 +0200
+Subject: [PATCH 101/101] runtime: bound GS drain to previous vsync
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+iPhone 11 match A/B (3 pairs): FPS 57.737→58.760 (+1.023); frames over 18 ms 18.391%→9.548% (-8.843 pp); drain wait p50 0.265→0 ms. Zero gameplay/startup underruns in 3/3 candidate runs with the audio prime. GPU p95 +0.604 ms and VU1 p95 +0.695 ms were component costs within the 16.7 ms frame budget; end-to-end cadence improved.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_perf.h b/ps2xRuntime/include/runtime/ps2_perf.h
+index 57554d285296bc2c1d6e3815365f6f8d199150b9..917090d27eef5feed2f222609c76d656652f2326 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf.h
++++ b/ps2xRuntime/include/runtime/ps2_perf.h
+@@ -10,10 +10,12 @@ struct Ps2PerfSnapshot
+     double drain_wait_seconds = 0.0;
+     uint64_t vsync_drains = 0;
+     uint64_t vsync_worker_busy = 0;
++    double stream_full_wait_seconds = 0.0;
+ };
+ 
+ Ps2PerfSnapshot ps2GetPerfSnapshot();
+ void ps2PublishPerfSnapshot();
++void ps2RecordStreamFullWait(double seconds);
+ void ps2RecordVsyncDrain(double seconds, bool workerBusy);
+ 
+ #endif
+diff --git a/ps2xRuntime/include/runtime/ps2_stream_ring.h b/ps2xRuntime/include/runtime/ps2_stream_ring.h
+index 652bf2ace4ae6e0a58637f712b897a5374dd56c7..a2b41f798cc980df34ae8a658bb53d13554d2c19 100644
+--- a/ps2xRuntime/include/runtime/ps2_stream_ring.h
++++ b/ps2xRuntime/include/runtime/ps2_stream_ring.h
+@@ -16,6 +16,7 @@
+ #include <thread>
+ #include <pthread.h>
+ #include "runtime/ps2_host_present.h"
++#include "runtime/ps2_perf.h"
+ 
+ // Single-producer single-consumer ordered op ring with one consumer thread.
+ //
+@@ -47,6 +48,8 @@ public:
+         : m_capacity(roundUp(capacityBytes)), m_buffer(new uint8_t[m_capacity]), m_exec(std::move(exec)),
+           m_name(std::move(name)), m_watchdogMs(watchdogMs)
+     {
++        const char *perf = std::getenv("PS2X_PERF_LOG");
++        m_perfEnabled = perf && std::strcmp(perf, "1") == 0;
+     }
+ 
+     ~StreamRing() { stop(); }
+@@ -144,6 +147,15 @@ public:
+             rethrowIfFailed();
+     }
+ 
++    uint64_t position() const { return m_localHead; }
++
++    void drainThrough(uint64_t position, const char *why)
++    {
++        publish();
++        waitFor(position, why);
++        rethrowIfFailed();
++    }
++
+     // Producer: bytes pushed but not yet published, to let callers batch.
+     uint32_t pendingBytes() const { return m_pendingBytes; }
+ 
+@@ -160,6 +172,8 @@ public:
+     }
+ 
+ private:
++    bool m_perfEnabled = false;
++
+     static uint32_t roundUp(size_t n) { return static_cast<uint32_t>((n + 15u) & ~static_cast<size_t>(15u)); }
+ 
+     static void *threadMain(void *self)
+@@ -198,7 +212,10 @@ private:
+                 return;
+             }
+             publish();
++            const auto start = m_perfEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+             waitFor(m_localHead + need - m_capacity, "ring full");
++            if (m_perfEnabled)
++                ps2RecordStreamFullWait(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+             rethrowIfFailed();
+         }
+     }
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.cpp b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+index f091e4ddd0dd6f7146a3413ca0ab59b85f1ffb20..c0c41998ca9ec5a78c93564cd5500f3314cb1472 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.cpp
++++ b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+@@ -41,6 +41,8 @@ DataStream::DataStream(PS2Memory &memory) : m_memory(memory), m_gs(memory.gs())
+     m_verify = verify && verify[0] == '1';
+     const char *perf = std::getenv("PS2X_PERF_LOG");
+     m_perfEnabled = perf && std::strcmp(perf, "1") == 0;
++    const char *vsyncDrain = std::getenv("PS2X_GS_VSYNC_DRAIN");
++    m_vsyncDrain = vsyncDrain && std::strcmp(vsyncDrain, "1") == 0;
+ }
+ 
+ DataStream::~DataStream()
+@@ -66,6 +68,7 @@ DataStream::Mode DataStream::defaultMode()
+ bool DataStream::start(Mode mode)
+ {
+     m_mode = mode;
++    m_previousVsyncEnd = 0;
+ #if defined(PS2X_USE_METAL)
+     if (mode == Mode::Inline)
+         return ps2x_metal_gs_create() != 0;
+@@ -320,6 +323,11 @@ void DataStream::refreshGs()
+     {
+         readbackChecked(csr, siglblid);
+     }
++    if (!m_vsyncDrain && deferred() && m_mode == Mode::Worker)
++    {
++        // FIELD belongs to the EE VBlank event, which may precede the queued GS VSync.
++        csr = (csr & ~0x2000ull) | (m_gs.csr.load(std::memory_order_acquire) & 0x2000ull);
++    }
+     m_gs.csr.store(csr, std::memory_order_release);
+     m_gs.siglblid = siglblid;
+     m_gsStale = false;
+@@ -329,12 +337,16 @@ void DataStream::execGsReset()
+ {
+     if (!ps2x_metal_gs_reset())
+         throw std::runtime_error("native Metal GS CSR reset failed");
++    if (m_verify && !ps2x_metal_gs_readback(&m_shadowCsr, &m_shadowSiglblid))
++        throw std::runtime_error("native Metal GS CSR reset readback failed");
+ }
+ 
+ void DataStream::execGsWriteCsr(uint64_t csr, uint32_t mask, bool high)
+ {
+     if (!ps2x_metal_gs_write_csr(csr, mask, high ? 1 : 0))
+         throw std::runtime_error("native Metal GS CSR synchronization failed");
++    if (m_verify && !ps2x_metal_gs_readback(&m_shadowCsr, &m_shadowSiglblid))
++        throw std::runtime_error("native Metal GS CSR write readback failed");
+ }
+ 
+ void DataStream::execGsVsync(const VsyncArgs &args)
+@@ -350,6 +362,11 @@ void DataStream::execGsVsync(const VsyncArgs &args)
+     uint64_t *siglblid = &m_mailbox.siglblid;
+     if (!ps2x_metal_gs_readback(csr, siglblid))
+         throw std::runtime_error("native Metal GS VSync readback failed");
++    if (m_verify)
++    {
++        m_shadowCsr = *csr;
++        m_shadowSiglblid = *siglblid;
++    }
+ }
+ 
+ void DataStream::gsReset()
+@@ -387,9 +404,23 @@ void DataStream::gsVsync(uint64_t tick)
+                    bridgeCsr ? 1u : 0u};
+     if (deferred())
+     {
++        const bool relaxed = !m_vsyncDrain && m_mode == Mode::Worker;
++        const bool workerBusyBeforeFence = relaxed && m_perfEnabled && !m_ring->idle();
++        const auto fenceStart = relaxed && m_perfEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
++        if (relaxed && m_previousVsyncEnd)
++            m_ring->drainThrough(m_previousVsyncEnd, "previous GS vsync");
++        if (relaxed && m_perfEnabled)
++            ps2RecordVsyncDrain(std::chrono::duration<double>(std::chrono::steady_clock::now() - fenceStart).count(),
++                                workerBusyBeforeFence);
+         const bool workerBusy = m_perfEnabled && !m_ring->idle();
+         m_ring->push(OpGsVsync, tick, &args, sizeof(args));
++        m_previousVsyncEnd = m_ring->position();
+         m_ring->publish();
++        if (relaxed)
++        {
++            m_gsStale = true;
++            return;
++        }
+         if (m_perfEnabled)
+         {
+             const auto start = std::chrono::steady_clock::now();
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.h b/ps2xRuntime/src/lib/ps2_data_stream.h
+index e1109611342662f0866874ce13fe7b575926b527..5fb44dce7e818583f4b8eac3c1a1434a62e4569d 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.h
++++ b/ps2xRuntime/src/lib/ps2_data_stream.h
+@@ -159,6 +159,8 @@ private:
+     bool m_gsStale = false;
+     bool m_verify = false;
+     bool m_perfEnabled = false;
++    bool m_vsyncDrain = true;
++    uint64_t m_previousVsyncEnd = 0;
+     uint64_t m_shadowCsr = 0;
+     uint64_t m_shadowSiglblid = 0;
+     Mailbox m_mailbox;
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index e66bc1f90c42cc0b5891cabaa41c1f1f3a130476..361c9aad8bcf440d2b2ea1b5ee15698eb66382c7 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -119,6 +119,7 @@ namespace
+     std::atomic<double> g_perfVu1Seconds{0.0};
+     std::atomic<uint64_t> g_perfVuFallbacks{0};
+     std::atomic<double> g_perfDrainWaitSeconds{0.0};
++    std::atomic<double> g_perfStreamFullWaitSeconds{0.0};
+     std::atomic<uint64_t> g_perfVsyncDrains{0};
+     std::atomic<uint64_t> g_perfVsyncWorkerBusy{0};
+ 
+@@ -625,7 +626,14 @@ Ps2PerfSnapshot ps2GetPerfSnapshot()
+             g_perfVuFallbacks.load(std::memory_order_acquire),
+             g_perfDrainWaitSeconds.load(std::memory_order_acquire),
+             g_perfVsyncDrains.load(std::memory_order_acquire),
+-            g_perfVsyncWorkerBusy.load(std::memory_order_acquire)};
++            g_perfVsyncWorkerBusy.load(std::memory_order_acquire),
++            g_perfStreamFullWaitSeconds.load(std::memory_order_acquire)};
++}
++
++void ps2RecordStreamFullWait(double seconds)
++{
++    g_perfStreamFullWaitSeconds.store(g_perfStreamFullWaitSeconds.load(std::memory_order_relaxed) + seconds,
++                                     std::memory_order_release);
+ }
+ 
+ void ps2RecordVsyncDrain(double seconds, bool workerBusy)
+diff --git a/ps2xTest/src/ps2_data_stream_tests.cpp b/ps2xTest/src/ps2_data_stream_tests.cpp
+index 79b997656421f4f5dc9dbefd7ead0de7fe7981e9..869857928e9d16af8e4e19e62b84d22f0b36af8d 100644
+--- a/ps2xTest/src/ps2_data_stream_tests.cpp
++++ b/ps2xTest/src/ps2_data_stream_tests.cpp
+@@ -153,6 +153,35 @@ void register_ps2_data_stream_tests()
+             ring.stop();
+         });
+ 
++        tc.Run("frame fence waits through its position without draining later work", [](TestCase &t)
++        {
++            std::atomic<bool> release{false};
++            std::atomic<bool> firstDone{false};
++            std::atomic<bool> secondDone{false};
++            StreamRing ring(4096u, [&](const StreamRing::Op &op, const uint8_t *)
++            {
++                if (op.arg == 1)
++                    firstDone.store(true);
++                else
++                {
++                    while (!release.load())
++                        std::this_thread::yield();
++                    secondDone.store(true);
++                }
++            });
++            t.IsTrue(ring.start(), "ring should start");
++            ring.push(1, 1, nullptr, 0);
++            const auto frameEnd = ring.position();
++            ring.push(1, 2, nullptr, 0);
++            ring.drainThrough(frameEnd, "frame fence test");
++            t.IsTrue(firstDone.load(), "frame work must complete");
++            t.IsTrue(!secondDone.load(), "later work must not be required to complete");
++            release.store(true);
++            ring.drain("test end");
++            t.IsTrue(secondDone.load(), "final drain must complete later work");
++            ring.stop();
++        });
++
+         tc.Run("worker mode matches inline for VU1 memory, jobs and GIF packet order", [](TestCase &t)
+         {
+             PS2Memory inlineMem;

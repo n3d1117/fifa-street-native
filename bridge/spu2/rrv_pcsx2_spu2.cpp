@@ -444,10 +444,11 @@ struct rrv_spu2
 	alignas(64) std::atomic<u64> ring_head{0}; // frames written
 	alignas(64) std::atomic<u64> ring_tail{0}; // frames read
 	// Consumer-thread only. The device starts pulling before the core has mixed
-	// anything; until the ring first holds kPrimeFrames the pull returns silence
+	// anything; until the ring first holds prime_frames the pull returns silence
 	// without consuming or counting underruns, so playback begins with a cushion
 	// against the producer's per-frame burstiness instead of a permanently empty ring.
 	bool output_primed{false};
+	u64 prime_frames{2048};
 	rrv_audio_stretcher audio_stretcher;
 	std::array<float, 64 * 2> stretch_input{};
 	size_t stretch_input_frames{};
@@ -773,6 +774,12 @@ rrv_spu2* rrv_spu2_create(const rrv_spu2_config* cfg)
 	const u32 frames = next_pow2(s->cfg.output_ring_frames ? s->cfg.output_ring_frames : 8192);
 	s->ring.assign(size_t(frames) * 2, 0.0f);
 	s->ring_mask = frames - 1;
+	if (const char* target = std::getenv("PS2X_SPU2_TARGET_MS")) {
+		char* end = nullptr;
+		const unsigned long ms = std::strtoul(target, &end, 10);
+		if (end != target && *end == '\0' && ms >= 1 && ms <= 250)
+			s->prime_frames = std::min<u64>(ms * 48u, frames);
+	}
 
 	g_inst = s;
 	g_state = &s->core;
@@ -862,10 +869,9 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 	const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
 	const u64 head = s->ring_head.load(std::memory_order_acquire);
 	const u64 queued = head - tail;
-	constexpr u64 kPrimeFrames = 2048; // ~43 ms at 48 kHz
 	if (!s->output_primed)
 	{
-		if (queued < kPrimeFrames)
+		if (queued < s->prime_frames)
 		{
 			std::memset(dst, 0, frames * 2 * sizeof(float));
 			return 0;

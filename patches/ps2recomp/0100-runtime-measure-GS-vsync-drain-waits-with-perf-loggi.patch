@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Fri, 23 Oct 2026 08:03:21 +0200
-Subject: [PATCH 100/100] runtime: measure GS vsync drain waits with perf
+Subject: [PATCH 100/101] runtime: measure GS vsync drain waits with perf
  logging
 
 Keep the drain and all guest ordering unchanged. Under PS2X_PERF_LOG, record cumulative GameThread drain wall time and whether prior worker work remains before queuing vsync, for per-present telemetry.

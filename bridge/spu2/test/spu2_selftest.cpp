@@ -14,6 +14,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -409,6 +410,109 @@ SyncEquivalenceResult run_sync_equivalence(int threaded, bool explicitAdvance)
 	return result;
 }
 
+struct ScopedEnvironment
+{
+	const char* name;
+	bool present;
+	std::string previous;
+	ScopedEnvironment(const char* key, const char* value) : name(key), present(std::getenv(key) != nullptr),
+		previous(present ? std::getenv(key) : "") { set(value); }
+	void set(const char* value) const
+	{
+#if defined(_WIN32)
+		_putenv_s(name, value ? value : "");
+#else
+		if (value) setenv(name, value, 1);
+		else unsetenv(name);
+#endif
+	}
+	~ScopedEnvironment() { set(present ? previous.c_str() : nullptr); }
+};
+
+struct PrimeResult
+{
+	std::vector<float> output;
+	uint64_t stateHash = 0;
+	rrv_spu2_stats stats{};
+	bool ok = true;
+};
+
+PrimeResult run_prime(const char* target, uint64_t primeFrames)
+{
+	ScopedEnvironment prime("PS2X_SPU2_TARGET_MS", target);
+	PrimeResult result;
+	rrv_spu2_config cfg{0, 8192};
+	rrv_spu2* s = rrv_spu2_create(&cfg);
+	if (!s) { result.ok = false; return result; }
+	const auto tone = encode_sine_loop(48, 12);
+	rrv_spu2_dma_write(s, 1000, 0, 0x5000, tone.data(), uint32_t(tone.size()));
+	key_voice(s, 20000, 1, 0, 0x5000, 0x1000);
+	rrv_spu2_write16(s, 20000, cx(1, MVOLL), 0x3FFF);
+	rrv_spu2_write16(s, 20000, cx(1, MVOLR), 0x3FFF);
+	rrv_spu2_write16(s, 20000, cr(1, KON), 0x0001);
+	rrv_spu2_event events[16];
+	const uint64_t below = (primeFrames - 1) * kCyclesPerFrame;
+	rrv_spu2_sync(s, below, events, 16);
+	rrv_spu2_stats before{};
+	rrv_spu2_get_stats(s, &before);
+	const uint64_t beforeHash = rrv_spu2_state_hash(s, below);
+	std::vector<float> chunk(256 * 2, 1.0f);
+	for (int i = 0; i < 3; ++i)
+	{
+		std::fill(chunk.begin(), chunk.end(), 1.0f);
+		result.ok = (rrv_spu2_pull_output(s, chunk.data(), 256) == 0) && result.ok;
+		result.ok = std::all_of(chunk.begin(), chunk.end(), [](float v) { return v == 0; }) && result.ok;
+	}
+	rrv_spu2_stats after{};
+	rrv_spu2_get_stats(s, &after);
+	result.ok = result.ok && before.frames_enqueued == primeFrames - 1 &&
+		after.frames_enqueued == before.frames_enqueued && after.underrun_frames == 0 &&
+		rrv_spu2_state_hash(s, below) == beforeHash;
+	rrv_spu2_sync(s, primeFrames * kCyclesPerFrame, events, 16);
+	const size_t first = rrv_spu2_pull_output(s, chunk.data(), 127);
+	result.ok = result.ok && first == 127;
+	result.output.insert(result.output.end(), chunk.begin(), chunk.begin() + first * 2);
+	constexpr uint64_t totalFrames = 4096;
+	const uint64_t finalCycle = totalFrames * kCyclesPerFrame;
+	rrv_spu2_sync(s, finalCycle, events, 16);
+	result.stateHash = rrv_spu2_state_hash(s, finalCycle);
+	rrv_spu2_get_stats(s, &result.stats);
+	size_t remaining = static_cast<size_t>(result.stats.frames_enqueued) - first;
+	while (remaining != 0)
+	{
+		const size_t wanted = std::min<size_t>(remaining, 256);
+		const size_t got = rrv_spu2_pull_output(s, chunk.data(), wanted);
+		result.ok = result.ok && got == wanted;
+		result.output.insert(result.output.end(), chunk.begin(), chunk.begin() + got * 2);
+		if (got == 0) break;
+		remaining -= got;
+	}
+	rrv_spu2_get_stats(s, &result.stats);
+	result.ok = result.ok && result.stats.frames_enqueued == totalFrames &&
+		result.stats.underrun_frames == 0 && result.stats.overrun_frames == 0 &&
+		result.output.size() == totalFrames * 2 && rrv_spu2_state_hash(s, finalCycle) == result.stateHash;
+	rrv_spu2_destroy(s);
+	return result;
+}
+
+bool test_prime_equivalence()
+{
+	ScopedEnvironment stretch("PS2X_AUDIO_STRETCH", "0");
+	const auto baseline = run_prime(nullptr, 2048);
+	const auto candidate = run_prime("64", 3072);
+	const bool pcmSame = baseline.output.size() == candidate.output.size() &&
+		std::memcmp(baseline.output.data(), candidate.output.data(), baseline.output.size() * sizeof(float)) == 0;
+	const bool voiced = std::any_of(baseline.output.begin(), baseline.output.end(),
+		[](float v) { return std::fabs(v) > 0.05f; });
+	const bool ok = baseline.ok && candidate.ok && pcmSame && voiced &&
+		baseline.stateHash == candidate.stateHash && baseline.stats.output_hash == candidate.stats.output_hash;
+	std::printf("prime-equivalence: below-threshold pulls=%s PCM=%s guest-state=%s frames=%zu %s\n",
+		baseline.ok && candidate.ok ? "PASS" : "FAIL", pcmSame ? "same" : "DIFFERENT",
+		baseline.stateHash == candidate.stateHash ? "same" : "DIFFERENT", baseline.output.size() / 2,
+		ok ? "PASS" : "FAIL");
+	return ok;
+}
+
 bool test_sync_equivalence()
 {
 	bool ok = true;
@@ -552,7 +656,7 @@ int main(int argc, char** argv)
 	if (what == "determinism" || what == "all")
 		ok = test_determinism() && ok;
 	if (what == "sync-equivalence" || what == "all")
-		ok = test_sync_equivalence() && ok;
+		ok = test_sync_equivalence() && test_prime_equivalence() && ok;
 	if (what == "threading" || what == "all")
 		ok = test_threading() && ok;
 	if (what == "bench" || what == "all")

@@ -50,11 +50,21 @@ std::atomic<uint64_t> g_audio_nonfinite_samples{0};
 std::atomic<uint32_t> g_audio_peak_scaled{0};
 std::atomic<uint32_t> g_audio_queued_high_water{0};
 std::atomic<bool> g_audio_noisy_window{false};
+std::atomic<uint64_t> g_advanceGapNs{0};
+uint64_t g_previousAdvanceNs = 0;
 uint64_t monotonic_ns();
 
 bool audio_trace_enabled() {
     static const bool enabled = [] {
         const char* value = std::getenv("PS2X_TRACE_SPU2");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return enabled;
+}
+
+bool audio_perf_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PS2X_PERF_LOG");
         return value && value[0] == '1' && value[1] == '\0';
     }();
     return enabled;
@@ -200,7 +210,7 @@ void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amoun
         const size_t frames = std::min(remaining_frames, kAudioChunkFrames);
         const size_t realFrames = rrv_spu2_pull_output(g_spu2, samples.data(), frames);
         const bool traceAudio = audio_trace_enabled();
-        if (traceAudio || audio_ring_trace_enabled()) {
+        if (traceAudio || audio_ring_trace_enabled() || audio_perf_enabled()) {
             g_audio_requested_frames.fetch_add(frames, std::memory_order_relaxed);
             g_audio_real_frames.fetch_add(realFrames, std::memory_order_relaxed);
             g_audio_real_total_frames.fetch_add(realFrames, std::memory_order_relaxed);
@@ -275,6 +285,16 @@ uint32_t dma_madr(int core) {
 void advance(uint64_t iop_cycle) {
     if (!g_spu2)
         return;
+    if (audio_perf_enabled()) {
+        const uint64_t now = monotonic_ns();
+        if (g_previousAdvanceNs != 0) {
+            const uint64_t gap = now - g_previousAdvanceNs;
+            uint64_t previous = g_advanceGapNs.load(std::memory_order_relaxed);
+            while (previous < gap && !g_advanceGapNs.compare_exchange_weak(
+                       previous, gap, std::memory_order_relaxed)) {}
+        }
+        g_previousAdvanceNs = now;
+    }
     g_last_cycle.store(iop_cycle, std::memory_order_relaxed);
 
     std::array<rrv_spu2_event, 32> events{};
@@ -389,6 +409,8 @@ bool ps2x_spu2_host_start() {
     std::fprintf(stderr, "[spu2] output ring capacity=%u frames\n", outputRingFrames);
 
     g_last_cycle.store(0, std::memory_order_relaxed);
+    g_advanceGapNs.store(0, std::memory_order_relaxed);
+    g_previousAdvanceNs = 0;
     g_audio_callback_errors.store(0, std::memory_order_relaxed);
     g_audio_requested_frames.store(0, std::memory_order_relaxed);
     g_audio_real_frames.store(0, std::memory_order_relaxed);
@@ -460,4 +482,14 @@ uint64_t ps2x_spu2_host_underruns() {
     rrv_spu2_stats stats{};
     if (g_spu2) rrv_spu2_get_stats(g_spu2, &stats);
     return g_spu2 ? stats.underrun_frames : g_finalUnderruns;
+}
+
+Spu2HostPerf ps2x_spu2_host_perf() {
+    std::lock_guard lock(g_perfStatsMutex);
+    rrv_spu2_stats stats{};
+    if (g_spu2) rrv_spu2_get_stats(g_spu2, &stats);
+    const uint64_t consumed = g_audio_real_total_frames.load(std::memory_order_relaxed);
+    return {g_spu2 ? stats.underrun_frames : g_finalUnderruns,
+            stats.frames_enqueued >= consumed ? stats.frames_enqueued - consumed : 0u,
+            g_advanceGapNs.exchange(0u, std::memory_order_relaxed) * 1e-6};
 }

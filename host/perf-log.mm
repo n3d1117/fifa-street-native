@@ -40,7 +40,8 @@ double threadCpu(thread_t thread) {
 }
 struct Row {
     RrvPcsx2GsPerfFrame gs;
-    double cpu = -1, vu1 = 0, submit = 0, drainWait = 0;
+    double cpu = -1, vu1 = 0, submit = 0, drainWait = 0, audioAdvanceGap = 0, streamFullWait = 0;
+    uint64_t audioRingFrames = 0;
     uint64_t underruns = 0, fallbacks = 0, vsyncDrains = 0, vsyncWorkerBusy = 0;
     bool gameplay = false;
 };
@@ -52,7 +53,7 @@ struct PerfLog {
     std::thread writer;
     std::atomic<bool> running{true};
     std::atomic<thread_t> gameThread{MACH_PORT_NULL};
-    double previousCpu = -1, previousVu = 0, previousSubmit = 0, previousDrainWait = 0;
+    double previousCpu = -1, previousVu = 0, previousSubmit = 0, previousDrainWait = 0, previousStreamFullWait = 0;
     uint64_t previousVsyncDrains = 0, previousVsyncWorkerBusy = 0;
     uint64_t dropped = 0;
     FILE* file = nullptr;
@@ -144,9 +145,10 @@ struct PerfLog {
                         @"tex_upload_bytes": @(f.tex_upload_bytes), @"readbacks": @(f.readbacks),
                         @"pipeline_compiles": @(f.pipeline_compiles), @"vu1_ms": @(row.vu1),
                         @"gs_submit_ms": @(row.submit), @"present_wait_ms": @(f.present_wait_ms),
-                        @"drain_wait_ms": @(row.drainWait), @"vsync_drains": @(row.vsyncDrains),
+                        @"stream_full_wait_ms": @(row.streamFullWait), @"drain_wait_ms": @(row.drainWait), @"vsync_drains": @(row.vsyncDrains),
                         @"vsync_worker_busy": @(row.vsyncWorkerBusy),
-                        @"audio_underruns": @(row.underruns)});
+                        @"audio_underruns": @(row.underruns), @"audio_ring_frames": @(row.audioRingFrames),
+                        @"audio_advance_gap_ms": @(row.audioAdvanceGap)});
                     lastCompiles += f.pipeline_compiles;
                     lastFallbacks = row.fallbacks;
                 }
@@ -189,7 +191,10 @@ struct PerfLog {
         Row row{};
         row.gs = frame;
         row.gameplay = gameplay();
-        row.underruns = ps2x_spu2_host_underruns();
+        const auto audio = ps2x_spu2_host_perf();
+        row.underruns = audio.underruns;
+        row.audioRingFrames = audio.ringFrames;
+        row.audioAdvanceGap = audio.advanceGapMs;
         const auto runtime = snapshot();
         const double cpu = threadCpu(gameThread.load(std::memory_order_acquire));
         const double submit = host::perf::gsSubmitSeconds.load(std::memory_order_relaxed);
@@ -201,6 +206,8 @@ struct PerfLog {
         previousSubmit = submit;
         row.drainWait = std::max(0.0, runtime.drain_wait_seconds - previousDrainWait) * 1000;
         previousDrainWait = runtime.drain_wait_seconds;
+        row.streamFullWait = std::max(0.0, runtime.stream_full_wait_seconds - previousStreamFullWait) * 1000;
+        previousStreamFullWait = runtime.stream_full_wait_seconds;
         row.vsyncDrains = runtime.vsync_drains - previousVsyncDrains;
         previousVsyncDrains = runtime.vsync_drains;
         row.vsyncWorkerBusy = runtime.vsync_worker_busy - previousVsyncWorkerBusy;
