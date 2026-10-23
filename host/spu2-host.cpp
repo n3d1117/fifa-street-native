@@ -491,5 +491,6 @@ Spu2HostPerf ps2x_spu2_host_perf() {
     const uint64_t consumed = g_audio_real_total_frames.load(std::memory_order_relaxed);
     return {g_spu2 ? stats.underrun_frames : g_finalUnderruns,
             stats.frames_enqueued >= consumed ? stats.frames_enqueued - consumed : 0u,
-            g_advanceGapNs.exchange(0u, std::memory_order_relaxed) * 1e-6};
+            g_advanceGapNs.exchange(0u, std::memory_order_relaxed) * 1e-6,
+            stats.mix_wall_ns * 1e-9};
 }

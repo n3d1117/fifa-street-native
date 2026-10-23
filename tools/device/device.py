@@ -608,7 +608,8 @@ def summarize(run_dir):
             when = host_time(row)
             if when is not None and (launch_time is None or when >= launch_time):
                 confirmed.append(when)
-    start = min(confirmed) if confirmed else None
+    gameplay_start = min(confirmed) if confirmed else None
+    start = gameplay_start
     if start is not None and launch_time is not None:
         start = max(start, launch_time + run_meta.get("warmup_s", 0))
     fps_rows = [r for r in jsonl(root / "gpu.jsonl") if "_error" not in r]
@@ -637,6 +638,8 @@ def summarize(run_dir):
             sys_rows, ["cpuUsage", "physFootprint", "memory", "threads"], "process"
         ),
         "gameplay_window_start": start,
+        "time_to_play_s": (gameplay_start - launch_time) if gameplay_start is not None and launch_time is not None else None,
+        "hud_clock": hud_clock_progress(log),
         "samples": {"gpu": len(fps_rows), "sysmon": len(sys_rows), "battery": len(bat)},
     }
     fps = [
@@ -714,9 +717,86 @@ def summarize(run_dir):
         out["in_app_perf"] = numeric
     if summary_numbers:
         out["in_app_summary"] = summary_numbers
+    launch_ref, draws_ref, clock_ref = ledger_control_reference()
+    out["metrics"] = run_metrics(root)
+    if out["time_to_play_s"] is not None:
+        out["metrics"]["time_to_play_s"] = out["time_to_play_s"]
+    out["validity"] = evaluate_validity(out, launch_ref, draws_ref, clock_ref)
     (root / "summary.json").write_text(json.dumps(out, indent=2) + "\n")
     print_summary(out)
     return out
+
+
+def hud_clock_progress(log):
+    samples = [(float(clock), float(wall)) for clock, wall in re.findall(
+        r"\[autopilot\] clock_seconds=([-+0-9.eE]+) wall_seconds=([-+0-9.eE]+)", log
+    )]
+    last_reset = 0
+    for index in range(1, len(samples)):
+        if samples[index][1] < samples[index - 1][1]:
+            last_reset = index
+    samples = samples[last_reset:]
+    rates = []
+    for previous, current in zip(samples, samples[1:]):
+        guest_delta = current[0] - previous[0]
+        wall_delta = current[1] - previous[1]
+        if guest_delta > 0.5 and 0 < wall_delta <= 5:
+            rates.append(guest_delta / wall_delta)
+    if len(rates) < 5:
+        return {"expected_guest_seconds_per_wall_second": 1.0, "rate": None, "samples": len(samples)}
+    return {"expected_guest_seconds_per_wall_second": 1.0, "rate": statistics.median(rates),
+            "samples": len(samples), "active_intervals": len(rates)}
+
+
+def ledger_control_reference():
+    ledger = ROOT / "build/device-ab/ledger.jsonl"
+    runs = []
+    if ledger.is_file():
+        for line in ledger.read_text(errors="replace").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            runs.extend(run for run in entry.get("runs", [])
+                        if run.get("arm") == "control" and run.get("validity", {}).get("valid"))
+    launch = [run["metrics"]["time_to_play_s"] for run in runs
+              if isinstance(run.get("metrics", {}).get("time_to_play_s"), (int, float))]
+    draws = [run["metrics"]["draws_per_gameplay_frame_p50"] for run in runs
+             if isinstance(run.get("metrics", {}).get("draws_per_gameplay_frame_p50"), (int, float))]
+    clocks = [run["metrics"]["hud_clock_guest_s_per_wall_s"] for run in runs
+              if isinstance(run.get("metrics", {}).get("hud_clock_guest_s_per_wall_s"), (int, float))]
+    return (statistics.median(launch) if launch else None,
+            statistics.median(draws) if draws else None,
+            statistics.median(clocks) if clocks else None)
+
+
+def evaluate_validity(summary, control_launch_s=None, control_draws=None, control_clock_rate=None, check_clock=True):
+    reasons = []
+    time_to_play = summary.get("time_to_play_s")
+    if time_to_play is None:
+        reasons.append("gameplay start time unavailable")
+    else:
+        if time_to_play > 45:
+            reasons.append(f"launch-to-gameplay {time_to_play:.1f}s exceeds 45s")
+        if control_launch_s and time_to_play > 1.5 * control_launch_s:
+            reasons.append(f"launch-to-gameplay {time_to_play:.1f}s exceeds 1.5x control median {control_launch_s:.1f}s")
+    clock = summary.get("hud_clock", {})
+    rate = clock.get("rate")
+    expected_rate = control_clock_rate if isinstance(control_clock_rate, (int, float)) else 1.0
+    if check_clock and rate is None:
+        reasons.append("HUD clock progression unavailable over 5s")
+    elif check_clock and abs(rate - expected_rate) > 0.1 * expected_rate:
+        reasons.append(f"HUD clock rate {rate:.3f} guest s/wall s differs from expected {expected_rate:.3f} by over 10%")
+    if summary.get("shots_count", 0) == 0:
+        reasons.append("shots_count == 0")
+    metrics = summary.get("metrics", {})
+    draws = metrics.get("draws_per_gameplay_frame_p50")
+    if control_draws and isinstance(draws, (int, float)) and draws < 0.5 * control_draws:
+        reasons.append(f"median draws/frame {draws:.1f} is below 50% of control {control_draws:.1f}")
+    return {"valid": not reasons, "reasons": reasons, "hud_clock_expected_guest_seconds_per_wall_second": 1.0,
+            "hud_clock_rate": rate, "hud_clock_expected_rate": expected_rate,
+            "control_launch_to_gameplay_median_s": control_launch_s,
+            "control_draws_per_frame_median": control_draws}
 
 
 def gameplay_rows(run_dir):
@@ -724,6 +804,25 @@ def gameplay_rows(run_dir):
     for path in sorted((Path(run_dir) / "perf").glob("**/*.jsonl")):
         rows.extend(r for r in jsonl(path) if isinstance(r, dict))
     return [r for r in rows if r.get("type") != "summary" and r.get("gameplay") is True]
+
+
+def active_gameplay_rows(rows):
+    clocked = [row for row in rows if isinstance(_metric_value(row, "game_clock_s"), (int, float))
+               and _metric_value(row, "game_clock_s") >= 0]
+    if not clocked:
+        return rows
+    active = []
+    previous = None
+    last_advance = None
+    for row in clocked:
+        clock = _metric_value(row, "game_clock_s")
+        when = _metric_value(row, "t")
+        if previous is None or clock > previous or clock < previous:
+            last_advance = when
+        if last_advance is not None and when is not None and when - last_advance <= 2.5:
+            active.append(row)
+        previous = clock
+    return active or rows
 
 
 def _metric_value(row, name):
@@ -767,7 +866,7 @@ def _thread_cpu(row, thread):
 
 def run_metrics(run_dir):
     root = Path(run_dir)
-    rows = gameplay_rows(root)
+    rows = active_gameplay_rows(gameplay_rows(root))
     metrics = {}
     times = [v for r in rows for v in [_metric_value(r, "t")] if v is not None]
     seconds = max(times) - min(times) if len(times) > 1 else 0.0
@@ -778,12 +877,29 @@ def run_metrics(run_dir):
         "vu1_ms": ("p50", "p95"), "gs_submit_ms": ("p50",),
         "drain_wait_ms": ("p50", "p95"),
         "gpu_ms": ("p50", "p95"), "present_wait_ms": ("p50",),
+        "draws": ("p50",), "ee_ms": ("p50", "p95"), "iop_ms": ("p50", "p95"),
+        "spu2_ms": ("p50", "p95"), "other_ms": ("p50", "p95"),
+        "ring_full_wait_ms": ("p50", "p95"), "vu1_exec_ms": ("p50", "p95"),
+        "vif_unpack_ms": ("p50", "p95"), "xgkick_ms": ("p50", "p95"),
     }
     for field, quantiles in frame_fields.items():
         vals = [v for r in rows for v in [_metric_value(r, field)] if v is not None]
         for q in quantiles:
             if vals:
                 metrics[f"{field}_{q}"] = percentile(vals, {"p50": 50, "p95": 95, "p99": 99}[q])
+    if "draws_p50" in metrics:
+        metrics["draws_per_gameplay_frame_p50"] = metrics["draws_p50"]
+    split_fields = ("ee_ms", "iop_ms", "spu2_ms", "drain_wait_ms", "ring_full_wait_ms", "other_ms",
+                    "vu1_exec_ms", "vif_unpack_ms", "xgkick_ms", "gs_submit_ms")
+    for label, selected in (
+        ("on_time", [r for r in rows if (_metric_value(r, "present_dt_ms") or 0) <= 18]),
+        ("late", [r for r in rows if (_metric_value(r, "present_dt_ms") or 0) > 18]),
+    ):
+        for field in split_fields:
+            vals = [v for r in selected for v in [_metric_value(r, field)] if v is not None]
+            for q in (50, 95):
+                if vals:
+                    metrics[f"{field}_{label}_p{q}"] = percentile(vals, q)
     drains = sum(r.get("vsync_drains", 0) for r in rows)
     if drains:
         metrics["vsync_worker_busy_pct"] = 100 * sum(r.get("vsync_worker_busy", 0) for r in rows) / drains
@@ -824,6 +940,11 @@ def run_metrics(run_dir):
             if names:
                 metrics["process_cores"] = sum(b[n] - a[n] for n in names) / seconds
     summary = json.loads((root / "summary.json").read_text()) if (root / "summary.json").exists() else {}
+    if isinstance(summary.get("time_to_play_s"), (int, float)):
+        metrics["time_to_play_s"] = summary["time_to_play_s"]
+    clock_rate = summary.get("hud_clock", {}).get("rate")
+    if isinstance(clock_rate, (int, float)):
+        metrics["hud_clock_guest_s_per_wall_s"] = clock_rate
     if "thermal_state_max" in summary:
         metrics["thermal_state_max"] = summary["thermal_state_max"]
     bt = summary.get("battery_temperature", {})
@@ -918,12 +1039,21 @@ def _battery_start(path):
 
 
 def render_ab_text(data):
+    clock_rates = [run.get("validity", {}).get("hud_clock_expected_rate") for run in data.get("runs", [])]
+    clock_rates = [rate for rate in clock_rates if isinstance(rate, (int, float))]
+    clock_target = statistics.median(clock_rates) if clock_rates else 1.0
+    clock_line = f"HUD clock active-rate target: {clock_target:.3f} guest s/wall s (control data; 10% tolerance)"
     if data["kind"] == "baseline":
-        lines = [f"baseline: {data['label']} ({data['pairs']} runs)", f"{'Metric':<36} {'Median':>12}"]
+        lines = [f"baseline: {data['label']} ({data['pairs']} runs)", clock_line, f"{'Metric':<36} {'Median':>12}"]
+        lines.extend(f"INVALID RUN {run['arm']} {run['run_dir']}: {'; '.join(run['validity']['reasons'])}"
+                     for run in data.get("runs", []) if not run.get("validity", {}).get("valid"))
         lines.extend(f"{key:<36} {value:>12.3f}" for key, value in data["metrics"].items())
         return "\n".join(lines) + "\n"
     lines = [f"{data['kind']}: {data['label']} ({data['pairs']} runs)",
+             clock_line,
              f"{'Metric':<36} {'Control':>10} {'Candidate':>10} {'Delta':>10} {'Delta%':>9} {'Noise':>10}"]
+    lines.extend(f"INVALID RUN {run['arm']} {run['run_dir']}: {'; '.join(run['validity']['reasons'])}"
+                 for run in data.get("runs", []) if not run.get("validity", {}).get("valid"))
     for key, row in data["metrics"].items():
         pct = "n/a" if row["delta_pct"] is None else f"{row['delta_pct']:.1f}%"
         lines.append(f"{key:<36} {row['control']:>10.3f} {row['candidate']:>10.3f} {row['delta']:>10.3f} {pct:>9} {row['control_noise']:>10.3f}")
@@ -963,7 +1093,7 @@ def run_experiment(args, kind):
     else:
         arms = {"baseline": env_pairs(args.env)}
         order = ["baseline"] * args.runs
-    run_dirs, values, waits, install_seconds = [], {arm: [] for arm in arms}, [], []
+    run_dirs, values, run_records, waits, install_seconds = [], {arm: [] for arm in arms}, [], [], []
     first_temp = None
     for index, arm in enumerate(order):
         if index:
@@ -971,7 +1101,7 @@ def run_experiment(args, kind):
         run_args = argparse.Namespace(seconds=args.seconds, warmup=args.warmup,
             label=f"{label}-{arm}-{index + 1:02d}",
             env=[f"{k}={v}" for k, v in arms[arm].items()], no_match=False,
-            shots_every=0, app=str(prepared_apps[arm][0]) if arm in prepared_apps else None,
+            shots_every=max(1, args.seconds + args.warmup - 1), app=str(prepared_apps[arm][0]) if arm in prepared_apps else None,
             udid=udid, _stamp=stamp)
         if arm in prepared_apps:
             app, stage, bundle = prepared_apps[arm]
@@ -981,7 +1111,9 @@ def run_experiment(args, kind):
         if first_temp is None:
             first_temp = _battery_start(run_dir)
         run_dirs.append(str(run_dir.relative_to(ROOT)))
-        values[arm].append(run_metrics(run_dir))
+        summary = json.loads((run_dir / "summary.json").read_text()) if (run_dir / "summary.json").is_file() else {}
+        run_records.append({"arm": arm, "run_dir": str(run_dir.relative_to(ROOT)),
+                            "metrics": run_metrics(run_dir), "summary": summary})
     installed_at_end = None
     if prepared_apps:
         head_app = Path(default_app(udid)).resolve()
@@ -992,8 +1124,48 @@ def run_experiment(args, kind):
             _app, stage, bundle = prepared
         install_prepared(head_app, True, udid, stage, bundle)
         installed_at_end = str(head_app)
+    historical_launch, historical_draws, historical_clock = ledger_control_reference()
+    current_controls = [r for r in run_records if r["arm"] == "control"]
+    if not current_controls:
+        current_controls = [r for r in run_records if r["arm"] == "baseline"]
+    current_control_valid = [r for r in current_controls
+                             if evaluate_validity(r["summary"], historical_launch, None, check_clock=False)["valid"]]
+    launch_values = ([historical_launch] if historical_launch is not None else []) + [
+        r["metrics"]["time_to_play_s"] for r in current_controls
+        if isinstance(r["metrics"].get("time_to_play_s"), (int, float))]
+    control_launch = statistics.median(launch_values) if launch_values else None
+    draw_values = ([historical_draws] if historical_draws is not None else []) + [
+        r["metrics"]["draws_per_gameplay_frame_p50"] for r in current_control_valid
+        if isinstance(r["metrics"].get("draws_per_gameplay_frame_p50"), (int, float))]
+    control_draws = statistics.median(draw_values) if draw_values else None
+    clock_values = ([historical_clock] if historical_clock is not None else []) + [
+        r["metrics"]["hud_clock_guest_s_per_wall_s"] for r in current_control_valid
+        if isinstance(r["metrics"].get("hud_clock_guest_s_per_wall_s"), (int, float))]
+    control_clock = statistics.median(clock_values) if clock_values else None
+    for record in run_records:
+        summary = record["summary"]
+        if record["metrics"].get("time_to_play_s") is not None:
+            summary["time_to_play_s"] = record["metrics"]["time_to_play_s"]
+        summary["metrics"] = record["metrics"]
+        record["validity"] = evaluate_validity(summary, control_launch, control_draws, control_clock)
+        if record["run_dir"]:
+            summary_path = ROOT / record["run_dir"] / "summary.json"
+            if summary_path.is_file():
+                summary["validity"] = record["validity"]
+                summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+        record.pop("summary")
+        if record["validity"]["valid"]:
+            values[record["arm"]].append(record["metrics"])
     if kind == "ab":
-        metrics, verdicts = compare_metrics(values["control"], values["candidate"])
+        if len(values["control"]) < 2 or len(values["candidate"]) < 2:
+            deficient = [f"{arm} has {len(values[arm])}/2 valid runs" for arm in ("control", "candidate")
+                         if len(values[arm]) < 2]
+            reasons = [reason for record in run_records if not record["validity"]["valid"]
+                       for reason in record["validity"]["reasons"]]
+            verdicts = {"experiment": "INVALID: " + "; ".join(deficient + reasons[:2])}
+            metrics = {}
+        else:
+            metrics, verdicts = compare_metrics(values["control"], values["candidate"])
     else:
         metrics, verdicts = aggregate_metrics(values["baseline"]), {}
     data = {"ts": dt.datetime.now(dt.timezone.utc).isoformat(), "kind": kind, "label": label,
@@ -1002,7 +1174,7 @@ def run_experiment(args, kind):
             "warmup": args.warmup,
             "git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                 capture_output=True, text=True, check=False).stdout.strip(),
-            "metrics": metrics, "verdicts": verdicts, "run_dirs": run_dirs, "cooldowns": waits,
+            "metrics": metrics, "verdicts": verdicts, "run_dirs": run_dirs, "runs": run_records, "cooldowns": waits,
             "install_seconds": install_seconds, "installed_at_end": installed_at_end}
     (ab_dir / "ab.json").write_text(json.dumps(data, indent=2) + "\n")
     (ab_dir / "ab.txt").write_text(render_ab_text(data))
@@ -1038,6 +1210,8 @@ def print_summary(data):
         )
     if "thermal_state_max" in data:
         row("Thermal state max", data["thermal_state_max"])
+    if data.get("validity", {}).get("valid") is False:
+        row("Validity", "INVALID: " + "; ".join(data["validity"].get("reasons", [])))
     row(
         "Samples GPU/sysmon/battery",
         " / ".join(str(data["samples"][k]) for k in ("gpu", "sysmon", "battery")),
@@ -1232,7 +1406,7 @@ def do_run(args):
                 check=False,
             )
     env = [] if args.no_match else ["PS2X_BOOT_MATCH=venue=3", "PS2X_AUTOPILOT=match"]
-    env += ["PS2X_PERF_LOG=1", f"PS2X_USER_DIR=rx-run-{stamp}"] + args.env
+    env += ["PS2X_PERF_LOG=1", f"PS2X_USER_DIR=rx-run-{stamp}-{label}"] + args.env
     launch = ["developer", "dvt", "launch", "--tunnel", udid]
     for e in env:
         launch += ["--env", e]

@@ -27,6 +27,7 @@
 #include <atomic>
 #include <array>
 #include <condition_variable>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -63,6 +64,7 @@ constexpr u32 kMaxDmaHalfwords = kStagingBytesPerCore / 2;
 struct rrv_core_state;
 rrv_core_state* g_state = nullptr; // core-thread view of the live instance
 std::atomic<bool> g_instance_live{false};
+std::atomic<u64> g_perfMixNs{0};
 
 // Core-thread-only state (touched by whichever thread runs the core).
 struct rrv_core_state
@@ -85,9 +87,20 @@ void push_event(u64 cycle, u32 kind, u32 data)
 
 void rrv_mix()
 {
-	g_state->in_mix = true;
-	isa_native::spu2Mix();
-	g_state->in_mix = false;
+    static const bool perfEnabled = [] {
+        const char* value = std::getenv("PS2X_PERF_LOG");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    static thread_local u32 perfMixes = 0;
+    constexpr u32 sampleWeight = 256;
+    const bool perfSample = perfEnabled && (++perfMixes % sampleWeight == 0u);
+    const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    g_state->in_mix = true;
+    isa_native::spu2Mix();
+    g_state->in_mix = false;
+    if (perfSample)
+        g_perfMixNs.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - perfStart).count()) * sampleWeight, std::memory_order_relaxed);
 }
 } // namespace
 
@@ -909,6 +922,7 @@ void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* o)
 	o->output_hash = s->output_hash.load(std::memory_order_relaxed);
 	o->worker_cpu_ns = s->worker_cpu_ns.load(std::memory_order_relaxed);
 	o->frames_enqueued = s->frames_enqueued.load(std::memory_order_relaxed);
+	o->mix_wall_ns = g_perfMixNs.load(std::memory_order_relaxed);
 }
 
 uint64_t rrv_spu2_state_hash(rrv_spu2* s, uint64_t t)

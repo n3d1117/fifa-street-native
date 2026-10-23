@@ -14,5 +14,6 @@ struct Spu2HostPerf {
     uint64_t underruns;
     uint64_t ringFrames;
     double advanceGapMs;
+    double mixSeconds;
 };
 Spu2HostPerf ps2x_spu2_host_perf();

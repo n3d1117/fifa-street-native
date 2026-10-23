@@ -41,6 +41,7 @@ double threadCpu(thread_t thread) {
 struct Row {
     RrvPcsx2GsPerfFrame gs;
     double cpu = -1, vu1 = 0, submit = 0, drainWait = 0, audioAdvanceGap = 0, streamFullWait = 0;
+    double ee = 0, iop = 0, spu2 = 0, vifUnpack = 0, xgkick = 0, other = 0;
     uint64_t audioRingFrames = 0;
     uint64_t underruns = 0, fallbacks = 0, vsyncDrains = 0, vsyncWorkerBusy = 0;
     bool gameplay = false;
@@ -54,6 +55,7 @@ struct PerfLog {
     std::atomic<bool> running{true};
     std::atomic<thread_t> gameThread{MACH_PORT_NULL};
     double previousCpu = -1, previousVu = 0, previousSubmit = 0, previousDrainWait = 0, previousStreamFullWait = 0;
+    double previousEe = 0, previousIop = 0, previousSpu2 = 0, previousVifUnpack = 0, previousXgkick = 0;
     uint64_t previousVsyncDrains = 0, previousVsyncWorkerBusy = 0;
     uint64_t dropped = 0;
     FILE* file = nullptr;
@@ -140,12 +142,16 @@ struct PerfLog {
                     const auto& f = row.gs;
                     write(@{@"t": @(f.t), @"present_dt_ms": @(f.present_dt_ms), @"game_frame": @(f.game_frame),
                         @"gameplay": @(row.gameplay), @"gpu_ms": @(f.gpu_ms),
+                        @"game_clock_s": @(host::perf::guestClockSeconds.load(std::memory_order_relaxed)),
                         @"cpu_game_ms": row.cpu < 0 ? (id)[NSNull null] : @(row.cpu),
                         @"draws": @(f.draws), @"render_passes": @(f.render_passes), @"tex_uploads": @(f.tex_uploads),
                         @"tex_upload_bytes": @(f.tex_upload_bytes), @"readbacks": @(f.readbacks),
                         @"pipeline_compiles": @(f.pipeline_compiles), @"vu1_ms": @(row.vu1),
                         @"gs_submit_ms": @(row.submit), @"present_wait_ms": @(f.present_wait_ms),
                         @"stream_full_wait_ms": @(row.streamFullWait), @"drain_wait_ms": @(row.drainWait), @"vsync_drains": @(row.vsyncDrains),
+                        @"ring_full_wait_ms": @(row.streamFullWait),
+                        @"ee_ms": @(row.ee), @"iop_ms": @(row.iop), @"spu2_ms": @(row.spu2), @"other_ms": @(row.other),
+                        @"vu1_exec_ms": @(row.vu1), @"vif_unpack_ms": @(row.vifUnpack), @"xgkick_ms": @(row.xgkick),
                         @"vsync_worker_busy": @(row.vsyncWorkerBusy),
                         @"audio_underruns": @(row.underruns), @"audio_ring_frames": @(row.audioRingFrames),
                         @"audio_advance_gap_ms": @(row.audioAdvanceGap)});
@@ -208,6 +214,18 @@ struct PerfLog {
         previousDrainWait = runtime.drain_wait_seconds;
         row.streamFullWait = std::max(0.0, runtime.stream_full_wait_seconds - previousStreamFullWait) * 1000;
         previousStreamFullWait = runtime.stream_full_wait_seconds;
+        const double eeInclusive = std::max(0.0, runtime.ee_seconds - previousEe) * 1000;
+        previousEe = runtime.ee_seconds;
+        row.iop = std::max(0.0, runtime.iop_seconds - previousIop) * 1000;
+        previousIop = runtime.iop_seconds;
+        row.spu2 = std::max(0.0, audio.mixSeconds - previousSpu2) * 1000;
+        previousSpu2 = audio.mixSeconds;
+        row.vifUnpack = std::max(0.0, runtime.vif_unpack_seconds - previousVifUnpack) * 1000;
+        previousVifUnpack = runtime.vif_unpack_seconds;
+        row.xgkick = std::max(0.0, runtime.xgkick_seconds - previousXgkick) * 1000;
+        previousXgkick = runtime.xgkick_seconds;
+        row.ee = std::max(0.0, eeInclusive - row.iop - row.spu2 - row.drainWait - row.streamFullWait);
+        row.other = std::max(0.0, row.cpu - row.ee - row.iop - row.spu2 - row.drainWait - row.streamFullWait);
         row.vsyncDrains = runtime.vsync_drains - previousVsyncDrains;
         previousVsyncDrains = runtime.vsync_drains;
         row.vsyncWorkerBusy = runtime.vsync_worker_busy - previousVsyncWorkerBusy;

@@ -58,6 +58,7 @@ typedef struct rrv_spu2_stats
 	uint64_t output_hash;        /* running hash of every mixed s16 frame (valid after a barrier) */
 	uint64_t worker_cpu_ns;      /* worker thread CPU time (threaded mode only; host-side stat) */
 	uint64_t frames_enqueued;    /* time-stretched frames accepted by the output ring */
+	uint64_t mix_wall_ns;        /* mixer wall time, enabled by PS2X_PERF_LOG=1 */
 } rrv_spu2_stats;
 
 /* Pass as spu_addr16 to keep the core's current TSA instead of writing it. */

@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools/device"))
 import device
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools/probe"))
+import probe
 
 
 class DeviceHarnessTests(unittest.TestCase):
@@ -76,6 +78,63 @@ class DeviceHarnessTests(unittest.TestCase):
             report = next((root / "build/device-ab").glob("*/ab.txt")).read_text()
             self.assertIn("Install median: 1.25s", report)
             self.assertIn(f"Installed at end: {head.resolve()}", report)
+            self.assertEqual(runs[0].shots_every, 1)
+            self.assertIn("Verdict: experiment: INVALID:", report)
+
+    def test_hud_clock_rate_and_validity_guards(self):
+        log = "\n".join(
+            f"[autopilot] clock_seconds={seconds:.1f} wall_seconds={wall:.1f}"
+            for seconds, wall in ((10, 2), (12, 4), (14, 6), (16, 8), (18, 10), (20, 12), (22, 14))
+        )
+        clock = device.hud_clock_progress(log)
+        self.assertEqual(clock["rate"], 1.0)
+        self.assertEqual(clock["expected_guest_seconds_per_wall_second"], 1.0)
+        summary = {"time_to_play_s": 20, "hud_clock": clock, "shots_count": 1,
+                   "metrics": {"draws_per_gameplay_frame_p50": 20}}
+        self.assertTrue(device.evaluate_validity(summary, 20, 30)["valid"])
+        summary["metrics"]["draws_per_gameplay_frame_p50"] = 14
+        result = device.evaluate_validity(summary, 20, 30)
+        self.assertFalse(result["valid"])
+        self.assertTrue(any("50% of control" in reason for reason in result["reasons"]))
+        self.assertFalse(device.evaluate_validity(summary, 20, 30, 0.8)["valid"])
+        self.assertTrue(device.evaluate_validity({**summary, "hud_clock": {"rate": 0.8},
+                                                  "metrics": {"draws_per_gameplay_frame_p50": 20}},
+                                                  20, 30, 0.8)["valid"])
+        self.assertTrue(any("HUD clock rate" in reason for reason in
+                            device.evaluate_validity({**summary, "hud_clock": {"rate": 0.7}}, 20, 30)["reasons"]))
+        self.assertTrue(any("45s" in reason for reason in
+                            device.evaluate_validity({**summary, "time_to_play_s": 46}, 20, 30)["reasons"]))
+
+    def test_probe_reports_zero_underruns_without_trace_sampling(self):
+        text = "[spu2] SDL playback input=SDL_AUDIO_F32LE/2/48000Hz\n"
+        self.assertEqual(probe.parse_log(text)["audio_underruns"], 0)
+        text += "[spu2-underrun] frames=7 ring_occupancy_frames=0\n"
+        self.assertEqual(probe.parse_log(text)["audio_underruns"], 7)
+
+    def test_run_metrics_draw_count_and_late_frame_breakdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            perf = root / "perf"; perf.mkdir()
+            rows = []
+            for index, (dt_ms, ee_ms, draws) in enumerate(((16, 2, 10), (17, 3, 20), (20, 8, 30), (25, 10, 40))):
+                rows.append({"t": index, "gameplay": True, "present_dt_ms": dt_ms,
+                             "cpu_game_ms": ee_ms + 1, "ee_ms": ee_ms, "draws": draws,
+                             "iop_ms": 1, "spu2_ms": 0.5, "other_ms": 0.5,
+                             "vu1_exec_ms": 1, "vif_unpack_ms": 0.1, "xgkick_ms": 0.2,
+                             "gs_submit_ms": 0.4})
+            (perf / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            metrics = device.run_metrics(root)
+        self.assertEqual(metrics["draws_per_gameplay_frame_p50"], 25)
+        self.assertEqual(metrics["ee_ms_on_time_p50"], 2.5)
+        self.assertEqual(metrics["ee_ms_late_p50"], 9)
+
+    def test_active_gameplay_rows_include_frames_between_clock_updates(self):
+        rows = [{"t": float(index), "game_clock_s": float(index)}
+                for index in range(4)]
+        rows.extend({"t": float(index), "game_clock_s": 3.0} for index in range(4, 20))
+        active = device.active_gameplay_rows(rows)
+        self.assertGreater(len(active), 4)
+        self.assertLess(len(active), len(rows))
 
     def test_ab_app_arguments_must_be_paired(self):
         with tempfile.TemporaryDirectory() as temp:

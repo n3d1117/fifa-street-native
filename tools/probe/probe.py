@@ -121,6 +121,9 @@ def parse_log(text):
     under = re.findall(r"\[spu2-health\].*?underrun=(\d+)", text)
     if under:
         out["audio_underruns"] = sum(int(n) for n in under)
+    elif "[spu2] SDL playback input=" in text:
+        out["audio_underruns"] = sum(int(n) for n in
+                                      re.findall(r"\[spu2-underrun\] frames=(\d+)", text))
     stubs = collections.Counter(re.findall(r"Unimplemented PS2 stub called\. name=(\S+)", text))
     for m in re.finditer(r"\[Syscall TODO\] encoded=0x([0-9a-f]+) v1=0x([0-9a-f]+)", text):
         stubs[f"syscall:0x{int(m[1], 16) or int(m[2], 16):x}"] += 1

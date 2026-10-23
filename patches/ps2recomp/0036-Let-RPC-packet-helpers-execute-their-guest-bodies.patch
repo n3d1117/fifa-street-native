@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 23:21:28 +0200
-Subject: [PATCH 036/101] Let RPC packet helpers execute their guest bodies
+Subject: [PATCH 036/102] Let RPC packet helpers execute their guest bodies
 
 The generated packet action test reproduced sceRpcGetFPacket throwing. Remove the three automatic TODO bindings and delete their unused stub files. The disc helpers free packet fields, rotate 64-byte pool slots using signed remainder, and select an indexed pool with rotating fallback; all effects stay in guest registers and memory.
 
