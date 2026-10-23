@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 21:41:56 +0200
-Subject: [PATCH 093/102] Pad: forward actuator rumble values
+Subject: [PATCH 093/104] Pad: forward actuator rumble values
 
 Decode the six-byte libpad actuator alignment and direct data in the Pad HLE, preserving the small motor LSB and full-byte large motor semantics. Forward the decoded values through the host gamepad API when built for Metal.
 

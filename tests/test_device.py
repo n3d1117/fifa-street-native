@@ -136,6 +136,30 @@ class DeviceHarnessTests(unittest.TestCase):
         self.assertGreater(len(active), 4)
         self.assertLess(len(active), len(rows))
 
+    def test_fps_excludes_removed_clock_gaps_from_duration(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / "perf").mkdir()
+            rows = [{"t": index / 60, "gameplay": True,
+                     "game_clock_s": min(index / 60, 1) if index < 600 else index / 60,
+                     "present_dt_ms": 1000 / 60} for index in range(720)]
+            (root / "perf/frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            self.assertLess(len(device.active_gameplay_rows(rows)), len(rows))
+            self.assertAlmostEqual(device.run_metrics(root)["fps"], 60)
+
+    def test_thread_cores_weight_only_retained_active_frames(self):
+        snapshots = [{"t": when, "thread_cpu_s": {"GameThread": cpu}}
+                     for when, cpu in [(0, 0), (1, 0.5), (10, 0.5), (11, 1.0)]]
+        rows = [{"t": 0.5, "present_dt_ms": 20}, {"t": 10.5, "present_dt_ms": 20}]
+        cores = device.active_thread_cores(rows, snapshots)
+        self.assertAlmostEqual(cores["gamethread_cores"], 0.5)
+        self.assertAlmostEqual(cores["process_cores"], 0.5)
+        self.assertEqual(device.active_thread_cores(rows, []), {})
+        snapshots = [{"t": when, "thread_cpu_s": {"GameThread": cpu}}
+                     for when, cpu in [(0, 0), (1, 1), (2, 1)]]
+        crossing = [{"t": 1.5, "present_dt_ms": 1000}]
+        self.assertAlmostEqual(device.active_thread_cores(crossing, snapshots)["process_cores"], 0.5)
+
     def test_ab_app_arguments_must_be_paired(self):
         with tempfile.TemporaryDirectory() as temp:
             args = SimpleNamespace(pairs=1, runs=1, seconds=1, warmup=0, label="apps",
@@ -165,7 +189,7 @@ class DeviceHarnessTests(unittest.TestCase):
             ]
             (perf / "frames.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
             metrics = device.run_metrics(root)
-        self.assertEqual(metrics["fps"], 2.0)
+        self.assertAlmostEqual(metrics["fps"], 1000 / 18)
         self.assertEqual(metrics["present_dt_ms_p50"], 18.0)
         self.assertEqual(metrics["late_frames_over_18_pct"], 50.0)
         self.assertEqual(metrics["audio_underruns_delta_gameplay"], 2)

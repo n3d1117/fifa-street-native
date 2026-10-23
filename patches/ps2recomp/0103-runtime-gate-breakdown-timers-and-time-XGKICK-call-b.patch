@@ -1,0 +1,144 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Fri, 23 Oct 2026 14:16:30 +0200
+Subject: [PATCH 103/104] runtime: gate breakdown timers and time XGKICK call
+ boundaries
+
+
+diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
+index d69ead2b4b70ac2da14cb1ae5ad4f1a221ff5a69..46a2f912c11ef13e83e508a4d0348b9af2489375 100644
+--- a/ps2xIOP/src/emulator/iop_emulator.cpp
++++ b/ps2xIOP/src/emulator/iop_emulator.cpp
+@@ -39,10 +39,10 @@ namespace
+ {
+ std::atomic<double> g_perfExecutionSeconds{0.0};
+ 
+-bool perfLogEnabled() noexcept
++bool perfBreakdownEnabled() noexcept
+ {
+     static const bool enabled = [] {
+-        const char *value = std::getenv("PS2X_PERF_LOG");
++        const char *value = std::getenv("PS2X_PERF_BREAKDOWN");
+         return value && std::strcmp(value, "1") == 0;
+     }();
+     return enabled;
+@@ -519,7 +519,7 @@ namespace ps2x::iop::detail
+         {
+             static thread_local uint32_t perfSlices = 0;
+             constexpr double sampleWeight = 8.0;
+-            const bool perfSample = perfLogEnabled() && (++perfSlices % static_cast<uint32_t>(sampleWeight) == 0u);
++            const bool perfSample = perfBreakdownEnabled() && (++perfSlices % static_cast<uint32_t>(sampleWeight) == 0u);
+             const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+             CpuState *previous = activeCpu;
+             activeCpu = &cpu;
+diff --git a/ps2xRuntime/include/runtime/ps2_perf.h b/ps2xRuntime/include/runtime/ps2_perf.h
+index c0ef869778ebf5e60c14da49a52f46f81bfa1316..a81378724467cd0a224580c9b1ec64cae5e574ee 100644
+--- a/ps2xRuntime/include/runtime/ps2_perf.h
++++ b/ps2xRuntime/include/runtime/ps2_perf.h
+@@ -14,6 +14,15 @@ inline bool ps2PerfLogEnabled() noexcept
+     return enabled;
+ }
+ 
++inline bool ps2PerfBreakdownEnabled() noexcept
++{
++    static const bool enabled = [] {
++        const char *value = std::getenv("PS2X_PERF_BREAKDOWN");
++        return value && std::strcmp(value, "1") == 0;
++    }();
++    return enabled;
++}
++
+ struct Ps2PerfSnapshot
+ {
+     double vu1_seconds = 0.0;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 426d6789d6001d9eb1a2ca8d4ae80cdb43058730..d67293a022bc2c03d615ea74393575c04747169c 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -417,7 +417,7 @@ void EeScheduler::run()
+             continue;
+         }
+ 
+-        const bool perfSample = ps2PerfLogEnabled() && (++perfDispatches % 32u == 0u);
++        const bool perfSample = ps2PerfBreakdownEnabled() && (++perfDispatches % 32u == 0u);
+         const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+         const auto recordPerf = [&] {
+             if (perfSample)
+diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+index 302eb0fe9ec7096b463faeed577a10b3e6deec9a..f55dbe84f702b7d5c8c16b5ef8577dcea65cb81b 100644
+--- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
++++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
+@@ -693,7 +693,7 @@ void PS2Memory::applyVif1Op(const Vif1Op &op)
+     {
+         static thread_local uint32_t perfUnpacks = 0;
+         constexpr double sampleWeight = 8.0;
+-        const bool perfSample = ps2PerfLogEnabled() && (++perfUnpacks % static_cast<uint32_t>(sampleWeight) == 0u);
++        const bool perfSample = ps2PerfBreakdownEnabled() && (++perfUnpacks % static_cast<uint32_t>(sampleWeight) == 0u);
+         uint32_t row[4] = {op.unpack.row[0], op.unpack.row[1], op.unpack.row[2], op.unpack.row[3]};
+         const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+         unpackVectors(op, m_vu1Data, row);
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+index c22c6378c5058324a3a6a0e6d21782c7c67a51db..102e42fb51a67d6c1106d456c74dd94bb94e4ed0 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+@@ -60,26 +60,28 @@ namespace
+             ctx.gs->processGIFPacket(data, size);
+     }
+ 
++    struct KickPerfScope
++    {
++        bool enabled;
++        std::chrono::steady_clock::time_point start;
++        explicit KickPerfScope(bool work) : enabled(false)
++        {
++            static thread_local uint32_t calls = 0;
++            enabled = work && ps2PerfBreakdownEnabled() && (++calls % 256u == 0u);
++            if (enabled)
++                start = std::chrono::steady_clock::now();
++        }
++        ~KickPerfScope()
++        {
++            if (enabled)
++                ps2RecordXgkick(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * 256.0);
++        }
++    };
++
+     // One PATH1 transfer step: exactly the loop body of VU1Interpreter::progressXgkick.
+     // Returns false when the transfer ended (finished or aborted).
+     bool kickStep(Vu1RecContext &ctx)
+     {
+-        static thread_local uint32_t perfSteps = 0;
+-        constexpr double sampleWeight = 256.0;
+-        const bool perfSample = ps2PerfLogEnabled() && (++perfSteps % static_cast<uint32_t>(sampleWeight) == 0u);
+-        struct PerfScope
+-        {
+-            bool enabled;
+-            double weight;
+-            std::chrono::steady_clock::time_point start;
+-            ~PerfScope()
+-            {
+-                if (enabled)
+-                    ps2RecordXgkick(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() * weight);
+-            }
+-        } perf{perfSample, sampleWeight, {}};
+-        if (perf.enabled)
+-            perf.start = std::chrono::steady_clock::now();
+         Vu1RecKick &k = ctx.kick;
+         const uint32_t dataSize = PS2_VU1_DATA_SIZE;
+         if (k.copiedBytes > Vu1RecKick::kBufferSize - 16u)
+@@ -184,6 +186,7 @@ void vu1rec_kick_start(Vu1RecContext &ctx, uint32_t qwordAddress, uint64_t cycle
+ void vu1rec_kick_catchup(Vu1RecContext &ctx, uint64_t cycle)
+ {
+     Vu1RecKick &k = ctx.kick;
++    KickPerfScope perf(k.active && k.issueCycle + 1u + 2u * (k.copiedBytes / 16u) <= cycle);
+     while (k.active && k.issueCycle + 1u + 2u * (k.copiedBytes / 16u) <= cycle)
+     {
+         if (!kickStep(ctx))
+@@ -193,6 +196,7 @@ void vu1rec_kick_catchup(Vu1RecContext &ctx, uint64_t cycle)
+ 
+ uint64_t vu1rec_kick_drain(Vu1RecContext &ctx)
+ {
++    KickPerfScope perf(ctx.kick.active);
+     while (ctx.kick.active)
+     {
+         if (!kickStep(ctx))

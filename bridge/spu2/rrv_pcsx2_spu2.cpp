@@ -88,11 +88,11 @@ void push_event(u64 cycle, u32 kind, u32 data)
 void rrv_mix()
 {
     static const bool perfEnabled = [] {
-        const char* value = std::getenv("PS2X_PERF_LOG");
+        const char* value = std::getenv("PS2X_PERF_BREAKDOWN");
         return value && value[0] == '1' && value[1] == '\0';
     }();
     static thread_local u32 perfMixes = 0;
-    constexpr u32 sampleWeight = 256;
+    constexpr u32 sampleWeight = 1024;
     const bool perfSample = perfEnabled && (++perfMixes % sampleWeight == 0u);
     const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     g_state->in_mix = true;

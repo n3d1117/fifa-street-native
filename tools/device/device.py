@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """USB device signing, install, data transfer and run summaries for ./rx device."""
 import argparse
+import bisect
 import datetime as dt
 import hashlib
 import json
@@ -864,14 +865,50 @@ def _thread_cpu(row, thread):
     return values[-1] if values else None
 
 
+def active_thread_cores(rows, summaries):
+    snapshots = [row for row in summaries if isinstance(row.get("t"), (int, float))
+                 and isinstance(row.get("thread_cpu_s"), dict)]
+    snapshots.sort(key=lambda row: row["t"])
+    times = [row["t"] for row in snapshots]
+    weighted, durations = {}, {}
+    for row in rows:
+        when, duration = _metric_value(row, "t"), _metric_value(row, "present_dt_ms")
+        if when is None or duration is None or duration <= 0:
+            continue
+        cursor = when - duration / 1000.0
+        index = max(1, bisect.bisect_right(times, cursor))
+        while index < len(snapshots) and snapshots[index - 1]["t"] < when:
+            first, last = snapshots[index - 1], snapshots[index]
+            elapsed = last["t"] - first["t"]
+            overlap = min(when, last["t"]) - max(cursor, first["t"])
+            if elapsed > 0 and overlap > 0:
+                before, after = first["thread_cpu_s"], last["thread_cpu_s"]
+                for name in before.keys() & after.keys():
+                    delta = after[name] - before[name]
+                    if delta < 0:
+                        continue
+                    weighted[name] = weighted.get(name, 0.0) + delta / elapsed * overlap
+                    durations[name] = durations.get(name, 0.0) + overlap
+            index += 1
+    cores = {name: value / durations[name] for name, value in weighted.items()}
+    result = {}
+    for name, key in (("GameThread", "gamethread_cores"), ("VU1GSWorker", "vu1gsworker_cores")):
+        if name in cores:
+            result[key] = cores[name]
+    if cores:
+        result["process_cores"] = sum(cores.values())
+    return result
+
+
 def run_metrics(run_dir):
     root = Path(run_dir)
     rows = active_gameplay_rows(gameplay_rows(root))
     metrics = {}
     times = [v for r in rows for v in [_metric_value(r, "t")] if v is not None]
-    seconds = max(times) - min(times) if len(times) > 1 else 0.0
-    if rows and seconds > 0:
-        metrics["fps"] = len(rows) / seconds
+    intervals = [_metric_value(row, "present_dt_ms") for row in rows]
+    intervals = [value for value in intervals if value is not None and value > 0]
+    if intervals:
+        metrics["fps"] = 1000.0 * len(intervals) / sum(intervals)
     frame_fields = {
         "present_dt_ms": ("p50", "p95", "p99"), "cpu_game_ms": ("p50", "p95"),
         "vu1_ms": ("p50", "p95"), "gs_submit_ms": ("p50",),
@@ -925,20 +962,7 @@ def run_metrics(run_dir):
         run_vals = [v for v in run_vals if v is not None]
         if run_vals:
             metrics[field + "_delta_run"] = run_vals[-1] - run_vals[0] if len(run_vals) > 1 else run_vals[-1]
-    if seconds > 0 and times and summaries:
-        start_t, end_t = min(times), max(times)
-        before = [r for r in summaries if r.get("t", float("inf")) <= start_t]
-        after = [r for r in summaries if r.get("t", float("-inf")) >= end_t]
-        first = before[-1] if before else min(summaries, key=lambda r: abs(r.get("t", start_t) - start_t))
-        last = after[0] if after else min(summaries, key=lambda r: abs(r.get("t", end_t) - end_t))
-        a, b = first.get("thread_cpu_s", {}), last.get("thread_cpu_s", {})
-        for thread, label in (("GameThread", "gamethread_cores"), ("VU1GSWorker", "vu1gsworker_cores")):
-            if isinstance(a, dict) and isinstance(b, dict) and thread in a and thread in b:
-                metrics[label] = (b[thread] - a[thread]) / seconds
-        if isinstance(a, dict) and isinstance(b, dict):
-            names = a.keys() & b.keys()
-            if names:
-                metrics["process_cores"] = sum(b[n] - a[n] for n in names) / seconds
+    metrics.update(active_thread_cores(rows, summaries))
     summary = json.loads((root / "summary.json").read_text()) if (root / "summary.json").exists() else {}
     if isinstance(summary.get("time_to_play_s"), (int, float)):
         metrics["time_to_play_s"] = summary["time_to_play_s"]
@@ -1099,7 +1123,7 @@ def run_experiment(args, kind):
         if index:
             waits.append(cooldown(udid, first_temp))
         run_args = argparse.Namespace(seconds=args.seconds, warmup=args.warmup,
-            label=f"{label}-{arm}-{index + 1:02d}",
+            label=f"{label}-{arm}-{index + 1:02d}", breakdown=getattr(args, "breakdown", False),
             env=[f"{k}={v}" for k, v in arms[arm].items()], no_match=False,
             shots_every=max(1, args.seconds + args.warmup - 1), app=str(prepared_apps[arm][0]) if arm in prepared_apps else None,
             udid=udid, _stamp=stamp)
@@ -1406,7 +1430,7 @@ def do_run(args):
                 check=False,
             )
     env = [] if args.no_match else ["PS2X_BOOT_MATCH=venue=3", "PS2X_AUTOPILOT=match"]
-    env += ["PS2X_PERF_LOG=1", f"PS2X_USER_DIR=rx-run-{stamp}-{label}"] + args.env
+    env += ["PS2X_PERF_LOG=1", f"PS2X_PERF_BREAKDOWN={int(getattr(args, 'breakdown', False))}", f"PS2X_USER_DIR=rx-run-{stamp}-{label}"] + args.env
     launch = ["developer", "dvt", "launch", "--tunnel", udid]
     for e in env:
         launch += ["--env", e]
@@ -1604,6 +1628,7 @@ def main(argv=None):
     p.add_argument("--udid")
     r = sub.add_parser("run")
     r.add_argument("--seconds", type=int, required=True)
+    r.add_argument("--breakdown", action="store_true", help="enable sampled execution timing")
     r.add_argument("--warmup", type=float, default=0)
     r.add_argument("--label")
     r.add_argument("--env", action="append", default=[])
@@ -1624,6 +1649,7 @@ def main(argv=None):
     ab.add_argument("--pairs", type=int, required=True)
     ab.add_argument("--seconds", type=int, required=True)
     ab.add_argument("--label", required=True)
+    ab.add_argument("--breakdown", action="store_true", help="enable sampled execution timing")
     ab.add_argument("--warmup", type=float, default=0)
     ab.add_argument("--udid")
     baseline = sub.add_parser("baseline")
@@ -1631,6 +1657,7 @@ def main(argv=None):
     baseline.add_argument("--seconds", type=int, required=True)
     baseline.add_argument("--label", required=True)
     baseline.add_argument("--env", action="append", default=[])
+    baseline.add_argument("--breakdown", action="store_true", help="enable sampled execution timing")
     baseline.add_argument("--warmup", type=float, default=0)
     baseline.add_argument("--udid")
     args = ap.parse_args(argv)

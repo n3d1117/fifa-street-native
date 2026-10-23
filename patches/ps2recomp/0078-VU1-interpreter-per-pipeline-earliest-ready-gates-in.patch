@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 13:08:20 +0200
-Subject: [PATCH 078/102] VU1 interpreter: per-pipeline earliest-ready gates,
+Subject: [PATCH 078/104] VU1 interpreter: per-pipeline earliest-ready gates,
  invalidate drained entries by flag (10 -> 10.8 Mcyc/s; differential 561,129
  calls, 0 mismatches)
 
