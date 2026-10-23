@@ -24,6 +24,69 @@ class DeviceHarnessTests(unittest.TestCase):
         _, stable = device.compare_metrics([{"fps": 50.0}, {"fps": 51.0}], [{"fps": 51.0}])
         self.assertEqual(stable["fps"], "no-change")
 
+    def test_ab_installs_prepared_apps_per_run_and_restores_head_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            control = root / "control.app"
+            candidate = root / "candidate.app"
+            head = root / "head.app"
+            prepared = []
+            installs = []
+            runs = []
+            install_times = iter((1.0, 0.5, 1.5, 2.0, 0.25))
+
+            def sign(app, lean, udid):
+                prepared.append((pathlib.Path(app), lean, udid))
+                return root / (pathlib.Path(app).stem + ".signed"), "example.game"
+
+            def install(app, lean, udid, stage, bundle):
+                installs.append((pathlib.Path(app), lean, udid, pathlib.Path(stage), bundle))
+                return next(install_times), True
+
+            def do_run(args):
+                runs.append(args)
+                out = root / "run" / str(len(runs))
+                out.mkdir(parents=True)
+                return out
+
+            args = SimpleNamespace(pairs=2, runs=2, seconds=1, warmup=0, label="apps",
+                control=["ARM=control"], candidate=["ARM=candidate"], env=[],
+                control_app=str(control), candidate_app=str(candidate), udid="device")
+            with patch.object(device, "ROOT", root), \
+                 patch.object(device, "choose_udid", return_value="device"), \
+                 patch.object(device, "sign_stage", side_effect=sign), \
+                 patch.object(device, "install_prepared", side_effect=install), \
+                 patch.object(device, "do_run", side_effect=do_run), \
+                 patch.object(device, "run_metrics", return_value={"fps": 50}), \
+                 patch.object(device, "_battery_start", return_value=20), \
+                 patch.object(device, "cooldown", return_value={"seconds": 0}), \
+                 patch.object(device, "default_app", return_value=head):
+                device.run_experiment(args, "ab")
+
+            self.assertEqual(len(prepared), 3)
+            self.assertTrue(all(row[1:] == (True, "device") for row in prepared))
+            self.assertEqual([pathlib.Path(run.app) for run in runs],
+                [control.resolve(), candidate.resolve(), candidate.resolve(), control.resolve()])
+            self.assertEqual([row[0] for row in installs[:4]],
+                [control.resolve(), candidate.resolve(), candidate.resolve(), control.resolve()])
+            self.assertEqual(installs[-1][0], head.resolve())
+            data = json.loads(next((root / "build/device-ab").glob("*/ab.json")).read_text())
+            self.assertEqual(data["install_seconds"], [1.0, 0.5, 1.5, 2.0])
+            self.assertEqual(data["installed_at_end"], str(head.resolve()))
+            report = next((root / "build/device-ab").glob("*/ab.txt")).read_text()
+            self.assertIn("Install median: 1.25s", report)
+            self.assertIn(f"Installed at end: {head.resolve()}", report)
+
+    def test_ab_app_arguments_must_be_paired(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = SimpleNamespace(pairs=1, runs=1, seconds=1, warmup=0, label="apps",
+                control=[], candidate=[], env=[], control_app="control.app",
+                candidate_app=None, udid="device")
+            with patch.object(device, "ROOT", pathlib.Path(temp)), \
+                 patch.object(device, "choose_udid", return_value="device"):
+                with self.assertRaisesRegex(device.Failed, "must be supplied together"):
+                    device.run_experiment(args, "ab")
+
     def test_run_metrics_filters_frames_to_gameplay_window(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)

@@ -411,31 +411,43 @@ def sign_stage(app, lean, udid):
     return stage, bundle
 
 
-def do_install(args):
-    udid = choose_udid(args.udid)
-    app = Path(args.app or default_app(udid))
-    src_hash = source_hash(app, args.lean)
+def install_prepared(app, lean, udid, stage=None, bundle=None, force=False):
+    """Install a signed app, reusing the device hash cache when possible."""
+    app = Path(app)
+    src_hash = source_hash(app, lean)
     state = state_read()
     prior = state.get("install", {})
     if (
-        not args.force
+        not force
         and prior.get("hash") == src_hash
-        and prior.get("lean") == args.lean
+        and prior.get("lean") == lean
         and prior.get("udid") == udid
     ):
-        print("installed app unchanged; skipped")
-        return
-    stage, bundle = sign_stage(app, args.lean, udid)
+        return 0.0, False
+    if stage is None or bundle is None:
+        stage, bundle = sign_stage(app, lean, udid)
+    started = time.monotonic()
     pmd("apps", "install", str(stage), *global_device_args(udid), timeout=900)
+    elapsed = time.monotonic() - started
     state["install"] = {
         "hash": src_hash,
-        "lean": args.lean,
+        "lean": lean,
         "bundle": bundle,
         "source": str(app),
         "udid": udid,
     }
     state_write(state)
-    print(f"installed {bundle} ({'lean' if args.lean else 'full'})")
+    return elapsed, True
+
+
+def do_install(args):
+    udid = choose_udid(args.udid)
+    app = Path(args.app or default_app(udid))
+    elapsed, installed = install_prepared(app, args.lean, udid, force=args.force)
+    if installed:
+        print(f"installed {app} ({'lean' if args.lean else 'full'}; {elapsed:.2f}s)")
+    else:
+        print("installed app unchanged; skipped")
 
 
 def hash_file(path):
@@ -900,6 +912,10 @@ def render_ab_text(data):
         lines.append(f"{key:<36} {row['control']:>10.3f} {row['candidate']:>10.3f} {row['delta']:>10.3f} {pct:>9} {row['control_noise']:>10.3f}")
     verdict = ", ".join(f"{k}: {v}" for k, v in data["verdicts"].items()) or "no comparable metrics"
     lines.extend(("Verdict: " + verdict, ""))
+    if data.get("install_seconds"):
+        lines.insert(-1, f"Install median: {statistics.median(data['install_seconds']):.2f}s")
+    if data.get("installed_at_end"):
+        lines.insert(-1, f"Installed at end: {data['installed_at_end']}")
     return "\n".join(lines)
 
 
@@ -912,13 +928,25 @@ def run_experiment(args, kind):
     ab_dir = ROOT / "build/device-ab" / f"{stamp}-{label}"
     ab_dir.mkdir(parents=True, exist_ok=False)
     udid = choose_udid(args.udid)
+    prepared_apps = {}
     if kind == "ab":
         arms = {"control": env_pairs(args.control), "candidate": env_pairs(args.candidate)}
         order = abba_order(args.pairs)
+        control_app = getattr(args, "control_app", None)
+        candidate_app = getattr(args, "candidate_app", None)
+        if bool(control_app) != bool(candidate_app):
+            raise Failed("--control-app and --candidate-app must be supplied together")
+        if control_app:
+            prepared_by_path = {}
+            for arm, app in (("control", control_app), ("candidate", candidate_app)):
+                app = Path(app).expanduser().resolve()
+                if app not in prepared_by_path:
+                    prepared_by_path[app] = (app, *sign_stage(app, True, udid))
+                prepared_apps[arm] = prepared_by_path[app]
     else:
         arms = {"baseline": env_pairs(args.env)}
         order = ["baseline"] * args.runs
-    run_dirs, values, waits = [], {arm: [] for arm in arms}, []
+    run_dirs, values, waits, install_seconds = [], {arm: [] for arm in arms}, [], []
     first_temp = None
     for index, arm in enumerate(order):
         if index:
@@ -926,12 +954,27 @@ def run_experiment(args, kind):
         run_args = argparse.Namespace(seconds=args.seconds, warmup=args.warmup,
             label=f"{label}-{arm}-{index + 1:02d}",
             env=[f"{k}={v}" for k, v in arms[arm].items()], no_match=False,
-            shots_every=0, app=None, udid=udid, _stamp=stamp)
+            shots_every=0, app=str(prepared_apps[arm][0]) if arm in prepared_apps else None,
+            udid=udid, _stamp=stamp)
+        if arm in prepared_apps:
+            app, stage, bundle = prepared_apps[arm]
+            elapsed, _installed = install_prepared(app, True, udid, stage, bundle)
+            install_seconds.append(elapsed)
         run_dir = do_run(run_args)
         if first_temp is None:
             first_temp = _battery_start(run_dir)
         run_dirs.append(str(run_dir.relative_to(ROOT)))
         values[arm].append(run_metrics(run_dir))
+    installed_at_end = None
+    if prepared_apps:
+        head_app = Path(default_app(udid)).resolve()
+        prepared = next((v for v in prepared_apps.values() if v[0] == head_app), None)
+        if prepared is None:
+            stage, bundle = sign_stage(head_app, True, udid)
+        else:
+            _app, stage, bundle = prepared
+        install_prepared(head_app, True, udid, stage, bundle)
+        installed_at_end = str(head_app)
     if kind == "ab":
         metrics, verdicts = compare_metrics(values["control"], values["candidate"])
     else:
@@ -942,7 +985,8 @@ def run_experiment(args, kind):
             "warmup": args.warmup,
             "git_sha": subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                 capture_output=True, text=True, check=False).stdout.strip(),
-            "metrics": metrics, "verdicts": verdicts, "run_dirs": run_dirs, "cooldowns": waits}
+            "metrics": metrics, "verdicts": verdicts, "run_dirs": run_dirs, "cooldowns": waits,
+            "install_seconds": install_seconds, "installed_at_end": installed_at_end}
     (ab_dir / "ab.json").write_text(json.dumps(data, indent=2) + "\n")
     (ab_dir / "ab.txt").write_text(render_ab_text(data))
     ledger = ROOT / "build/device-ab/ledger.jsonl"
@@ -1378,6 +1422,8 @@ def main(argv=None):
     ab = sub.add_parser("ab")
     ab.add_argument("--control", action="append", required=True)
     ab.add_argument("--candidate", action="append", required=True)
+    ab.add_argument("--control-app")
+    ab.add_argument("--candidate-app")
     ab.add_argument("--pairs", type=int, required=True)
     ab.add_argument("--seconds", type=int, required=True)
     ab.add_argument("--label", required=True)
