@@ -27,6 +27,7 @@
 #include <atomic>
 #include <array>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <mutex>
@@ -883,6 +884,8 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 	{
 		std::memset(dst + 2 * avail, 0, (frames - avail) * 2 * sizeof(float));
 		s->underruns.fetch_add(frames - avail, std::memory_order_relaxed);
+		std::fprintf(stderr, "[spu2-underrun] frames=%zu ring_occupancy_frames=%llu\n",
+			frames - avail, static_cast<unsigned long long>(head - tail));
 	}
 	return avail;
 }
