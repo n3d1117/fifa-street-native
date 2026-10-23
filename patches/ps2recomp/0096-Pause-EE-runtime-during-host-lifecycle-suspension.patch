@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Thu, 22 Oct 2026 20:59:47 +0200
-Subject: [PATCH 96/97] Pause EE runtime during host lifecycle suspension
+Subject: [PATCH 96/98] Pause EE runtime during host lifecycle suspension
 
 
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h

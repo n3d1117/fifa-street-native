@@ -24,6 +24,7 @@
 #include <vector>
 #include <unordered_map>
 #include <pthread.h>
+#include <pthread/qos.h>
 
 namespace {
 double monotonic() {
@@ -82,6 +83,32 @@ struct PerfLog {
         vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), count * sizeof(thread_t));
         return result;
     }
+    NSDictionary* threadQos() {
+        thread_act_array_t list = nullptr;
+        mach_msg_type_number_t count = 0;
+        NSMutableDictionary* result = [NSMutableDictionary dictionary];
+        if (task_threads(mach_task_self(), &list, &count) != KERN_SUCCESS) return result;
+        for (mach_msg_type_number_t i = 0; i < count; ++i) {
+            thread_extended_info_data_t info{};
+            mach_msg_type_number_t size = THREAD_EXTENDED_INFO_COUNT;
+            if (thread_info(list[i], THREAD_EXTENDED_INFO, reinterpret_cast<thread_info_t>(&info), &size) == KERN_SUCCESS && info.pth_name[0]) {
+                pthread_t thread = pthread_from_mach_thread_np(list[i]);
+                qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+                int relativePriority = 0;
+                if (thread && pthread_get_qos_class_np(thread, &qos, &relativePriority) == 0) {
+                    NSString* value = qos == QOS_CLASS_USER_INTERACTIVE ? @"user_interactive" :
+                        qos == QOS_CLASS_USER_INITIATED ? @"user_initiated" :
+                        qos == QOS_CLASS_DEFAULT ? @"default" :
+                        qos == QOS_CLASS_UTILITY ? @"utility" :
+                        qos == QOS_CLASS_BACKGROUND ? @"background" : @"unspecified";
+                    result[[NSString stringWithUTF8String:info.pth_name]] = value;
+                }
+            }
+            mach_port_deallocate(mach_task_self(), list[i]);
+        }
+        vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), count * sizeof(thread_t));
+        return result;
+    }
     void write(NSDictionary* object) {
         NSData* bytes = [NSJSONSerialization dataWithJSONObject:object options:0 error:nil];
         if (!bytes) return;
@@ -132,7 +159,7 @@ struct PerfLog {
 #endif
                 write(@{@"type": @"summary", @"t": @(now), @"wall_time": @([[NSDate date] timeIntervalSince1970]), @"thermal_state": @([[NSProcessInfo processInfo] thermalState]),
                     @"os_proc_available_memory": available, @"phys_footprint": footprint,
-                    @"thread_cpu_s": threads(), @"audio_underruns": @(ps2x_spu2_host_underruns()),
+                    @"thread_cpu_s": threads(), @"thread_qos": threadQos(), @"audio_underruns": @(ps2x_spu2_host_underruns()),
                     @"pipeline_compiles": @(lastCompiles), @"vu_fallbacks": @(lastFallbacks),
                     @"fps": @(rows.size() / std::max(1e-6, now - last)), @"dropped_frames": @(lost)});
                 std::fflush(file);

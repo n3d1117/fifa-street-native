@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 13:30:49 +0200
-Subject: [PATCH 41/97] GS bridge calls go through one DataStream interface
+Subject: [PATCH 41/98] GS bridge calls go through one DataStream interface
  with lazy CSR readback; MSCAL control state is read and published on the EE
  side
 
