@@ -184,6 +184,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 
 - vsync-drain-overlap: on the iPhone 11 match route, three A/B pairs improved late frames over 18 ms from 21.72% to 10.70% and present p99 from 25.53 to 22.60 ms, but gameplay underrun bursts occurred in 2/3 candidate runs versus 0/3 controls, meeting the regression rule; keep the VSync drain.
 - vsync-drain-overlap-e6r: on the iPhone A13 match route, disabling the drain produced no material smoothness improvement and zero underruns in both arms; cpu_game_ms p50 regressed 0.508 ms, gpu_ms p50 0.557 ms, and vu1_ms p50 0.838 ms beyond control noise; reject.
+- vsync-drain-overlap: on the iPhone A13 match route, late frames over 18 ms fell 19.32%→9.49%, FPS rose 57.65→58.86, and present p99 fell 25.56→22.45 ms, but gameplay underruns occurred in 2/3 candidate runs versus 0/3 controls and maximum thermal state rose 0→1; reject.
 
 - vu1-copy-cost-kick: later A/B comparisons did not repeat the VU1 or smoothness gains beyond control noise; isolated gameplay underrun bursts occurred on both paths, so no repeatable benefit was established; reject.
 - generated-opt-level: on the iPhone A13 match route, -O2 cut cpu_game_ms p50/p95 by 0.465/0.594 ms but raised vu1_ms p50 by 0.378 ms (5.8%) beyond control noise; smoothness stayed within noise, so reject.
