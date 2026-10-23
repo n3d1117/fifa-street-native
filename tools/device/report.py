@@ -47,7 +47,7 @@ def number(value, places=2):
 
 
 def entry_metrics(entry, metric, arm="candidate"):
-    metrics = entry.get("metrics") or {}
+    metrics = (entry or {}).get("metrics") or {}
     value = metrics.get(metric)
     if isinstance(value, dict):
         return value.get(arm)
