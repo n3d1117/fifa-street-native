@@ -189,6 +189,8 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 
 ## Tried and rejected
 
+- E8b-gif-borrow: immediate empty-queue GIF borrowing had no counted smoothness gain (58.866→58.755 FPS), while VU p95 rose 10.317→10.861 ms (+0.544; noise 0.352). Startup underruns fell 212→0 median, but the counted VU regression requires rejection.
+
 
 - vu1-copy-cost-kick: later A/B comparisons did not repeat the VU1 or smoothness gains beyond control noise; isolated gameplay underrun bursts occurred on both paths, so no repeatable benefit was established; reject.
 - generated-opt-level: on the iPhone A13 match route, -O2 cut cpu_game_ms p50/p95 by 0.465/0.594 ms but raised vu1_ms p50 by 0.378 ms (5.8%) beyond control noise; smoothness stayed within noise, so reject.
