@@ -1,0 +1,228 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Fri, 23 Oct 2026 04:39:06 +0200
+Subject: [PATCH 99/99] runtime: reuse VU1 packet staging buffers
+
+Reuse packet-vector capacity across native dispatches without changing the transactional state/data/GIF commit. Full data-memory staging remains necessary for failed-native fallback; reset only the active packet count. PS2X_VU1_STAGING=legacy restores per-call allocation. Differential mode exercises the pool, with a regression covering success/failure/shrinking/empty packet sequences.
+
+Measured iPhone A13, venue=3 match autopilot, device A/B two pairs x 120 s (vu1-copy-cost-staging):
+- fps 56.347 -> 57.928, +1.581 (control noise 0.783).
+- late frames >18 ms 28.464% -> 16.945%, -11.519 pp (noise 10.275 pp).
+- cpu_game_ms p50/p95 11.700/17.198 -> 11.627/15.776, -0.072/-1.422 ms (noise 0.493/0.610 ms).
+- vu1_ms p50/p95 6.976/10.487 -> 6.934/10.036, -0.042/-0.451 ms (noise 0.928/0.180 ms); p50 unchanged within noise.
+- GPU p50 2.605 -> 2.646 ms (+0.041, noise 0.135); process 1.425 -> 1.446 cores (+0.021, below 0.05 materiality).
+- Gameplay/run underruns 0 -> 0; thermal maximum medians 0.5 -> 0 (noise 1).
+
+Keep: counted smoothness and tail-time improvements with no counted regression. Present p99 and VU1 p50 remain within control noise; no claim of lower average worker CPU.
+Validated build, quick/full tests, legacy tests, native/interpreter compare 320767 calls with zero mismatches/budget stops; macOS on/off each 60 fps and zero underruns. macOS package installed. A/B: build/device-ab/20261023T022011Z-vu1-copy-cost-staging/ab.txt.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1_recomp.h b/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
+index 5b2bb979e8026ab9ff2d95254dda6e4a9771d8d1..c1a860b6844c0074037ef507e6e9c42be7254690 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1_recomp.h
+@@ -149,6 +149,10 @@ public:
+ private:
+     friend struct Vu1NativeDispatcherTestAccess;
+ 
++    struct PacketCapture;
++    PacketCapture *m_packetPool = nullptr;
++    bool m_reusePackets = true;
++
+     bool dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &gs,
+                   uint32_t startPC, uint32_t top, uint32_t itop, uint32_t maxCycles, bool resume);
+     struct Stats
+diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+index ff43d18e8ab6a8c0503f3c3e5f354cd77b33bdd7..2d4cfbb6d7894987667dbc1469032edf3d50195d 100644
+--- a/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
++++ b/ps2xRuntime/src/lib/vu/ps2_vu1_recomp.cpp
+@@ -15,6 +15,24 @@
+ #include <string>
+ #include <vector>
+ 
++struct Vu1NativeDispatcher::PacketCapture
++{
++    std::vector<std::vector<uint8_t>> packets;
++    size_t count = 0;
++
++    void reset() { count = 0; }
++
++    static void sink(void *user, const uint8_t *data, uint32_t size)
++    {
++        auto *self = static_cast<PacketCapture *>(user);
++        if (self->count == self->packets.size())
++            self->packets.emplace_back(data, data + size);
++        else
++            self->packets[self->count].assign(data, data + size);
++        ++self->count;
++    }
++};
++
+ namespace
+ {
+     double nowSeconds()
+@@ -31,16 +49,6 @@ namespace
+         return std::atoi(v);
+     }
+ 
+-    struct PacketCapture
+-    {
+-        std::vector<std::vector<uint8_t>> packets;
+-        static void sink(void *user, const uint8_t *data, uint32_t size)
+-        {
+-            auto *self = static_cast<PacketCapture *>(user);
+-            self->packets.emplace_back(data, data + size);
+-        }
+-    };
+-
+     void submitPacket(Vu1RecContext &ctx, const uint8_t *data, uint32_t size)
+     {
+         if (ctx.sink)
+@@ -191,6 +199,9 @@ Vu1NativeDispatcher::Vu1NativeDispatcher()
+     m_diffLogBudget = envInt("PS2X_VU1_DIFF_LOG", 8);
+     m_statsPeriod = 5.0;
+     m_ctx = new Vu1RecContext();
++    const char *staging = std::getenv("PS2X_VU1_STAGING");
++    m_reusePackets = !(staging && std::strcmp(staging, "legacy") == 0);
++    m_packetPool = new PacketCapture();
+     std::fprintf(stderr, "[vu1rec] %zu program(s) registered; mode=%s\n", vu1recProgramCount(),
+                  m_forceInterpreter ? "interpreter (PS2X_VU1_INTERPRETER)" :
+                  (m_diff ? "diff (PS2X_VU1_DIFF)" : (m_fullFlags ? "full flags" : "live flags")));
+@@ -200,6 +211,7 @@ Vu1NativeDispatcher::Vu1NativeDispatcher()
+ Vu1NativeDispatcher::~Vu1NativeDispatcher()
+ {
+     printStats("exit");
++    delete m_packetPool;
+     delete m_ctx;
+ }
+ 
+@@ -351,7 +363,9 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
+     prepareState(stagedState, startPC, top, itop, resume);
+     std::array<uint8_t, PS2_VU1_DATA_SIZE> stagedData;
+     std::memcpy(stagedData.data(), memory.getVU1Data(), stagedData.size());
+-    PacketCapture stagedPackets;
++    PacketCapture legacyPackets;
++    PacketCapture &stagedPackets = m_reusePackets ? *m_packetPool : legacyPackets;
++    stagedPackets.reset();
+     Vu1RecContext &ctx = *m_ctx;
+     const uint64_t startCycle = vu1.cycleCount();
+     resetContext(ctx, &stagedState, stagedData.data(), startCycle, maxCycles, top, itop, nullptr, nullptr);
+@@ -374,8 +388,11 @@ bool Vu1NativeDispatcher::dispatch(VU1Interpreter &vu1, PS2Memory &memory, GS &g
+     }
+     vu1.state() = stagedState;
+     std::memcpy(memory.getVU1Data(), stagedData.data(), stagedData.size());
+-    for (const auto &packet : stagedPackets.packets)
++    for (size_t i = 0; i < stagedPackets.count; ++i)
++    {
++        const auto &packet = stagedPackets.packets[i];
+         memory.submitGifPacket(GifPathId::Path1, packet.data(), static_cast<uint32_t>(packet.size()));
++    }
+     ++m_stats.native;
+     m_stats.vu1Cycles += ctx.cycle - startCycle;
+     vu1.adoptNativeCompletion(ctx.cycle, ctx.backupReg, ctx.backupValue);
+@@ -400,7 +417,9 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecProgram &program, VU1Interpreter &
+ 
+     // Native live-flag variant; output flags outside its generated live-out mask are dead.
+     VU1State sLive = s0;
+-    PacketCapture pLive;
++    PacketCapture legacyPackets;
++    PacketCapture &pLive = m_reusePackets ? *m_packetPool : legacyPackets;
++    pLive.reset();
+     resetContext(*m_ctx, &sLive, dFull.data(), c0, maxCycles, top, itop, nullptr, nullptr);
+     m_ctx->code = memory.getVU1Code();
+     m_ctx->relocBase = relocBase;
+@@ -492,13 +511,13 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecProgram &program, VU1Interpreter &
+                           firstMem, firstMem / 16);
+             diffs.emplace_back(buf);
+         }
+-        if (pk.packets.size() != pInterp.packets.size())
++        if (pk.count != pInterp.count)
+         {
+-            std::snprintf(buf, sizeof(buf), "gif: packet count native=%zu interp=%zu", pk.packets.size(),
+-                          pInterp.packets.size());
++            std::snprintf(buf, sizeof(buf), "gif: packet count native=%zu interp=%zu", pk.count,
++                          pInterp.count);
+             diffs.emplace_back(buf);
+         }
+-        for (size_t i = 0; i < std::min(pk.packets.size(), pInterp.packets.size()); ++i)
++        for (size_t i = 0; i < std::min(pk.count, pInterp.count); ++i)
+         {
+             const auto &a = pk.packets[i];
+             const auto &b = pInterp.packets[i];
+@@ -531,7 +550,7 @@ void Vu1NativeDispatcher::runDiff(const Vu1RecProgram &program, VU1Interpreter &
+     if (!compare("live", sLive, dFull, pLive, liveFailed, liveCycle, liveFlags))
+         ++m_stats.diffMismatch;
+ 
+-    m_stats.diffPackets += pInterp.packets.size();
++    m_stats.diffPackets += pInterp.count;
+     for (const auto &packet : pInterp.packets)
+     {
+         m_stats.diffPacketBytes += packet.size();
+diff --git a/ps2xTest/src/ps2_vu1_tests.cpp b/ps2xTest/src/ps2_vu1_tests.cpp
+index 4187e3accd4ae75745305302690f86a6170629fa..5e813ea20d761c2d4c4c42f989344c77c1a04cb3 100644
+--- a/ps2xTest/src/ps2_vu1_tests.cpp
++++ b/ps2xTest/src/ps2_vu1_tests.cpp
+@@ -1865,6 +1865,64 @@ void register_ps2_vu1_tests()
+             t.Equals(native.seconds(), nativeSeconds + 0.25, "perf time includes the existing interpreter timing");
+         });
+ 
++        tc.Run("native packet staging survives failure and shrinking packet counts", [](TestCase &t)
++        {
++            Vu1Fixture fx;
++            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
++            fx.code[0] = 0xC7u;
++            static uint64_t words[1];
++            std::memcpy(words, fx.code, sizeof(words));
++            static const uint32_t entries[] = {0u};
++            Vu1RecProgram program;
++            program.name = "packet-reuse-test";
++            program.slots = 1u;
++            program.words = words;
++            program.entries = entries;
++            program.entryCount = 1u;
++            program.full = [](Vu1RecContext &ctx, uint32_t) {
++                ctx.state->vi[3] = static_cast<int32_t>(ctx.top);
++                ctx.data[7] = static_cast<uint8_t>(ctx.top);
++                ctx.cycle += 4u;
++                for (uint32_t i = 0; i < ctx.top; ++i)
++                {
++                    std::vector<uint8_t> packet((i + 2u) * 16u, static_cast<uint8_t>(ctx.top * 16u + i));
++                    const uint64_t tag = makeGifTag(static_cast<uint16_t>(i + 1u), GIF_FMT_IMAGE, 0u);
++                    std::memcpy(packet.data(), &tag, sizeof(tag));
++                    ctx.sink(ctx.sinkUser, packet.data(), static_cast<uint32_t>(packet.size()));
++                }
++                ctx.failed = ctx.itop != 0u;
++            };
++            vu1recRegisterProgram(program);
++            std::vector<std::vector<uint8_t>> captured;
++            fx.mem.setGifPacketCallback([&](const uint8_t *data, uint32_t size) {
++                captured.emplace_back(data, data + size);
++            });
++            VU1Interpreter vu1;
++            Vu1NativeDispatcher native;
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, 0u, 3u, 0u, 1000u), "first native call should succeed");
++            std::vector<std::vector<uint8_t>> expected;
++            for (uint32_t i = 0; i < 3u; ++i)
++            {
++                expected.emplace_back((i + 2u) * 16u, static_cast<uint8_t>(48u + i));
++                const uint64_t tag = makeGifTag(static_cast<uint16_t>(i + 1u), GIF_FMT_IMAGE, 0u);
++                std::memcpy(expected.back().data(), &tag, sizeof(tag));
++            }
++            t.IsTrue(captured == expected, "all packet bytes and their order must survive staging");
++            captured.clear();
++            t.IsTrue(!native.mscal(vu1, fx.mem, fx.gs, 0u, 2u, 1u, 1000u), "failed call should fall back");
++            t.IsTrue(captured.empty(), "failed packets must be discarded");
++            t.Equals(vu1.state().vi[3], 3, "failed call must preserve committed registers");
++            t.Equals(fx.data[7], uint8_t(3u), "failed call must preserve committed memory");
++            t.Equals(vu1.cycleCount(), uint64_t(4u), "failed call must preserve committed cycles");
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, 0u, 1u, 0u, 1000u), "smaller call should succeed");
++            expected.resize(1);
++            std::fill(expected[0].begin() + 8, expected[0].end(), uint8_t(16u));
++            t.IsTrue(captured == expected, "smaller call must overwrite reused bytes and omit stale packets");
++            captured.clear();
++            t.IsTrue(native.mscal(vu1, fx.mem, fx.gs, 0u, 0u, 0u, 1000u), "empty call should succeed");
++            t.IsTrue(captured.empty(), "empty call must not submit retained packets");
++        });
++
+         tc.Run("reserved opcodes stop before executing or corrupting state", [](TestCase &t)
+         {
+             Vu1Fixture fx;

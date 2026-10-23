@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Fri, 23 Oct 2026 02:12:12 +0200
-Subject: [PATCH 98/98] runtime: set interactive QoS for game and VU worker
+Subject: [PATCH 98/99] runtime: set interactive QoS for game and VU worker
  threads
 
 

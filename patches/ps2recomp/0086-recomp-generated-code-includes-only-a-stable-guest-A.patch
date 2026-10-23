@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 01:54:19 +0200
-Subject: [PATCH 86/98] recomp: generated code includes only a stable guest ABI
+Subject: [PATCH 86/99] recomp: generated code includes only a stable guest ABI
  header
 
 Measured ps2_runtime.h comment rebuild: 313.7 s and 424 generated unity objects before; 3.4 s and 0 generated unity objects after.
