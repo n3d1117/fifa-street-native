@@ -114,6 +114,8 @@ The iPhone 11 A13 matches the shipped feature section. The venue 3 and venue 5 c
 
 A background writer flushes buffered completed frames and one `type=summary` record each second: thermal state, available process memory (null where unsupported), physical footprint, named-thread CPU seconds, cumulative underruns/compiles/VU fallbacks, FPS and dropped-record count. Summaries include wall time for correlation with device-side monotonic timestamps. The device harness maps that clock anchor to its observation window, keeps frame distributions separate from cumulative summaries, and uses a fresh isolated user directory per run. Queues are bounded; `dropped_frames` must stay zero for a complete measurement. `./rx run --match --user-dir <scratch>` preserves the macOS output; never use a real save directory for diagnostics.
 
+Each SPU2 output-ring short pull emits `[spu2-underrun]` with missing frames and the queued `ring_occupancy_frames` sampled at that pull.
+
 ## EE FPU, VU0 and IOP semantics
 
 - SQRT.S/RSQRT.S clear current FCR31 I/D causes before setting the operation's exception (sticky flags kept). Negative nonzero Ft sets I/SI; zero or denormal Ft sets D/SD for RSQRT. Classification precedes the destination write, so Fd may alias Ft.
@@ -181,6 +183,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 ## Tried and rejected
 
 - vsync-drain-overlap: on the iPhone 11 match route, three A/B pairs improved late frames over 18 ms from 21.72% to 10.70% and present p99 from 25.53 to 22.60 ms, but gameplay underrun bursts occurred in 2/3 candidate runs versus 0/3 controls, meeting the regression rule; keep the VSync drain.
+- vsync-drain-overlap-e6r: on the iPhone A13 match route, disabling the drain produced no material smoothness improvement and zero underruns in both arms; cpu_game_ms p50 regressed 0.508 ms, gpu_ms p50 0.557 ms, and vu1_ms p50 0.838 ms beyond control noise; reject.
 
 - vu1-copy-cost-kick: later A/B comparisons did not repeat the VU1 or smoothness gains beyond control noise; isolated gameplay underrun bursts occurred on both paths, so no repeatable benefit was established; reject.
 - generated-opt-level: on the iPhone A13 match route, -O2 cut cpu_game_ms p50/p95 by 0.465/0.594 ms but raised vu1_ms p50 by 0.378 ms (5.8%) beyond control noise; smoothness stayed within noise, so reject.
