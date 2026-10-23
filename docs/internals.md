@@ -205,6 +205,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - Waiting for queued VU1 work on each VIF1 FLUSH blocks the EE on the worker and violates the hardware's short drain semantics.
 - `MTLBinaryArchive` prewarming did not resolve cold-launch shader-cache underrun bursts; cold-cache stalls remain open.
 - `vsync-drain-overlap` relaxation stopped at its measurement gate: `./rx device baseline --runs 1 --seconds 120 --label drain-measure` measured drain wait p50/p95 0.269/13.308 ms, below the 1 ms median requirement; outstanding worker work at 28.408% of vsyncs. Telemetry remains opt-in; the drain is unchanged.
+- Audio recovery cushion (64 ms): no gameplay or startup underrun reduction; median ring occupancy rose 44.5→66.5 ms while smoothness changes stayed within control noise, so the recovery path was reverted.
 - Bounded GS vsync backlog (EE up to 2 vsyncs ahead of the worker, as PCSX2 MTGS VsyncQueueSize): cold-cache underruns only 5.6k -> 4.9k, warm still 1 in 6 runs, energy +177% and one 49.2 fps run in the A/B. Cold-cache stalls are bursts of about 15 dynamic ps_main/HW pipeline compiles of 5-7 ms each (about 170 ms), longer than the queue.
 - Hybrid ubershaders for first-use pipeline stalls: a 25-field runtime ps_main compiled 7x slower (30.7 vs 4.5 ms), raised GPU time 155% when forced, still needed 64 fixed pipelines (blend/format), and upstream PCSX2 has no Metal version. Boot pre-warm of the measured key list is the chosen path.
 - MTLBinaryArchive pre-warm of recorded keys: cold runs still underran (about 7.5k).
