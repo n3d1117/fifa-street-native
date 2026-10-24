@@ -176,6 +176,8 @@ MPEG work layouts vary by SDK revision. Run retail Create and ClearRefBuff; the 
 
 ## Controller packets
 
+Input reaches the emulated pad from three sources: `host/gamepad-input.mm` (SDL3 gamepad; PS4/PS5 pressure order and rumble), the keyboard bindings, and the process-local diagnostic FIFO. On tvOS the app reads a paired controller straight from GameController, because SDL's MFi driver only enumerates the Siri Remote there; the root view controller is a `GCEventViewController` with `controllerUserInteractionEnabled = NO` so the focus engine does not consume controller input, and `GCSupportedGameControllers` declares both profiles. `PS2X_TRACE_INPUT=1` logs the GameController list, the selected device and the published pad state once per second.
+
 Pressure mode reports packet ID `0x79`; analog mode without pressure reports `0x73`, digital `0x41` (PCSX2 `SIO/Pad/PadTypes.h`). The game validates `data[0] == 0` and `data[1] == 0x79` at `0x103750..0x10376C` before consuming buttons.
 
 SIF command handler tables use 8-byte user entries and 12-byte system entries (ps2sdk `sifcmd-common.h`). Packets use separate temporary IOP storage. The EE public SendCmd ABI passes destination/size in t0/t1; the internal entry adds mode in a1 and shifts packet/size/source/destination/extra-size through a2/a3/t0/t1/t2. Retail wrappers at `0x448290` and `0x448158` establish these layouts. SIF replies may interrupt HLE guest callbacks. `PS2X_TRACE_RPC=1` includes accepted SendCmd dispatch results.

@@ -6,6 +6,7 @@
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <GameController/GameController.h>
 
 #define SDL_MAIN_HANDLED
 #include <SDL3/SDL_main.h>
@@ -80,9 +81,21 @@ void update_surface_size() {
 + (Class)layerClass { return [CAMetalLayer class]; }
 @end
 
+#if TARGET_OS_TV
+// tvOS routes game controller input to the focus engine unless the app opts out;
+// without this the paired controller never reaches the emulated pad.
+@interface Ps2xRootController : GCEventViewController
+#else
 @interface Ps2xRootController : UIViewController
+#endif
 @end
 @implementation Ps2xRootController
+#if TARGET_OS_TV
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.controllerUserInteractionEnabled = NO;
+}
+#endif
 - (void)loadView {
     Ps2xMetalView* view = [[Ps2xMetalView alloc] initWithFrame:[[UIScreen mainScreen] bounds]];
     [view setBackgroundColor:[UIColor blackColor]];
