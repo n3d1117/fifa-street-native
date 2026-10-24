@@ -140,13 +140,15 @@ def remote_paths(udid):
     """Container-relative directories the app writes to, as in host/ios-main.mm.
 
     tvOS denies Documents and Application Support inside the app's own container,
-    so the app uses Library/Caches for everything. iOS keeps Application Support
-    for the user directory, Documents for pushed game data, isolated directories
-    and perf logs.
+    so the app uses Library/Caches for everything. On iOS the user directory (and
+    therefore the isolated run directories and perf logs the app writes beside
+    them) lives in Application Support; only pushed game data goes to Documents.
     """
     if product_type(udid).startswith("AppleTV"):
-        return {"user": "Library/Caches", "isolated": "Library/Caches", "local": "Library/Caches"}
-    return {"user": "Library/Application Support", "isolated": "Documents", "local": "Documents"}
+        return {"user": "Library/Caches", "isolated": "Library/Caches", "perf": "Library/Caches",
+                "game": "Library/Caches"}
+    return {"user": "Library/Application Support", "isolated": "Library/Application Support",
+            "perf": "Library/Application Support", "game": "Documents"}
 
 
 def app_records(udid):
@@ -536,7 +538,7 @@ def do_push(args):
             json.dumps(manifest, sort_keys=True, separators=(",", ":"))
         )
         pmd(
-            "apps", "push", bundle, str(staged_game), remote_paths(udid)["local"],
+            "apps", "push", bundle, str(staged_game), remote_paths(udid)["game"],
             *global_device_args(udid), timeout=900,
         )
     state["game_manifest"] = manifest
@@ -1600,7 +1602,7 @@ def do_run(args):
         "apps",
         "pull",
         bundle,
-        f"{paths['local']}/perf",
+        f"{paths['perf']}/perf",
         str(perf),
         *global_device_args(udid),
         timeout=180,
