@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <array>
+#include <algorithm>
 #include <condition_variable>
 #include <chrono>
 #include <cstdio>
@@ -66,6 +67,118 @@ rrv_core_state* g_state = nullptr; // core-thread view of the live instance
 std::atomic<bool> g_instance_live{false};
 std::atomic<u64> g_perfMixNs{0};
 
+enum class StallKind : u32 { MixStart, MixEnd, Pull, Occupancy, Underrun };
+struct StallEvent {
+	std::atomic<u64> sequence{0};
+	std::atomic<u64> timestamp_ns{0};
+	std::atomic<u64> frames{0};
+	std::atomic<u64> occupancy{0};
+	std::atomic<u32> kind{0};
+};
+constexpr u64 kStallEventCapacity = 64;
+std::array<StallEvent, kStallEventCapacity> g_stallEvents{};
+std::atomic<u64> g_stallEventCount{0};
+std::atomic<bool> g_stallTraceDumped{false};
+std::atomic<bool> g_stallTraceDumpRequested{false};
+
+bool stall_trace_enabled()
+{
+	static const bool enabled = [] {
+		const char* value = std::getenv("PS2X_SPU2_STALL_TRACE");
+		return value && value[0] == '1' && value[1] == '\0';
+	}();
+	return enabled;
+}
+
+u64 stall_now_ns()
+{
+	return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+void dump_stall_trace()
+{
+	if (!stall_trace_enabled())
+		return;
+	if (g_stallTraceDumped.exchange(true, std::memory_order_acq_rel))
+		return;
+	const u64 count = g_stallEventCount.load(std::memory_order_acquire);
+	const u64 first = count > kStallEventCapacity ? count - kStallEventCapacity : 0;
+	u64 first_timestamp = 0;
+	u64 previous_mix_end = 0;
+	u64 largest_mix_end_gap = 0;
+	u64 biggest_underrun_frames = 0;
+	u64 biggest_underrun_timestamp = 0;
+	struct Snapshot { u64 timestamp; u64 frames; u64 occupancy; u32 kind; };
+	std::array<Snapshot, kStallEventCapacity> events{};
+	u64 event_count = 0;
+	for (u64 i = first; i < count; ++i) {
+		const StallEvent& slot = g_stallEvents[i % kStallEventCapacity];
+		const u64 expected = i + 1;
+		if (slot.sequence.load(std::memory_order_acquire) != expected)
+			continue;
+		Snapshot event{slot.timestamp_ns.load(std::memory_order_relaxed),
+			slot.frames.load(std::memory_order_relaxed), slot.occupancy.load(std::memory_order_relaxed),
+			slot.kind.load(std::memory_order_relaxed)};
+		if (slot.sequence.load(std::memory_order_acquire) != expected)
+			continue;
+		events[event_count++] = event;
+	}
+	if (event_count == 0)
+		return;
+	first_timestamp = events[0].timestamp;
+	for (u64 i = 0; i < event_count; ++i) {
+		const Snapshot& event = events[i];
+		if (event.kind == static_cast<u32>(StallKind::MixEnd)) {
+			if (previous_mix_end != 0 && event.timestamp >= previous_mix_end)
+				largest_mix_end_gap = std::max(largest_mix_end_gap, event.timestamp - previous_mix_end);
+			previous_mix_end = event.timestamp;
+		}
+		if (event.kind == static_cast<u32>(StallKind::Underrun) && event.frames > biggest_underrun_frames) {
+			biggest_underrun_frames = event.frames;
+			biggest_underrun_timestamp = event.timestamp;
+		}
+	}
+	static constexpr const char* names[] = {"mix_start", "mix_end", "pull", "occupancy", "underrun"};
+	for (u64 i = 0; i < event_count; ++i) {
+		const Snapshot& event = events[i];
+		const char* name = event.kind < std::size(names) ? names[event.kind] : "unknown";
+		std::fprintf(stderr, "[spu2-stall] t=%llu kind=%s frames=%llu occ=%llu\n",
+			static_cast<unsigned long long>(event.timestamp - first_timestamp), name,
+			static_cast<unsigned long long>(event.frames),
+			static_cast<unsigned long long>(event.occupancy));
+	}
+	std::fprintf(stderr, "[spu2-stall] summary largest_mix_end_gap_ns=%llu biggest_underrun_frames=%llu biggest_underrun_t=%llu\n",
+		static_cast<unsigned long long>(largest_mix_end_gap),
+		static_cast<unsigned long long>(biggest_underrun_frames),
+		static_cast<unsigned long long>(biggest_underrun_timestamp ? biggest_underrun_timestamp - first_timestamp : 0));
+}
+
+void record_stall_event(StallKind kind, u64 frames = 0, u64 occupancy = 0)
+{
+	if (!stall_trace_enabled())
+		return;
+	static const bool registered = (std::atexit(dump_stall_trace), true);
+	(void)registered;
+	static const bool dump_worker_started = [] {
+		std::thread([] {
+			while (!g_stallTraceDumpRequested.load(std::memory_order_acquire))
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			dump_stall_trace();
+		}).detach();
+		return true;
+	}();
+	(void)dump_worker_started;
+	const u64 sequence = g_stallEventCount.fetch_add(1, std::memory_order_relaxed);
+	StallEvent& slot = g_stallEvents[sequence % kStallEventCapacity];
+	slot.sequence.store(0, std::memory_order_relaxed);
+	slot.timestamp_ns.store(stall_now_ns(), std::memory_order_relaxed);
+	slot.frames.store(frames, std::memory_order_relaxed);
+	slot.occupancy.store(occupancy, std::memory_order_relaxed);
+	slot.kind.store(static_cast<u32>(kind), std::memory_order_relaxed);
+	slot.sequence.store(sequence + 1, std::memory_order_release);
+}
+
 // Core-thread-only state (touched by whichever thread runs the core).
 struct rrv_core_state
 {
@@ -95,9 +208,11 @@ void rrv_mix()
     constexpr u32 sampleWeight = 1024;
     const bool perfSample = perfEnabled && (++perfMixes % sampleWeight == 0u);
     const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+	record_stall_event(StallKind::MixStart);
     g_state->in_mix = true;
     isa_native::spu2Mix();
     g_state->in_mix = false;
+	record_stall_event(StallKind::MixEnd);
     if (perfSample)
         g_perfMixNs.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - perfStart).count()) * sampleWeight, std::memory_order_relaxed);
@@ -882,6 +997,8 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 	const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
 	const u64 head = s->ring_head.load(std::memory_order_acquire);
 	const u64 queued = head - tail;
+	record_stall_event(StallKind::Pull, frames, queued);
+	record_stall_event(StallKind::Occupancy, queued, queued);
 	if (!s->output_primed)
 	{
 		if (queued < s->prime_frames)
@@ -903,6 +1020,8 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 	{
 		std::memset(dst + 2 * avail, 0, (frames - avail) * 2 * sizeof(float));
 		s->underruns.fetch_add(frames - avail, std::memory_order_relaxed);
+		record_stall_event(StallKind::Underrun, frames - avail, queued);
+		g_stallTraceDumpRequested.store(true, std::memory_order_release);
 		std::fprintf(stderr, "[spu2-underrun] frames=%zu ring_occupancy_frames=%llu\n",
 			frames - avail, static_cast<unsigned long long>(head - tail));
 	}
