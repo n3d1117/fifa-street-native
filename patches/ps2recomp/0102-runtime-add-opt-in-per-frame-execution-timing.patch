@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Fri, 23 Oct 2026 14:08:17 +0200
-Subject: [PATCH 102/105] runtime: add opt-in per-frame execution timing
+Subject: [PATCH 102/106] runtime: add opt-in per-frame execution timing
 
 
 diff --git a/ps2xIOP/include/ps2x/iop/iop_perf.h b/ps2xIOP/include/ps2x/iop/iop_perf.h

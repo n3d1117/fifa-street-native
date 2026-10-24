@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: drako <98249188+drakolordx7@users.noreply.github.com>
 Date: Wed, 14 Oct 2026 08:47:18 -0500
-Subject: [PATCH 005/105] upstream #272: Emulate PS2 float semantics for EE FPU
+Subject: [PATCH 005/106] upstream #272: Emulate PS2 float semantics for EE FPU
  results and DIV.S/RSQRT.S
 
 
