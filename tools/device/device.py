@@ -1620,10 +1620,30 @@ def do_run(args):
 MANIFEST = ROOT / "bridge/gs/pipelines-fifa.txt"
 
 
-def record_target(udid):
-    """Where the app should write recorded pipeline keys, inside its perf dir."""
+def container_path(udid, bundle):
+    """Absolute container directory of the installed app (needed for file writes)."""
+    result = pmd("apps", "query", bundle, *global_device_args(udid), timeout=60, check=False)
+    try:
+        record = json.loads(result.stdout).get(bundle) or {}
+    except json.JSONDecodeError:
+        record = {}
+    container = record.get("Container")
+    if not container:
+        raise Failed(f"cannot resolve the app container for {bundle} -> ./rx device install first")
+    return container
+
+
+def record_target(udid, bundle):
+    """Absolute path the app should record pipeline keys to, inside its perf dir.
+
+    RRV_PCSX2_GS_PIPELINE_RECORD is opened by the GS bridge itself, so the app
+    sandbox needs an absolute container path; a relative one resolves against the
+    read-only bundle directory and silently never records.
+    """
     paths = remote_paths(udid)
-    return f"{paths['perf']}/coverage.txt"
+    # The app opens this itself, so it must be absolute; the perf log lives in
+    # <user base>/perf, the same directory the harness pulls.
+    return f"{container_path(udid, bundle)}/{paths['perf']}/perf/coverage.txt"
 
 
 def merge_pipeline_keys(recorded, manifest=MANIFEST):
@@ -1674,8 +1694,12 @@ def merge_pipeline_keys(recorded, manifest=MANIFEST):
 def do_coverage(args):
     """Record the Metal pipelines a device run reaches and merge them in."""
     udid = choose_udid(args.udid)
+    bundle = app_records(udid)
+    bundle = next((key for key, value in bundle.items() if value.get("CFBundleExecutable")), None)
+    if not bundle:
+        raise Failed("no installed app found -> ./rx device install first")
     env = list(args.env)
-    target = record_target(udid)
+    target = record_target(udid, bundle)
     env.append(f"RRV_PCSX2_GS_PIPELINE_RECORD={target}")
     run_args = argparse.Namespace(
         seconds=args.seconds, breakdown=False, warmup=args.warmup, label=args.label or "coverage",
@@ -1683,7 +1707,12 @@ def do_coverage(args):
     run_dir = do_run(run_args)
     candidates = list((Path(run_dir) / "perf").rglob("coverage.txt"))
     if not candidates:
+        summary = json.loads((Path(run_dir) / "summary.json").read_text())
+        compiles = (summary.get("metrics") or {}).get("pipeline_compiles_delta_run") or 0
         print(f"no selectors were recorded (nothing new at these settings); run dir {run_dir}")
+        if compiles:
+            print(f"WARNING: the run compiled {compiles:.0f} pipelines but recorded no file; "
+                  f"the app could not write {target}")
         return
     recorded = candidates[0]
     added, total, touched = merge_pipeline_keys(recorded)
