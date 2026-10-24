@@ -38,6 +38,7 @@
 !/tools/*.sh
 !/tools/package/
 !/tools/probe/
+!/tools/device/
 !/tools/vu/
 !/tools/metal-deps/
 /tools/metal-deps/*

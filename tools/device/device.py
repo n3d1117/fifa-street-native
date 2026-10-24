@@ -88,9 +88,21 @@ def tunnel_devices():
         ) from e
 
 
+def configured_udid():
+    """Default device when more than one is paired (iPhone plus Apple TV)."""
+    if os.environ.get("RX_DEVICE_UDID"):
+        return os.environ["RX_DEVICE_UDID"].strip()
+    try:
+        data = json.loads(CONFIG.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return (data.get("udid") or "").strip() or None
+
+
 def choose_udid(requested=None):
     devices = tunnel_devices()
     ids = sorted(devices) if isinstance(devices, dict) else []
+    requested = requested or configured_udid()
     if requested:
         if requested not in ids:
             raise Missing(
@@ -892,7 +904,8 @@ def active_thread_cores(rows, summaries):
             index += 1
     cores = {name: value / durations[name] for name, value in weighted.items()}
     result = {}
-    for name, key in (("GameThread", "gamethread_cores"), ("VU1GSWorker", "vu1gsworker_cores")):
+    for name, key in (("GameThread", "gamethread_cores"), ("VU1GSWorker", "vu1gsworker_cores"),
+                      ("VU1StageWorker", "vu1stageworker_cores"), ("GSStageWorker", "gsstageworker_cores")):
         if name in cores:
             result[key] = cores[name]
     if cores:

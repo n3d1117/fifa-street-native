@@ -282,9 +282,21 @@ document.getElementById('status-filter').addEventListener('change', event => {{ 
 </script>'''
 
 
+def page(content):
+    """Wrap a report fragment as a complete standalone HTML page."""
+    cut = content.find("<main")
+    if cut < 0:
+        raise ValueError("content has no '<main' element; cannot build a full HTML page")
+    head_part, body_part = content[:cut], content[cut:]
+    return ("<!DOCTYPE html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            + head_part + "</head>\n<body>\n" + body_part + "\n</body></html>\n")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default=str(AB_DIR / "report.html"), help="output HTML fragment path")
+    parser.add_argument("--page", default=None, help="also write a complete standalone HTML page to PATH")
     args = parser.parse_args(argv)
     notes_path = AB_DIR / "notes.json"
     backlog_path = AB_DIR / "backlog.json"
@@ -298,6 +310,13 @@ def main(argv=None):
     content = render(read_ledger(AB_DIR / "ledger.jsonl"), read_json(notes_path, []), read_json(backlog_path, {}))
     out.write_text(content + "\n")
     print(out)
+    if args.page:
+        page_out = pathlib.Path(args.page)
+        if not page_out.is_absolute():
+            page_out = ROOT / page_out
+        page_out.parent.mkdir(parents=True, exist_ok=True)
+        page_out.write_text(page(content))
+        print(page_out)
     return 0
 
 
