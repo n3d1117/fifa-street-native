@@ -128,7 +128,7 @@ Launch quality follows the hardware: `host::detect_hardware_quality` (host/setti
 
 A background writer flushes buffered completed frames and one `type=summary` record each second: thermal state, available process memory (null where unsupported), physical footprint, named-thread CPU seconds, cumulative underruns/compiles/VU fallbacks, FPS and dropped-record count. Summaries include wall time for correlation with device-side monotonic timestamps. The device harness maps that clock anchor to its observation window, keeps frame distributions separate from cumulative summaries, and uses a fresh isolated user directory per run. Queues are bounded; `dropped_frames` must stay zero for a complete measurement. `./rx run --match --user-dir <scratch>` preserves the macOS output; never use a real save directory for diagnostics.
 
-Each SPU2 output-ring short pull emits `[spu2-underrun]` with missing frames and the queued `ring_occupancy_frames` sampled at that pull.
+Each SPU2 output-ring short pull emits `[spu2-underrun]` with missing frames and the queued `ring_occupancy_frames` sampled at that pull. With `PS2X_SPU2_STALL_TRACE=1` the ring also logs mix start/end and pull events: a captured 131-frame burst was a producer-side gap of 27.6 ms with no mix and a pipeline compile in the same frame, so runtime pipeline compiles remain the known cause of gameplay audio bursts.
 
 ## EE FPU, VU0 and IOP semantics
 
@@ -172,6 +172,7 @@ Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C`
 | `RRV_PCSX2_GS_TEST_PRESENT_STALL_MS=<ms>` | inject one Metal present stall; the StreamRing watchdog excludes only this host drawable-acquisition interval |
 | `RRV_PCSX2_GS_PIPELINE_PREWARM=0` | disable recorded Metal pipeline pre-warm and automatic learning |
 | `RRV_PCSX2_GS_PIPELINE_RECORD=<path>` | record lazily created Metal pipeline keys to a file for coverage collection |
+| `PS2X_SPU2_STALL_TRACE=1` | record mix/pull/underrun events with timestamps and dump them at exit (`[spu2-stall]`), for audio-stall diagnosis |
 | `PS2X_VU1_WORKER=0\|sync` | inline or drained data side |
 | `PS2X_GS_VERIFY=1` | eager GS readback verify |
 | `PS2X_VU1_INTERPRETER`, `PS2X_VU0_INTERPRETER` | force the VU interpreter path |
