@@ -7,6 +7,10 @@
 
 #include <string>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 namespace host {
 
 enum class VideoMode { PAL, NTSC };
@@ -15,8 +19,18 @@ enum class DisplayAspect { Auto, FourThree, SixteenNine };
 
 struct Settings {
     VideoMode videoMode = VideoMode::NTSC;
+#if defined(TARGET_OS_TV) && TARGET_OS_TV
+    // tvOS has no Settings window, so these defaults decide what a television
+    // shows. 3x (1920x1344 from the 640x448 field) is the largest scale whose
+    // measured GPU time fits a 60 Hz budget on an Apple TV 4K (10.9 ms p50);
+    // 5x was 17.1 ms and dropped frames. settings.plist in the user directory
+    // and the PS2X_SCALE / PS2X_ANISO overrides still take precedence.
+    int renderScale = 3;           // 1..6
+    int anisotropy = 8;            // 0, 2, 4, 8 or 16
+#else
     int renderScale = 1;           // 1..6
     int anisotropy = 0;            // 0, 2, 4, 8 or 16
+#endif
     bool sharperImage = false;
     bool rumble = false;
     int rumbleIntensity = 100;    // 25, 50, 75 or 100 percent
