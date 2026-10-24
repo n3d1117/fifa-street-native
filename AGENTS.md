@@ -10,7 +10,7 @@ README.md: setup. `docs/internals.md`: mechanisms and constants. `docs/STATUS.md
    - No fast-math, no FP contraction, no reordering of guest float math. The per-file flags in `CMakeLists.txt` are load-bearing.
    - Video timing follows the selected game mode: PAL VBlank 50 Hz and movies 25 fps; NTSC VBlank approximately 60 Hz. Never change guest clocks or speed the game up to raise FPS.
    - FIFA Street's gameplay frame rate is not known. Measure it; do not assume it.
-   - Faithful by default: default video mode is the game's own NTSC 60 Hz mode; PAL 50 Hz is the opt-in original. Other enhancements (higher resolution, widescreen) and cheats stay opt-in, preferring the game's own modes and state (its widescreen flag, its cheat flags) over patches. Logo skip and similar content changes stay out.
+   - Faithful by default: default video mode is the game's own NTSC 60 Hz mode; PAL 50 Hz is the opt-in original. Render scale and anisotropy default to the value measured for the running hardware (`host::detect_hardware_quality`); other enhancements (widescreen, CAS, FXAA, xBRZ UI textures) and cheats stay opt-in, preferring the game's own modes and state (its widescreen flag, its cheat flags) over patches. Logo skip and similar content changes stay out.
 3. **Never hand-edit `generated/`.** It is rebuilt from the ELF. Fix at the right layer (below).
 4. **Claim only what you ran.** Label claims measured, inferred or guessed. Translation coverage is not gameplay evidence; a boot or first-level result is not whole-game evidence.
 5. **One item at a time: verify, commit, push, confirm the push, then the next.** Never leave a commit unpushed.

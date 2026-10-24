@@ -25,8 +25,15 @@ int main() {
         const std::string dir = directory.UTF8String;
         NSString* path = [directory stringByAppendingPathComponent:@"settings.plist"];
 
-        // Missing file: defaults.
-        assert(host::load_settings_file(dir) == Settings{});
+        // Missing file: the launch defaults for this machine, not the struct's
+        // fallback values, because quality now follows the detected hardware.
+        const host::HardwareQuality detected = host::detect_hardware_quality();
+        assert(detected.renderScale >= 1 && detected.renderScale <= 6);
+        {
+            const Settings fresh = host::load_settings_file(dir);
+            assert(fresh.renderScale == detected.renderScale);
+            assert(fresh.anisotropy == detected.anisotropy);
+        }
         assert(Settings{}.videoMode == host::VideoMode::NTSC);
         assert(Settings{}.displayAspect == host::DisplayAspect::SixteenNine);
         for (const char* aspect : {"auto", "4:3"}) {
@@ -55,7 +62,8 @@ int main() {
 
         // 5x and 6x are accepted from the settings file; 7x is rejected above.
         for (int scale : {5, 6}) {
-            assert([@{@"renderScale": @(scale)} writeToFile:path atomically:YES]);
+            NSDictionary* stored = @{@"renderScale": @(scale), @"defaultsVersion": @(host::kDefaultsVersion)};
+            assert([stored writeToFile:path atomically:YES]);
             assert(host::load_settings_file(dir).renderScale == scale);
         }
 
@@ -69,9 +77,28 @@ int main() {
         assert([after[@"fxaa"] boolValue] == NO);
 
         // Invalid values fall back to defaults.
-        NSDictionary* bad = @{@"renderScale": @7, @"anisotropy": @3, @"sharperImage": @1, @"displayAspect": @"stretch", @"videoMode": @"invalid"};
+        NSDictionary* bad = @{@"renderScale": @7, @"anisotropy": @3, @"sharperImage": @1, @"displayAspect": @"stretch", @"videoMode": @"invalid", @"defaultsVersion": @(host::kDefaultsVersion)};
         assert([bad writeToFile:path atomically:YES]);
-        assert(host::load_settings_file(dir) == Settings{});
+        {
+            const Settings coerced = host::load_settings_file(dir);
+            assert(coerced.renderScale == detected.renderScale);
+            assert(coerced.anisotropy == detected.anisotropy);
+        }
+        // A settings.plist without the defaults marker keeps the detected quality
+        // even when it stored the old defaults: that is the one-way migration.
+        NSDictionary* legacy = @{@"renderScale": @1, @"anisotropy": @0};
+        assert([legacy writeToFile:path atomically:YES]);
+        {
+            const Settings migrated = host::load_settings_file(dir);
+            assert(migrated.renderScale == detected.renderScale);
+            assert(migrated.anisotropy == detected.anisotropy);
+        }
+        NSDictionary* kept = @{@"renderScale": @1, @"anisotropy": @0, @"defaultsVersion": @(host::kDefaultsVersion)};
+        assert([kept writeToFile:path atomically:YES]);
+        {
+            const Settings stored = host::load_settings_file(dir);
+            assert(stored.renderScale == 1 && stored.anisotropy == 0);
+        }
 
         // Debug overrides apply on top of the file.
         Settings s;

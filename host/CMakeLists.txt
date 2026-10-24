@@ -207,7 +207,8 @@ target_include_directories(settingsTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(settingsTest PRIVATE cxx_std_20)
 target_compile_options(settingsTest PRIVATE -fobjc-arc -UNDEBUG)
 target_link_options(settingsTest PRIVATE -stdlib=libc++)
-target_link_libraries(settingsTest PRIVATE "-framework Foundation")
+# settings.mm reads the display and GPU name to pick launch quality defaults.
+target_link_libraries(settingsTest PRIVATE "-framework Foundation" "-framework AppKit" "-framework Metal")
 add_test(NAME settings COMMAND settingsTest)
 
 add_executable(padRumbleTest "${RX_ROOT}/tests/pad-rumble-test.cpp")

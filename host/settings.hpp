@@ -17,20 +17,21 @@ enum class VideoMode { PAL, NTSC };
 
 enum class DisplayAspect { Auto, FourThree, SixteenNine };
 
+// The starting render scale and anisotropy for this machine, resolved at launch
+// from the GPU (iOS/tvOS) or the display's pixel height (macOS); see
+// detect_hardware_quality in settings.mm for the measured table. The values in
+// the struct are only the fallback when detection is unavailable.
+struct HardwareQuality {
+    int renderScale = 1;  // 1..6
+    int anisotropy = 0;   // 0, 2, 4, 8 or 16
+};
+
+HardwareQuality detect_hardware_quality();
+
 struct Settings {
     VideoMode videoMode = VideoMode::NTSC;
-#if defined(TARGET_OS_TV) && TARGET_OS_TV
-    // tvOS has no Settings window, so these defaults decide what a television
-    // shows. 3x (1920x1344 from the 640x448 field) is the largest scale whose
-    // measured GPU time fits a 60 Hz budget on an Apple TV 4K (10.9 ms p50);
-    // 5x was 17.1 ms and dropped frames. settings.plist in the user directory
-    // and the PS2X_SCALE / PS2X_ANISO overrides still take precedence.
-    int renderScale = 3;           // 1..6
-    int anisotropy = 8;            // 0, 2, 4, 8 or 16
-#else
     int renderScale = 1;           // 1..6
     int anisotropy = 0;            // 0, 2, 4, 8 or 16
-#endif
     bool sharperImage = false;
     bool rumble = false;
     int rumbleIntensity = 100;    // 25, 50, 75 or 100 percent
@@ -47,6 +48,10 @@ using EnvLookup = const char* (*)(const char* name);
 
 // Reads the plist. A missing file or invalid value leaves that option at its
 // default; unknown keys are ignored. Never throws.
+// Bumped when the detected defaults change in a way existing installs should
+// adopt once, even though they already saved a settings.plist.
+constexpr int kDefaultsVersion = 2;
+
 Settings load_settings_file(const std::string& user_dir);
 
 // Debug overrides, applied after the file: PS2X_SCALE=1..6, PS2X_ANISO=0|2|4|8|16, PS2X_SHARP=1, PS2X_FXAA=1, PS2X_RUMBLE=0|1, PS2X_RUMBLE_INTENSITY=25|50|75|100, PS2X_WALLCLOCK=0,
