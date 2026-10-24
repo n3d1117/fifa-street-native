@@ -76,8 +76,8 @@ NSDictionary* read_dictionary(const std::string& dir) {
 // Anisotropy 16 is smoothness-neutral at 2x on the A13 (GPU +1.4 ms, fps and
 // late frames within noise) and is the sharper setting, so mobile starts at 16.
 // macOS picks the scale whose render height covers the display's pixel height,
-// clamped to the measured-safe range: this M1 renders 4x at 60 fps with zero
-// underruns, and every scale from 1x to 5x was measured at 60.0 fps.
+// clamped to 2..6: every scale from 1x to 6x measured 60.0 fps on this M1 (4x
+// 4.9 ms, 5x 7.2 ms, 6x 8.5 ms GPU p50), so the display decides.
 int apple_gpu_tier(NSString* name) {
     // "Apple A13 GPU", "Apple A15 GPU", "Apple M1", "Apple M2 Pro", "Apple GPU".
     const char* text = name.UTF8String;
@@ -115,7 +115,9 @@ HardwareQuality detect_hardware_quality() {
             const int height = static_cast<int>(pixels.size.height);
             if (height > 0) {
                 const int scale = (height + 447) / 448;
-                quality.renderScale = scale < 2 ? 2 : (scale > 4 ? 4 : scale);
+                // Measured on this M1: 4x 4.9 ms, 5x 7.2 ms and 6x 8.5 ms GPU
+                // p50, all at 60.0 fps, so the cap is the renderer's own maximum.
+                quality.renderScale = scale < 2 ? 2 : (scale > 6 ? 6 : scale);
             }
         }
 #endif

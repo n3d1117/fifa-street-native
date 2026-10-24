@@ -526,6 +526,9 @@ vs=02 ps_hi=0000000010010008 ps_lo=0808800008000000 extras=000000e1
 vs=02 ps_hi=0000000010010008 ps_lo=0000000008000000 extras=080000e1
 vs=02 ps_hi=0000000010010000 ps_lo=4011000009000000 extras=04fe5ee1
 vs=02 ps_hi=0000000010010808 ps_lo=001500000b000000 extras=0cfeeee1
+vs=06 ps_hi=0000000010010008 ps_lo=0011000008000800 extras=0cfeeee1
+vs=02 ps_hi=0000000010010008 ps_lo=0011000008000000 extras=04feeee1
+vs=02 ps_hi=0000000010010000 ps_lo=4011000009000000 extras=0cfe5ee1
 # recorded from FIFA Street on the simulator; family is not part of the selector tag
 # features=shader=3;fbf=1;primid=1;rov=0;rrt=0;rr32=1;depth=0;broken=1
 vs=33 ps_hi=0000000000000008 ps_lo=0000000009800010 extras=000000e1
