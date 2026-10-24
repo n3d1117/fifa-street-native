@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Fri, 23 Oct 2026 15:06:04 +0200
-Subject: [PATCH 104/104] runtime: reduce diagnostic sampling frequency
+Subject: [PATCH 104/105] runtime: reduce diagnostic sampling frequency
 
 
 diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp

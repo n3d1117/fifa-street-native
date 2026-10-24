@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 04:09:41 +0200
-Subject: [PATCH 087/104] runtime: complete reverse VIF1 GS downloads
+Subject: [PATCH 087/105] runtime: complete reverse VIF1 GS downloads
 
 Mirror PCSX2 dmaVIF1: DIR=0 downloads use normal transfer mode even when MOD remains chain. Preserve TADR, consume the GS FIFO through the data-side owner, advance MADR/QWC and raise DMAC1 after the copy.
 

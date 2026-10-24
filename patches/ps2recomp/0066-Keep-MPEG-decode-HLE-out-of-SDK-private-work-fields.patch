@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 23:04:57 +0200
-Subject: [PATCH 066/104] Keep MPEG decode HLE out of SDK-private work fields
+Subject: [PATCH 066/105] Keep MPEG decode HLE out of SDK-private work fields
 
 Canary regressions reproduce Reset overwriting unrelated guest memory at 0x171904 and GetPicture modifying offsets belonging to another SDK work layout. Remove private field writes and return Reset success.
 

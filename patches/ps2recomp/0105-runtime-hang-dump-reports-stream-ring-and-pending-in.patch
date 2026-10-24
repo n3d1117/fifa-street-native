@@ -1,0 +1,249 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sat, 24 Oct 2026 16:14:26 +0200
+Subject: [PATCH 105/105] runtime: hang dump reports stream-ring and
+ pending-invocation state
+
+The one-shot state dump could not separate a stationary wait from slow
+progress, and it showed neither the data-side ring positions nor the
+queued guest invocations, so a frozen guest looked identical whether the
+EE was blocked on the worker or running guest code.
+
+Publish pushed/published/consumed ring positions, the op the worker is
+executing, the pending invocation count and oldest kind, and each
+thread's active invocation kinds; add PS2X_DUMP_STATE_EVERY to repeat the
+dump.
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index f9ca0f12d760485326f8ffae0cc5bdd2f8105336..88afa0577885cc10e6495c76047d10a3ec41c521 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -201,6 +201,8 @@ struct EeThreadSnapshot
+     int suspendCount = 0;
+     uint32_t wakeupCount = 0;
+     uint32_t invocationDepth = 0;
++    // Kind of each active invocation, innermost last (GuestInvocationKind values).
++    std::vector<uint8_t> invocationKinds;
+ };
+ 
+ struct EeSemaphoreSnapshot
+@@ -228,6 +230,17 @@ struct EeKernelSnapshot
+     uint64_t nextEventCycle = 0;
+     int runningThreadId = 0;
+     std::vector<EeThreadSnapshot> threads;
++    // Queued guest invocations waiting for a thread to run them.
++    uint32_t pendingInvocations = 0;
++    uint32_t oldestPendingKind = 0;
++    // Data-side ring (0 when the EE executes VU1/GIF/GS inline) and the op the
++    // worker is executing right now.
++    bool ringPresent = false;
++    bool ringFailed = false;
++    uint64_t ringPushed = 0;
++    uint64_t ringPublished = 0;
++    uint64_t ringConsumed = 0;
++    uint32_t workerOpType = 0;
+     std::vector<EeSemaphoreSnapshot> semaphores;
+     std::vector<EeEventFlagSnapshot> eventFlags;
+ };
+diff --git a/ps2xRuntime/include/runtime/ps2_stream_ring.h b/ps2xRuntime/include/runtime/ps2_stream_ring.h
+index a2b41f798cc980df34ae8a658bb53d13554d2c19..a79cf15a13cad2895ced762d65d1bb70269b5731 100644
+--- a/ps2xRuntime/include/runtime/ps2_stream_ring.h
++++ b/ps2xRuntime/include/runtime/ps2_stream_ring.h
+@@ -162,6 +162,26 @@ public:
+     // True when the consumer has executed everything pushed so far.
+     bool idle() const { return m_tail.load(std::memory_order_acquire) == m_localHead; }
+ 
++    // Positions for hang diagnosis: what the producer pushed and published, and
++    // how far the consumer has executed.
++    struct Snapshot
++    {
++        uint64_t pushed = 0;
++        uint64_t published = 0;
++        uint64_t consumed = 0;
++        bool failed = false;
++    };
++
++    Snapshot snapshot() const
++    {
++        Snapshot result;
++        result.pushed = m_localHead;
++        result.published = m_publishedHead;
++        result.consumed = m_tail.load(std::memory_order_acquire);
++        result.failed = m_failed.load(std::memory_order_acquire);
++        return result;
++    }
++
+     void rethrowIfFailed()
+     {
+         if (m_failed.load(std::memory_order_acquire))
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 12e38986717d83e260e99d6cd043045629a4683b..e4836633d0ec53c8ef2a8d9ad6c840351bb7f24b 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1739,6 +1739,9 @@ void EeScheduler::publishSnapshot()
+         snapshot.suspendCount = item.suspendCount;
+         snapshot.wakeupCount = item.wakeupCount;
+         snapshot.invocationDepth = static_cast<uint32_t>(item.invocations.size());
++        snapshot.invocationKinds.reserve(item.invocations.size());
++        for (const GuestInvocation &invocation : item.invocations)
++            snapshot.invocationKinds.push_back(static_cast<uint8_t>(invocation.kind));
+         next.threads.push_back(snapshot);
+     }
+     std::sort(next.threads.begin(), next.threads.end(), [](const auto &left, const auto &right)
+@@ -1764,6 +1767,22 @@ void EeScheduler::publishSnapshot()
+     }
+     std::sort(next.eventFlags.begin(), next.eventFlags.end(), [](const auto &left, const auto &right)
+               { return left.id < right.id; });
++    next.pendingInvocations = static_cast<uint32_t>(m_pendingInvocations.size());
++    if (!m_pendingInvocations.empty())
++        next.oldestPendingKind = static_cast<uint32_t>(m_pendingInvocations.front().kind);
++    {
++        DataStream &stream = m_runtime.memory().dataStream();
++        next.workerOpType = stream.executingOpType();
++        if (const StreamRing *ring = stream.ring())
++        {
++            const StreamRing::Snapshot ringSnapshot = ring->snapshot();
++            next.ringPresent = true;
++            next.ringFailed = ringSnapshot.failed;
++            next.ringPushed = ringSnapshot.pushed;
++            next.ringPublished = ringSnapshot.published;
++            next.ringConsumed = ringSnapshot.consumed;
++        }
++    }
+     {
+         std::lock_guard lock(m_snapshotMutex);
+         m_snapshot = std::move(next);
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.cpp b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+index c0c41998ca9ec5a78c93564cd5500f3314cb1472..aaf62723fb3ec00fb984b631a53f27eb68758a45 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.cpp
++++ b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+@@ -148,6 +148,12 @@ void DataStream::publishIfIdle()
+ 
+ void DataStream::execute(const StreamRing::Op &op, const uint8_t *payload)
+ {
++    m_executingOpType.store(op.type, std::memory_order_release);
++    struct ClearOnExit
++    {
++        std::atomic<uint32_t> &flag;
++        ~ClearOnExit() { flag.store(0u, std::memory_order_release); }
++    } clearOnExit{m_executingOpType};
+     switch (op.type)
+     {
+     case OpGifPacket:
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.h b/ps2xRuntime/src/lib/ps2_data_stream.h
+index 5fb44dce7e818583f4b8eac3c1a1434a62e4569d..7f52d296c23fa33dfeca72ab471fa3720a5a99e5 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.h
++++ b/ps2xRuntime/src/lib/ps2_data_stream.h
+@@ -141,6 +141,14 @@ private:
+     };
+ 
+     bool deferred() const { return m_ring && !m_ring->onConsumerThread(); }
++
++public:
++    // Hang diagnosis: null in inline mode.
++    const StreamRing *ring() const { return m_ring.get(); }
++    // The op the worker is executing right now, 0 between ops.
++    uint32_t executingOpType() const { return m_executingOpType.load(std::memory_order_acquire); }
++
++private:
+     void execute(const StreamRing::Op &op, const uint8_t *payload);
+     static std::string describe(const StreamRing::Op &op);
+     void endKick();
+@@ -155,6 +163,7 @@ private:
+     GSRegisters &m_gs;
+     std::unique_ptr<StreamRing> m_ring;
+     Mode m_mode = Mode::Inline;
++    std::atomic<uint32_t> m_executingOpType{0};
+     int m_kickDepth = 0;
+     bool m_gsStale = false;
+     bool m_verify = false;
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index d88da053e2a4d4cc433913892a0797ca0126350c..95e9bdb3485bd5395e410626d48154d0aff4940d 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -1,6 +1,7 @@
+ // Hang diagnosis in one block: PS2X_DUMP_STATE_AT=<seconds> or SIGUSR1 prints the EE kernel state, a
+ // one-second sample of the running guest pc, the IOP state and the latest SIF RPC events to stderr
+-// between [state-begin] and [state-end]. Kept out of every header the generated code includes.
++// between [state-begin] and [state-end]. PS2X_DUMP_STATE_EVERY=<seconds> repeats it, which separates a
++// stationary wait from slow progress. Kept out of every header the generated code includes.
+ #include "ps2_runtime.h"
+ #include "runtime/ee_scheduler.h"
+ #include "Kernel/Syscalls/Helpers/State.h"
+@@ -36,6 +37,22 @@ const char *statusName(EeThreadStatus status)
+     return "?";
+ }
+ 
++const char *invocationKindName(uint8_t kind)
++{
++    switch (static_cast<GuestInvocationKind>(kind))
++    {
++    case GuestInvocationKind::Interrupt: return "interrupt";
++    case GuestInvocationKind::Alarm: return "alarm";
++    case GuestInvocationKind::GsCallback: return "gs";
++    case GuestInvocationKind::RpcCallback: return "rpc";
++    case GuestInvocationKind::SyscallOverride: return "syscall";
++    case GuestInvocationKind::ExitHandler: return "exit";
++    case GuestInvocationKind::HleCall: return "hle";
++    case GuestInvocationKind::SifCommand: return "sifcmd";
++    }
++    return "?";
++}
++
+ const char *waitName(EeWaitReason reason)
+ {
+     switch (reason)
+@@ -76,8 +93,25 @@ void dumpState(PS2Runtime &runtime)
+         out << "ee thread id=" << t.id << " " << statusName(t.status) << " wait=" << waitName(t.waitReason)
+             << "(" << t.waitId << ") prio=" << t.currentPriority << std::hex << " pc=0x" << t.pc << " ra=0x" << t.ra
+             << " sp=0x" << t.sp << " entry=0x" << t.entry << std::dec << " inv_depth=" << t.invocationDepth
+-            << " suspend=" << t.suspendCount << " wakeups=" << t.wakeupCount << "\n";
++            << " suspend=" << t.suspendCount << " wakeups=" << t.wakeupCount;
++        if (!t.invocationKinds.empty())
++        {
++            out << " inv_kinds=";
++            for (size_t i = 0; i < t.invocationKinds.size(); ++i)
++                out << (i ? "," : "") << invocationKindName(t.invocationKinds[i]);
++        }
++        out << "\n";
+     }
++    out << "ee pending_invocations=" << ee.pendingInvocations;
++    if (ee.pendingInvocations != 0u)
++        out << " oldest_kind=" << invocationKindName(static_cast<uint8_t>(ee.oldestPendingKind));
++    out << "\n";
++    if (ee.ringPresent)
++        out << "data ring pushed=" << ee.ringPushed << " published=" << ee.ringPublished
++            << " consumed=" << ee.ringConsumed << " worker_op=" << ee.workerOpType
++            << " failed=" << static_cast<unsigned>(ee.ringFailed) << "\n";
++    else
++        out << "data ring inline worker_op=0\n";
+     for (const EeSemaphoreSnapshot &s : ee.semaphores)
+         out << "ee sema id=" << s.id << " count=" << s.count << "/" << s.maxCount << " waiters=" << s.waiters << "\n";
+     for (const EeEventFlagSnapshot &f : ee.eventFlags)
+@@ -204,15 +238,24 @@ void ps2InstallStateDump(PS2Runtime &runtime)
+     double atSeconds = 0.0;
+     if (const char *value = std::getenv("PS2X_DUMP_STATE_AT"))
+         atSeconds = std::atof(value);
+-    std::thread([&runtime, atSeconds] {
++    // Repeat every N seconds after the first dump: a single dump cannot separate
++    // a stationary wait from slow progress.
++    double everySeconds = 0.0;
++    if (const char *value = std::getenv("PS2X_DUMP_STATE_EVERY"))
++        everySeconds = std::atof(value);
++    std::thread([&runtime, atSeconds, everySeconds] {
+         const auto started = std::chrono::steady_clock::now();
+         bool timedDone = atSeconds <= 0.0;
++        double nextRepeat = everySeconds;
+         for (;;)
+         {
+             std::this_thread::sleep_for(std::chrono::milliseconds(50));
+             const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+-            if (g_dumpRequested.exchange(false) || (!timedDone && elapsed >= atSeconds))
++            const bool repeat = everySeconds > 0.0 && elapsed >= nextRepeat;
++            if (g_dumpRequested.exchange(false) || (!timedDone && elapsed >= atSeconds) || repeat)
+             {
++                if (repeat)
++                    nextRepeat += everySeconds;
+                 timedDone = true;
+                 dumpState(runtime);
+             }
