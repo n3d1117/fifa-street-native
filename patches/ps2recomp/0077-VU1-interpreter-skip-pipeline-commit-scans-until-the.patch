@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 12:49:46 +0200
-Subject: [PATCH 077/106] VU1 interpreter: skip pipeline commit scans until the
+Subject: [PATCH 077/107] VU1 interpreter: skip pipeline commit scans until the
  earliest pending readyCycle; iterate set VI-read bits (interpreter 5.5 -> 10
  Mcyc/s on the match route; HUD clock 0.142 -> 0.236 per wall s; differential
  vs native: 513,982 calls, 0 mismatches)

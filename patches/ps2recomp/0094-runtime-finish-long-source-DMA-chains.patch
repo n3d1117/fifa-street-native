@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Thu, 22 Oct 2026 12:17:40 +0200
-Subject: [PATCH 094/106] runtime: finish long source DMA chains
+Subject: [PATCH 094/107] runtime: finish long source DMA chains
 
 The ordinary VIF/GIF source-chain walker silently stopped after 4096 tags,
 leaving CHCR.TAG at CNT while publishing partial work. Roma's city intro
