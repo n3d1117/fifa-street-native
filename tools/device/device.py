@@ -1617,6 +1617,86 @@ def do_run(args):
     return out
 
 
+MANIFEST = ROOT / "bridge/gs/pipelines-fifa.txt"
+
+
+def record_target(udid):
+    """Where the app should write recorded pipeline keys, inside its perf dir."""
+    paths = remote_paths(udid)
+    return f"{paths['perf']}/coverage.txt"
+
+
+def merge_pipeline_keys(recorded, manifest=MANIFEST):
+    """Merge a recorder file into the shipped manifest, per feature section.
+
+    The recorder writes `# features=...` sections and `vs=...` selectors. Keys
+    already present in the matching section are skipped; a section that the
+    manifest does not have yet is appended at the end. Returns
+    (added, total_selectors, sections_touched).
+    """
+    import collections
+    import pathlib as _pathlib
+
+    incoming = collections.OrderedDict()
+    current = None
+    for line in _pathlib.Path(recorded).read_text().splitlines():
+        if line.startswith("# features="):
+            current = line[len("# features="):]
+            incoming.setdefault(current, [])
+        elif line.startswith("vs=") and current is not None:
+            incoming[current].append(line)
+    if not incoming:
+        return 0, sum(1 for l in manifest.read_text().splitlines() if l.startswith("vs=")), []
+
+    lines = manifest.read_text().splitlines()
+    added = 0
+    touched = []
+    for tag, keys in incoming.items():
+        header = f"# features={tag}"
+        if header in lines:
+            start = lines.index(header) + 1
+            end = start
+            while end < len(lines) and not lines[end].startswith("# features=") and not lines[end].startswith("# recorded from"):
+                end += 1
+            existing = {l for l in lines[start:end] if l.startswith("vs=")}
+            fresh = [k for k in dict.fromkeys(keys) if k not in existing]
+            lines[end:end] = fresh
+        else:
+            fresh = list(dict.fromkeys(keys))
+            lines.extend(["# recorded from a ./rx device coverage run", header, *fresh])
+        added += len(fresh)
+        touched.append((tag, len(fresh)))
+    manifest.write_text("\n".join(lines) + "\n")
+    total = sum(1 for l in lines if l.startswith("vs="))
+    return added, total, touched
+
+
+def do_coverage(args):
+    """Record the Metal pipelines a device run reaches and merge them in."""
+    udid = choose_udid(args.udid)
+    env = list(args.env)
+    target = record_target(udid)
+    env.append(f"RRV_PCSX2_GS_PIPELINE_RECORD={target}")
+    run_args = argparse.Namespace(
+        seconds=args.seconds, breakdown=False, warmup=args.warmup, label=args.label or "coverage",
+        env=env, no_match=args.no_match, shots_every=args.shots_every, app=args.app, udid=udid)
+    run_dir = do_run(run_args)
+    candidates = list((pathlib.Path(run_dir) / "perf").rglob("coverage.txt"))
+    if not candidates:
+        print(f"no selectors were recorded (nothing new at these settings); run dir {run_dir}")
+        return
+    recorded = candidates[0]
+    added, total, touched = merge_pipeline_keys(recorded)
+    for tag, count in touched:
+        print(f"  {count:4d} new selectors for features {tag}")
+    summary = json.loads((pathlib.Path(run_dir) / "summary.json").read_text())
+    metrics = summary.get("metrics") or {}
+    print(f"coverage: {added} new selectors, manifest now {total} "
+          f"(fps {metrics.get('fps', 0):.2f}, compiles {metrics.get('pipeline_compiles_delta_run', 0):.0f})")
+    if added:
+        print("next: ./rx ipa --platform ios && ./rx device install --lean")
+
+
 def do_compare(a, b):
     x = json.loads((Path(a) / "summary.json").read_text())
     y = json.loads((Path(b) / "summary.json").read_text())
@@ -1685,6 +1765,15 @@ def main(argv=None):
     ab.add_argument("--breakdown", action="store_true", help="enable sampled execution timing")
     ab.add_argument("--warmup", type=float, default=0)
     ab.add_argument("--udid")
+    cov = sub.add_parser("coverage")
+    cov.add_argument("--seconds", type=int, default=480)
+    cov.add_argument("--label")
+    cov.add_argument("--env", action="append", default=[])
+    cov.add_argument("--no-match", action="store_true")
+    cov.add_argument("--shots-every", type=int, default=60)
+    cov.add_argument("--warmup", type=float, default=0)
+    cov.add_argument("--app")
+    cov.add_argument("--udid")
     baseline = sub.add_parser("baseline")
     baseline.add_argument("--runs", type=int, required=True)
     baseline.add_argument("--seconds", type=int, required=True)
@@ -1707,6 +1796,8 @@ def main(argv=None):
             summarize(args.run_dir)
         elif args.sub == "compare":
             do_compare(args.runA, args.runB)
+        elif args.sub == "coverage":
+            do_coverage(args)
         elif args.sub in ("ab", "baseline"):
             run_experiment(args, args.sub)
         return 0
