@@ -5,15 +5,10 @@ import html
 import json
 import math
 import pathlib
-import shutil
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 AB_DIR = ROOT / "build/device-ab"
-BACKLOG_SOURCE = pathlib.Path(
-    "/private/tmp/claude-501/-Users-ned-Downloads-fifa-street-native/"
-    "e9a531ac-59a6-4d43-9320-6ce15027daa2/scratchpad/research/backlog.json"
-)
 
 
 def read_json(path, default):
@@ -125,6 +120,14 @@ def render(ledger, notes, backlog, updated=None):
     notes = notes if isinstance(notes, list) else []
     entries = sorted(ledger, key=lambda e: e.get("ts", ""))
     enriched = [(entry, by_note(entry, notes)) for entry in entries]
+    matched = {e.get("label") for e in entries}
+    for note in notes:
+        # Queued notes are backlog candidates, not experiments that ran.
+        if note.get("status") == "queued" or not (note.get("ab_label") or note.get("id")):
+            continue
+        if note.get("ab_label") in matched or note.get("id") in matched:
+            continue
+        enriched.append(({"label": note.get("id"), "kind": "note"}, note))
     baseline = next((e for e in entries if e.get("kind") == "baseline"), None)
     best = max((e for e, n in enriched if n.get("status") == "kept" or e.get("kind") == "baseline"),
                key=lambda e: entry_metrics(e, "fps") or float("-inf"), default=None)
@@ -300,9 +303,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     notes_path = AB_DIR / "notes.json"
     backlog_path = AB_DIR / "backlog.json"
-    if BACKLOG_SOURCE.is_file():
-        backlog_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(BACKLOG_SOURCE, backlog_path)
     out = pathlib.Path(args.out)
     if not out.is_absolute():
         out = ROOT / out
