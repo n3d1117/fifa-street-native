@@ -1681,7 +1681,7 @@ def do_coverage(args):
         seconds=args.seconds, breakdown=False, warmup=args.warmup, label=args.label or "coverage",
         env=env, no_match=args.no_match, shots_every=args.shots_every, app=args.app, udid=udid)
     run_dir = do_run(run_args)
-    candidates = list((pathlib.Path(run_dir) / "perf").rglob("coverage.txt"))
+    candidates = list((Path(run_dir) / "perf").rglob("coverage.txt"))
     if not candidates:
         print(f"no selectors were recorded (nothing new at these settings); run dir {run_dir}")
         return
@@ -1689,7 +1689,7 @@ def do_coverage(args):
     added, total, touched = merge_pipeline_keys(recorded)
     for tag, count in touched:
         print(f"  {count:4d} new selectors for features {tag}")
-    summary = json.loads((pathlib.Path(run_dir) / "summary.json").read_text())
+    summary = json.loads((Path(run_dir) / "summary.json").read_text())
     metrics = summary.get("metrics") or {}
     print(f"coverage: {added} new selectors, manifest now {total} "
           f"(fps {metrics.get('fps', 0):.2f}, compiles {metrics.get('pipeline_compiles_delta_run', 0):.0f})")
