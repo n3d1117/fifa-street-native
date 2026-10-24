@@ -125,6 +125,12 @@ bool InitializePcsx2BaseSettings(std::string& error)
         return false;
     }
 
+    // PCSX2's Apple default data root is <home>/Library/Application Support/PCSX2.
+    // A tvOS app cannot create that inside its own container (EPERM), so the host
+    // passes the writable per-app base (Library/Caches on tvOS) here.
+    if (const char* data_root = std::getenv("PS2X_PCSX2_DATA_ROOT"); data_root && *data_root)
+        EmuConfig.CustomDataPath = data_root;
+
     if (!FileSystem::DirectoryExists(EmuFolders::Resources.c_str()) ||
         !EmuFolders::SetDataDirectory(nullptr))
     {

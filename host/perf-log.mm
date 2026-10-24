@@ -247,7 +247,10 @@ void ps2x_perf_start(const std::filesystem::path& userDirectory,
     const char* requested = std::getenv("PS2X_PERF_LOG");
     if (!requested || std::strcmp(requested, "1") || s_log) return;
     std::filesystem::path directory;
-#if TARGET_OS_IPHONE
+#if TARGET_OS_TV
+    // tvOS has no writable Documents; the user directory sits in Library/Caches.
+    directory = userDirectory.parent_path() / "perf";
+#elif TARGET_OS_IPHONE
     if (const char* isolated = std::getenv("PS2X_USER_DIR"); isolated && *isolated)
         directory = userDirectory.parent_path() / "perf";
     else {

@@ -2,7 +2,8 @@
 // Process entry for iOS and tvOS. UIApplicationMain keeps the main thread; once
 // the window exists the game runs on a 16 MB-stack thread inside ps2x_app_run.
 // Bundle layout mirrors the macOS .app Resources: <App>.app/game/<boot ELF> with
-// the disc data beside it. Saves and settings live in Application Support.
+// the disc data beside it. Saves, settings and logs live in the platform's
+// writable container directory (see userBaseDirectory).
 #import <UIKit/UIKit.h>
 
 #include "app.hpp"
@@ -24,6 +25,39 @@ namespace {
 std::string s_elfPath;
 std::string s_userDir;
 
+// tvOS denies creating Documents and Application Support inside the app's own
+// data container: both fail with NSFileWriteNoPermissionError (513, EPERM) even
+// though the container path resolves. Library/Caches is writable there and the
+// system may purge it. iOS uses Application Support.
+NSString* userBaseDirectory() {
+#if TARGET_OS_TV
+    return NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+#else
+    return NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask,
+        YES).firstObject;
+#endif
+}
+
+// Where game data sits when the bundle carries none (./rx device push-data).
+NSString* pushedGameDirectory() {
+#if TARGET_OS_TV
+    return [userBaseDirectory() stringByAppendingPathComponent:@"game"];
+#else
+    return [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject
+        stringByAppendingPathComponent:@"game"];
+#endif
+}
+
+void reportDirectoryFailure(NSString* path, NSError* error) {
+    // A Foundation code alone cannot separate a sandbox denial from a POSIX one.
+    NSError* underlying = error.userInfo[NSUnderlyingErrorKey];
+    NSString* message = [NSString stringWithFormat:@"Cannot create %@: %@ (code %ld%@)", path,
+        [error localizedDescription], (long)[error code],
+        underlying ? [NSString stringWithFormat:@", underlying %ld", (long)[underlying code]] : @""];
+    NSLog(@"[ios] user directory failed: %@", message);
+    ps2x_show_error_alert([message UTF8String]);
+}
+
 void* gameThreadMain(void*) {
     Ps2xAppConfig config{s_elfPath.c_str(), s_userDir.c_str()};
     const int status = ps2x_app_run(&config);
@@ -36,31 +70,34 @@ void startGameThread() {
     NSString* bundle = [[NSBundle mainBundle] bundlePath];
     std::filesystem::path game = std::filesystem::path([bundle fileSystemRepresentation]) / "game";
     if (!std::filesystem::is_directory(game)) {
-        NSURL* documents = [[NSFileManager defaultManager] URLForDirectory:NSDocumentDirectory
-            inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
-        game = std::filesystem::path([[documents path] fileSystemRepresentation]) / "game";
+        NSString* pushed = pushedGameDirectory();
+        game = std::filesystem::path([pushed fileSystemRepresentation]);
     }
     s_elfPath = (game / std::filesystem::path(PS2X_DEFAULT_BOOT_ELF).filename()).string();
-    NSURL* support = [[NSFileManager defaultManager] URLForDirectory:NSApplicationSupportDirectory
-        inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
-    NSString* dir = [[support path] stringByAppendingPathComponent:@PS2X_APP_EXECUTABLE];
+    NSString* base = userBaseDirectory();
+    if (!base) {
+        ps2x_show_error_alert("This device reports no writable application data directory.");
+        return;
+    }
+    NSString* dir = [base stringByAppendingPathComponent:@PS2X_APP_EXECUTABLE];
     if (const char* name = std::getenv("PS2X_USER_DIR"); name && *name) {
         const std::filesystem::path relative(name);
         if (relative.has_parent_path() || relative == "." || relative == "..") {
-            ps2x_show_error_alert("PS2X_USER_DIR must be a directory name within Documents.");
+            ps2x_show_error_alert("PS2X_USER_DIR must be a directory name within the application data directory.");
             return;
         }
-        NSURL* documents = [[NSFileManager defaultManager] URLForDirectory:NSDocumentDirectory
-            inDomain:NSUserDomainMask appropriateForURL:nil create:YES error:nil];
-        dir = [[documents path] stringByAppendingPathComponent:[NSString stringWithUTF8String:name]];
+        dir = [base stringByAppendingPathComponent:[NSString stringWithUTF8String:name]];
     }
     NSError* directoryError = nil;
     if (![[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES
         attributes:nil error:&directoryError]) {
-        ps2x_show_error_alert([[directoryError localizedDescription] UTF8String]);
+        reportDirectoryFailure(dir, directoryError);
         return;
     }
     s_userDir = [dir fileSystemRepresentation];
+    // The GS bridge's PCSX2 data root must be writable too; Application Support is
+    // not on tvOS.
+    setenv("PS2X_PCSX2_DATA_ROOT", [base fileSystemRepresentation], 1);
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);

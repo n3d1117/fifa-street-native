@@ -120,16 +120,33 @@ def global_device_args(udid):
     return ["--udid", udid]
 
 
-def default_app(udid):
+def product_type(udid):
     devices = pmd("usbmux", "list", timeout=15).stdout
     try:
         rows = json.loads(devices)
         row = next((d for d in rows if d.get("UniqueDeviceID") == udid), {})
     except (json.JSONDecodeError, TypeError):
         row = {}
-    if str(row.get("ProductType", "")).startswith("AppleTV"):
+    return str(row.get("ProductType", ""))
+
+
+def default_app(udid):
+    if product_type(udid).startswith("AppleTV"):
         return ROOT / "build/embedded/appletvos/FIFA Street PS2.app"
     return DEFAULT_APP
+
+
+def remote_paths(udid):
+    """Container-relative directories the app writes to, as in host/ios-main.mm.
+
+    tvOS denies Documents and Application Support inside the app's own container,
+    so the app uses Library/Caches for everything. iOS keeps Application Support
+    for the user directory, Documents for pushed game data, isolated directories
+    and perf logs.
+    """
+    if product_type(udid).startswith("AppleTV"):
+        return {"user": "Library/Caches", "isolated": "Library/Caches", "local": "Library/Caches"}
+    return {"user": "Library/Application Support", "isolated": "Documents", "local": "Documents"}
 
 
 def app_records(udid):
@@ -519,7 +536,7 @@ def do_push(args):
             json.dumps(manifest, sort_keys=True, separators=(",", ":"))
         )
         pmd(
-            "apps", "push", bundle, str(staged_game), "Documents",
+            "apps", "push", bundle, str(staged_game), remote_paths(udid)["local"],
             *global_device_args(udid), timeout=900,
         )
     state["game_manifest"] = manifest
@@ -1561,9 +1578,10 @@ def do_run(args):
         t.join(timeout=5)
     effective_env = dict(value.split("=", 1) for value in env)
     user_name = effective_env.get("PS2X_USER_DIR")
+    paths = remote_paths(udid)
     remote = (
-        f"Documents/{user_name}/Logs/native.log" if user_name
-        else f"Library/Application Support/{info['CFBundleExecutable']}/Logs/native.log"
+        f"{paths['isolated']}/{user_name}/Logs/native.log" if user_name
+        else f"{paths['user']}/{info['CFBundleExecutable']}/Logs/native.log"
     )
     pulled = pmd(
         "apps",
@@ -1575,14 +1593,14 @@ def do_run(args):
         timeout=90,
         check=False,
     )
-    # Fetch the per-frame perf directory when the app has one in Documents.
+    # Fetch the per-frame perf directory when the app has one.
     perf = out / "perf"
     perf.mkdir(exist_ok=True)
     pmd(
         "apps",
         "pull",
         bundle,
-        "Documents/perf",
+        f"{paths['local']}/perf",
         str(perf),
         *global_device_args(udid),
         timeout=180,
