@@ -74,11 +74,15 @@ Ops: `Vif`, `GifPacket` (packets over 1 MiB are read in place while the EE waits
 
 The ring uses monotonic head/tail byte counters (seq-cst). The worker never waits on the EE. Every EE-to-worker blocking edge has a 2 s watchdog that prints the stuck op and aborts. A worker exception is rethrown on the EE at its next enqueue or drain.
 
+With EE profiling or timed state dumps enabled, the worker publishes its active op and start time atomically. State dumps sample live op ages alongside the cached EE ring snapshot; repeated snapshot positions alone do not establish a wedged worker. Op 6 is `GsVsync`, op 7 is `GsReadback`. The latter only copies CPU-resident CSR/SIGLBLID; GPU downloads are separate local-memory or snapshot operations. `RRV_GATE4_GS_COUNTERS=<path>` emits one-second cost aggregates to the native log as well as writing field records at orderly shutdown, so device runs killed by the harness retain attribution. These diagnostics perturb timing; measure cadence with them disabled.
+
 The EE waits only at: GS CSR/SIGLBLID access with packets outstanding; any EE load or store to VU1 code or data (`mapVuMemory`); the VBlank vsync with CSR readback; GS local-to-host reads; MSCAL/MSCNT while FBRST halt enables are or were set; and `PS2Memory::initialize` and shutdown. Control-plane state (VIF1/DMA registers, INTC causes, stalls, GIF_STAT) is final on the EE when each kick returns.
 
 VIF1 FLUSH/FLUSHE/FLUSHA do not wait for queued VU1 work or GIF paths, unlike PCSX2 `Vif_Codes.cpp`. FIFA Street issues them about a million times per match (measured); making them wait blocks the EE on the worker thread (see Tried and rejected).
 
 At GS VSync, the EE waits only through the previous VSync fence, queues and publishes the current VSync, then continues while the worker finishes it. The next fence preserves ordering. `PS2X_GS_VSYNC_DRAIN=1` restores the full per-VSync drain. The overlap can bunch audio production, so `PS2X_SPU2_TARGET_MS=64` primes 64 ms (3,072 frames at 48 kHz) before playback; the default prime remains about 43 ms.
+
+Metal's host-present flood guard measures its 8 ms interval from the last completed drawable acquisition. Recording the timestamp before `nextDrawable` credits the drawable-pool wait as frame spacing: each catch-up field can then block for another display refresh, starving EE guest execution through the previous-VSync fence. Recording completion lets the next catch-up field skip presentation while still processing GS state and Merge. `RRV_PCSX2_GS_PRESENT_MIN_US=0` disables this guard; guest VBlank delivery and GS ordering are unchanged.
 
 On Apple platforms, GameThread and VU1GSWorker use `QOS_CLASS_USER_INTERACTIVE` when they start; `PS2X_THREAD_QOS=0` disables this host scheduling hint. The perf summary records each named thread's QoS class in `thread_qos`. QoS changes host scheduling only and leaves guest clocks and operations unchanged. A pixel-by-pixel verify mode would need to synchronize asynchronous GS output and would remove the scheduling effect being measured.
 
@@ -167,7 +171,7 @@ Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C`
 | `PS2X_TRACE_SYSCALLS=1`, `PS2X_TRACE_RPC=1` | first calls per EE syscall number; first 2000 SIF RPC events |
 | `PS2X_CAPTURE_DIR`, `_FRAMES`, `_START_FIELD`, `_INTERVAL` | bounded Metal frame capture |
 | `PS2X_AUDIO_STRETCH=1` | enable adaptive audio time stretching (off by default) |
-| `RRV_PCSX2_GS_PRESENT_MIN_US=<us>` | minimum interval between host presents (default 8000, 0 disables); frames closer than this are skipped so a burst of catch-up VBlanks cannot block the EE on `nextDrawable` |
+| `RRV_PCSX2_GS_PRESENT_MIN_US=<us>` | minimum interval since completed drawable acquisition (default 8000, 0 disables); catch-up host presents inside this interval are skipped before `nextDrawable` |
 | `RRV_PCSX2_GS_PRESENT_HZ=50|59.94|60|120` | override host present pacing; otherwise each host passes the selected game's 50 Hz PAL or 59.94 Hz NTSC rate |
 | `RRV_PCSX2_GS_TEST_PRESENT_STALL_MS=<ms>` | inject one Metal present stall; the StreamRing watchdog excludes only this host drawable-acquisition interval |
 | `RRV_PCSX2_GS_PIPELINE_PREWARM=0` | disable recorded Metal pipeline pre-warm and automatic learning |
@@ -200,6 +204,8 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 `deps.lock` pins each upstream (`ps2recomp`, `pcsx2`) by SHA. `./rx deps sync` creates `deps/<name>` at the pin on branch `rx` and applies `patches/<name>/*.patch` with `git am -3`. `./rx deps export` rewrites `patches/<name>/` with `git format-patch` (byte-stable) and refuses dirty trees. `./rx deps status` shows pin, commits and exported state; `./rx check` fails on unexported commits. Pull upstream in themed batches with a verifying test each; regenerate into a separate directory first (`tools/generate.py --out DIR`) to review output diffs.
 
 ## Tried and rejected
+
+- tvOS freeze as synchronous framebuffer readback: the frozen worker completes 60 VSyncs/s, with zero local-memory and HW-renderer readbacks; 120 CSR/SIGLBLID copies cost about 3–4 microseconds total per second. Sampled op ages are usually about one field (maximum 29.3 ms), while perf records attribute about 16.6 ms per present to `nextDrawable`. Regenerate with `./rx device run --seconds 130 --env RRV_GATE4_GS_COUNTERS=gs-counters.txt --env PS2X_EE_PROFILE=1 --env PS2X_DUMP_STATE_AT=18 --env PS2X_DUMP_STATE_EVERY=5`.
 
 - E8b-gif-borrow: immediate empty-queue GIF borrowing had no counted smoothness gain (58.866→58.755 FPS), while VU p95 rose 10.317→10.861 ms (+0.544; noise 0.352). Startup underruns fell 212→0 median, but the counted VU regression requires rejection.
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 18 Oct 2026 16:52:56 +0200
-Subject: [PATCH 009/110] upstream #316: truncate and saturate FPU CVT.W.S like
+Subject: [PATCH 009/111] upstream #316: truncate and saturate FPU CVT.W.S like
  the EE FPU
 
 

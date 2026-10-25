@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sat, 24 Oct 2026 16:14:26 +0200
-Subject: [PATCH 105/110] runtime: hang dump reports stream-ring and
+Subject: [PATCH 105/111] runtime: hang dump reports stream-ring and
  pending-invocation state
 
 The one-shot state dump could not separate a stationary wait from slow

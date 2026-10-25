@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Fri, 23 Oct 2026 04:39:06 +0200
-Subject: [PATCH 099/110] runtime: reuse VU1 packet staging buffers
+Subject: [PATCH 099/111] runtime: reuse VU1 packet staging buffers
 
 Reuse packet-vector capacity across native dispatches without changing the transactional state/data/GIF commit. Full data-memory staging remains necessary for failed-native fallback; reset only the active packet count. PS2X_VU1_STAGING=legacy restores per-call allocation. Differential mode exercises the pool, with a regression covering success/failure/shrinking/empty packet sequences.
 

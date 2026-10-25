@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 01:15:22 +0200
-Subject: [PATCH 070/110] MPEG: sequence_end_code from the game's own input
+Subject: [PATCH 070/111] MPEG: sequence_end_code from the game's own input
  callback ends raw elementary-stream movies
 
 

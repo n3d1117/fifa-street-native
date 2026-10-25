@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 15:52:43 +0200
-Subject: [PATCH 081/110] IOP: pace synchronous waits when host audio plays
+Subject: [PATCH 081/111] IOP: pace synchronous waits when host audio plays
  live
 
 Outside-thread delay, semaphore and event-flag waits can advance a full IOP second while the EE is blocked. Pace those scheduler loops against host time for live output so SPU2 does not overflow its ring and starve during subsequent EE budget repayment. Deterministic hosts retain unpaced execution; cycle accounting is unchanged.

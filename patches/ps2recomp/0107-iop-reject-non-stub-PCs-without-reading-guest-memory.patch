@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sat, 24 Oct 2026 22:31:07 +0200
-Subject: [PATCH 107/110] iop: reject non-stub PCs without reading guest memory
+Subject: [PATCH 107/111] iop: reject non-stub PCs without reading guest memory
 
 imports.decode() runs on every IOP instruction and starts with two guest
 memory reads looking for the jr ra/delay-slot stub pattern, which is almost

@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 25 Oct 2026 08:58:26 +0100
+Subject: [PATCH 111/111] runtime: sample live data-worker op dwell in hang
+ dumps
+
+Publish an atomic op/start stamp only for EE profiling or timed state dumps. Sample live op ages separately from the cached EE snapshot so repeated ring positions cannot be mistaken for a wedged worker. The tvOS reproduction showed repeated GsVsync operations, usually about one field old, rather than a seconds-long readback op. Full runtime test tier passes (60 tests); macOS NTSC/PAL and physical iOS/tvOS routes exercised the diagnostics and disabled path.
+
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.cpp b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+index aaf62723fb3ec00fb984b631a53f27eb68758a45..fcd3aa11781270981a6e78245f5362154403552c 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.cpp
++++ b/ps2xRuntime/src/lib/ps2_data_stream.cpp
+@@ -43,6 +43,11 @@ DataStream::DataStream(PS2Memory &memory) : m_memory(memory), m_gs(memory.gs())
+     m_perfEnabled = perf && std::strcmp(perf, "1") == 0;
+     const char *vsyncDrain = std::getenv("PS2X_GS_VSYNC_DRAIN");
+     m_vsyncDrain = vsyncDrain && std::strcmp(vsyncDrain, "1") == 0;
++    const char *profile = std::getenv("PS2X_EE_PROFILE");
++    const char *dumpAt = std::getenv("PS2X_DUMP_STATE_AT");
++    const char *dumpEvery = std::getenv("PS2X_DUMP_STATE_EVERY");
++    m_opDiagnostics = (profile && profile[0] == '1') || (dumpAt && std::atof(dumpAt) > 0.0) ||
++                      (dumpEvery && std::atof(dumpEvery) > 0.0);
+ }
+ 
+ DataStream::~DataStream()
+@@ -149,11 +154,24 @@ void DataStream::publishIfIdle()
+ void DataStream::execute(const StreamRing::Op &op, const uint8_t *payload)
+ {
+     m_executingOpType.store(op.type, std::memory_order_release);
++    if (m_opDiagnostics)
++    {
++        const uint64_t micros = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
++            std::chrono::steady_clock::now().time_since_epoch()).count());
++        m_diagnosticOp.store((micros << 8u) | op.type, std::memory_order_release);
++    }
+     struct ClearOnExit
+     {
+         std::atomic<uint32_t> &flag;
+-        ~ClearOnExit() { flag.store(0u, std::memory_order_release); }
+-    } clearOnExit{m_executingOpType};
++        std::atomic<uint64_t> &diagnostic;
++        bool enabled;
++        ~ClearOnExit()
++        {
++            if (enabled)
++                diagnostic.store(0u, std::memory_order_release);
++            flag.store(0u, std::memory_order_release);
++        }
++    } clearOnExit{m_executingOpType, m_diagnosticOp, m_opDiagnostics};
+     switch (op.type)
+     {
+     case OpGifPacket:
+@@ -220,6 +238,16 @@ void DataStream::execute(const StreamRing::Op &op, const uint8_t *payload)
+     }
+ }
+ 
++DataStream::WorkerOpSnapshot DataStream::workerOpSnapshot() const
++{
++    const uint64_t op = m_diagnosticOp.load(std::memory_order_acquire);
++    if (!op)
++        return {};
++    const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count());
++    return {static_cast<uint32_t>(op & 0xFFu), (now - (op >> 8u)) * 1000u};
++}
++
+ void DataStream::vifOp(const Vif1Op &op)
+ {
+     if (!deferred())
+diff --git a/ps2xRuntime/src/lib/ps2_data_stream.h b/ps2xRuntime/src/lib/ps2_data_stream.h
+index 7f52d296c23fa33dfeca72ab471fa3720a5a99e5..a3b38966e09c097d1b294fd4abffe50231c6f517 100644
+--- a/ps2xRuntime/src/lib/ps2_data_stream.h
++++ b/ps2xRuntime/src/lib/ps2_data_stream.h
+@@ -147,6 +147,12 @@ public:
+     const StreamRing *ring() const { return m_ring.get(); }
+     // The op the worker is executing right now, 0 between ops.
+     uint32_t executingOpType() const { return m_executingOpType.load(std::memory_order_acquire); }
++    struct WorkerOpSnapshot
++    {
++        uint32_t type = 0;
++        uint64_t nanoseconds = 0;
++    };
++    WorkerOpSnapshot workerOpSnapshot() const;
+ 
+ private:
+     void execute(const StreamRing::Op &op, const uint8_t *payload);
+@@ -164,6 +170,8 @@ private:
+     std::unique_ptr<StreamRing> m_ring;
+     Mode m_mode = Mode::Inline;
+     std::atomic<uint32_t> m_executingOpType{0};
++    std::atomic<uint64_t> m_diagnosticOp{0};
++    bool m_opDiagnostics = false;
+     int m_kickDepth = 0;
+     bool m_gsStale = false;
+     bool m_verify = false;
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index 4d146d3e41840cfb4a7d92405a69af4d2fd64551..373e020228e8273cf1fd4d96905fd6834fcbfe9e 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -3,6 +3,7 @@
+ // between [state-begin] and [state-end]. PS2X_DUMP_STATE_EVERY=<seconds> repeats it, which separates a
+ // stationary wait from slow progress. Kept out of every header the generated code includes.
+ #include "ps2_runtime.h"
++#include "ps2_data_stream.h"
+ #include "runtime/ee_scheduler.h"
+ #include "Kernel/Syscalls/Helpers/State.h"
+ 
+@@ -75,9 +76,14 @@ void dumpState(PS2Runtime &runtime)
+     // second, so the samples are also counted per thread id.
+     std::map<uint32_t, uint32_t> histogram;
+     std::map<int, uint32_t> cpuSamples;
++    std::map<uint32_t, uint32_t> workerSamples;
++    std::map<uint32_t, uint64_t> workerMaxNanoseconds;
+     uint32_t samples = 0;
+     for (int i = 0; i < 200; ++i)
+     {
++        const auto worker = runtime.memory().dataStream().workerOpSnapshot();
++        ++workerSamples[worker.type];
++        workerMaxNanoseconds[worker.type] = std::max(workerMaxNanoseconds[worker.type], worker.nanoseconds);
+         if (const R5900Context *ctx = runtime.eeScheduler().currentContext())
+         {
+             ++histogram[ctx->pc];
+@@ -145,9 +151,17 @@ void dumpState(PS2Runtime &runtime)
+         out << " oldest_kind=" << invocationKindName(static_cast<uint8_t>(ee.oldestPendingKind));
+     out << "\n";
+     if (ee.ringPresent)
++    {
++        const auto worker = runtime.memory().dataStream().workerOpSnapshot();
+         out << "data ring pushed=" << ee.ringPushed << " published=" << ee.ringPublished
+             << " consumed=" << ee.ringConsumed << " worker_op=" << ee.workerOpType
++            << " worker_op_live=" << worker.type << " worker_op_ms=" << worker.nanoseconds / 1e6
+             << " failed=" << static_cast<unsigned>(ee.ringFailed) << "\n";
++        out << "data worker samples (op -> 5ms samples/max dwell ms):";
++        for (const auto &[type, count] : workerSamples)
++            out << " " << type << "x" << count << "/" << workerMaxNanoseconds[type] / 1e6;
++        out << "\n";
++    }
+     else
+         out << "data ring inline worker_op=0\n";
+     for (const EeSemaphoreSnapshot &s : ee.semaphores)

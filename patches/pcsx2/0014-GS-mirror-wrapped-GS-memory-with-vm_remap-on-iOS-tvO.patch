@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Thu, 22 Oct 2026 16:26:16 +0200
-Subject: [PATCH 14/17] GS: mirror wrapped GS memory with vm_remap on iOS/tvOS
+Subject: [PATCH 14/18] GS: mirror wrapped GS memory with vm_remap on iOS/tvOS
 
 The iOS sandbox denies shm_open, so GSLocalMemory aborted at startup on device
 (iPhone 11, iOS 27.0.1 crash: pxOnAssertFail in GSLocalMemory::GSLocalMemory).

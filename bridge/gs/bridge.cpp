@@ -419,7 +419,8 @@ Gate4GsObserverV1& Gate4GsObserver();
 struct Gate4GsFieldV1
 {
     uint64_t field_index = 0, entry_ns = 0, packets = 0, bytes = 0, gif_ns = 0, vsync_ns = 0;
-    uint64_t readbacks = 0, result_changes = 0, local_reads = 0, local_read_bytes = 0, local_read_ns = 0;
+    uint64_t readbacks = 0, register_readback_ns = 0, result_changes = 0;
+    uint64_t local_reads = 0, local_read_bytes = 0, local_read_ns = 0;
     uint32_t parity = 0;
     float gpu_ms = 0.0f, gpu_avg_ms = 0.0f;
     bool vsync_perf_valid = false;
@@ -435,6 +436,11 @@ struct Gate4GsObserverV1
     uint64_t dropped = 0;
     Gate4GsFieldV1 open_field;
     std::array<double, GSPerfMon::CounterLast> last_post{};
+    uint64_t aggregate_start_ns = 0, aggregate_fields = 0;
+    uint64_t aggregate_readbacks = 0, aggregate_register_readback_ns = 0;
+    uint64_t aggregate_local_reads = 0, aggregate_local_read_bytes = 0, aggregate_local_read_ns = 0;
+    uint64_t aggregate_vsync_ns = 0, aggregate_gif_ns = 0;
+    uint64_t aggregate_pcsx2_hw_readbacks = 0;
     // Capture.
     std::string capture_dir;
     std::vector<std::array<uint64_t, 3>> capture_ranges; // first, last, step
@@ -463,6 +469,10 @@ struct Gate4GsObserverV1
     {
         written = false;
         enabled = false;
+        aggregate_start_ns = aggregate_fields = 0;
+        aggregate_readbacks = aggregate_register_readback_ns = 0;
+        aggregate_local_reads = aggregate_local_read_bytes = aggregate_local_read_ns = 0;
+        aggregate_vsync_ns = aggregate_gif_ns = aggregate_pcsx2_hw_readbacks = 0;
         capture_dir.clear();
         capture_ranges.clear();
         if (const char* v = std::getenv("RRV_GATE4_GS_COUNTERS"); v && v[0] != '\0')
@@ -473,6 +483,7 @@ struct Gate4GsObserverV1
             rows.reserve(32768u);
             dropped = 0;
             open_field = {};
+            aggregate_start_ns = Now();
             last_post = Perf();
             static const bool at_exit = [] { std::atexit([] { Gate4GsObserver().Write(); }); return true; }();
             (void)at_exit;
@@ -554,6 +565,45 @@ struct Gate4GsObserverV1
         std::fclose(f);
         std::fprintf(stderr, "[gate4-gs] fields=%zu dropped=%llu path=%s\n", rows.size(),
                      static_cast<unsigned long long>(dropped), path.c_str());
+    }
+    void AccumulateAndReport(const Gate4GsFieldV1& row)
+    {
+        ++aggregate_fields;
+        aggregate_readbacks += row.readbacks;
+        aggregate_register_readback_ns += row.register_readback_ns;
+        aggregate_local_reads += row.local_reads;
+        aggregate_local_read_bytes += row.local_read_bytes;
+        aggregate_local_read_ns += row.local_read_ns;
+        aggregate_vsync_ns += row.vsync_ns;
+        aggregate_gif_ns += row.gif_ns;
+        // This is PCSX2's HW-renderer readback operation counter, not a GPU
+        // hardware telemetry counter or the bridge's CSR memcpy readback count.
+        const double pcsx2_hw_readbacks = row.perf[GSPerfMon::Readbacks];
+        if (pcsx2_hw_readbacks > 0.0)
+            aggregate_pcsx2_hw_readbacks += static_cast<uint64_t>(pcsx2_hw_readbacks);
+
+        const uint64_t now = Now();
+        constexpr uint64_t kReportIntervalNs = 1000000000ull;
+        if (now - aggregate_start_ns < kReportIntervalNs)
+            return;
+        std::fprintf(stderr,
+            "[gate4-gs] aggregate fields=%llu register_readbacks=%llu register_readback_ns=%llu "
+            "local_reads=%llu local_read_bytes=%llu local_read_ns=%llu vsync_ns=%llu gif_ns=%llu "
+            "pcsx2_hw_readbacks=%llu elapsed_ns=%llu\n",
+            static_cast<unsigned long long>(aggregate_fields),
+            static_cast<unsigned long long>(aggregate_readbacks),
+            static_cast<unsigned long long>(aggregate_register_readback_ns),
+            static_cast<unsigned long long>(aggregate_local_reads),
+            static_cast<unsigned long long>(aggregate_local_read_bytes),
+            static_cast<unsigned long long>(aggregate_local_read_ns),
+            static_cast<unsigned long long>(aggregate_vsync_ns),
+            static_cast<unsigned long long>(aggregate_gif_ns),
+            static_cast<unsigned long long>(aggregate_pcsx2_hw_readbacks),
+            static_cast<unsigned long long>(now - aggregate_start_ns));
+        aggregate_start_ns = now;
+        aggregate_fields = aggregate_readbacks = aggregate_register_readback_ns = 0;
+        aggregate_local_reads = aggregate_local_read_bytes = aggregate_local_read_ns = 0;
+        aggregate_vsync_ns = aggregate_gif_ns = aggregate_pcsx2_hw_readbacks = 0;
     }
 };
 
@@ -2087,10 +2137,15 @@ extern "C" int rrv_pcsx2_gs_bridge_readback(
         SetError(error, error_capacity, "PCSX2 GS bridge or readback outputs are null");
         return 0;
     }
+    Gate4GsObserverV1& obs = Gate4GsObserver();
+    const uint64_t readback_t0 = obs.enabled ? Gate4GsObserverV1::Now() : 0u;
     std::memcpy(csr, bridge->pcsx2_regs.data() + kPcsx2Offsets[15], sizeof(*csr));
     std::memcpy(siglblid, bridge->pcsx2_regs.data() + kPcsx2Offsets[18], sizeof(*siglblid));
-    if (Gate4GsObserverV1& obs = Gate4GsObserver(); obs.enabled)
+    if (obs.enabled)
+    {
         ++obs.open_field.readbacks;
+        obs.open_field.register_readback_ns += Gate4GsObserverV1::Now() - readback_t0;
+    }
     return 1;
 }
 
@@ -2683,6 +2738,7 @@ extern "C" int rrv_pcsx2_gs_bridge_vsync(
             gate4_obs.rows.push_back(row);
         else
             ++gate4_obs.dropped;
+        gate4_obs.AccumulateAndReport(row);
         row = {};
     }
     if (verbose)
