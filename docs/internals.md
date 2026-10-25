@@ -172,6 +172,7 @@ Tried and rejected: Auto widescreen sampling. The APT name pointer at `0x480B4C`
 | `RRV_PCSX2_GS_TEST_PRESENT_STALL_MS=<ms>` | inject one Metal present stall; the StreamRing watchdog excludes only this host drawable-acquisition interval |
 | `RRV_PCSX2_GS_PIPELINE_PREWARM=0` | disable recorded Metal pipeline pre-warm and automatic learning |
 | `RRV_PCSX2_GS_PIPELINE_RECORD=<path>` | record lazily created Metal pipeline keys to a file for coverage collection |
+| every device run | seeds `<user base>/rx-device-pipelines.txt` with the selectors learned so far and pulls it back afterwards, so A/B runs measure steady state instead of first-encounter compiles |
 | `./rx device coverage --seconds N` | run on the attached device, record the Metal selectors that run reaches, and merge them into `bridge/gs/pipelines-fifa.txt` |
 | `PS2X_SPU2_STALL_TRACE=1` | record mix/pull/underrun events with timestamps and dump them at exit (`[spu2-stall]`), for audio-stall diagnosis |
 | `PS2X_VU1_WORKER=0\|sync` | inline or drained data side |

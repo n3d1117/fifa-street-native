@@ -1463,6 +1463,12 @@ def do_run(args):
             )
     env = [] if args.no_match else ["PS2X_BOOT_MATCH=venue=3", "PS2X_AUTOPILOT=match"]
     env += ["PS2X_PERF_LOG=1", f"PS2X_PERF_BREAKDOWN={int(getattr(args, 'breakdown', False))}", f"PS2X_USER_DIR=rx-run-{stamp}-{label}"] + args.env
+    run_user_name = dict(value.split("=", 1) for value in env).get("PS2X_USER_DIR")
+    if not getattr(args, "no_pipeline_cache", False):
+        # The learned-selector cache lives outside the per-run user directory so
+        # it accumulates across runs; point the app at it and seed it first.
+        if push_pipeline_cache(udid, run_user_name):
+            env.append(f"RRV_PCSX2_GS_PIPELINE_CACHE={pipeline_cache_remote(udid, absolute=True)}")
     launch = ["developer", "dvt", "launch", "--tunnel", udid]
     for e in env:
         launch += ["--env", e]
@@ -1608,6 +1614,10 @@ def do_run(args):
         timeout=180,
         check=False,
     )
+    if not getattr(args, "no_pipeline_cache", False):
+        learned = pull_pipeline_cache(udid, effective_env.get("PS2X_USER_DIR"))
+        if learned:
+            print(f"learned {learned} new pipeline selectors -> {learned_cache_path(udid).relative_to(ROOT)}")
     data = summarize(out)
     print(
         f"run: {out.relative_to(ROOT)}; pid {pid}; native.log {'pulled' if pulled.returncode==0 else 'unavailable'}"
@@ -1644,6 +1654,75 @@ def record_target(udid, bundle):
     # The app opens this itself, so it must be absolute; the perf log lives in
     # <user base>/perf, the same directory the harness pulls.
     return f"{container_path(udid, bundle)}/{paths['perf']}/perf/coverage.txt"
+
+
+def learned_cache_path(udid):
+    """Host-side union of the Metal selectors the device has learned so far."""
+    import pathlib
+    return ROOT / "build" / "device" / f"pipelines-{udid}.txt"
+
+
+def installed_bundle_id(udid):
+    """Bundle id of the installed game (never a system app that matches too)."""
+    records = app_records(udid)
+    for key, value in records.items():
+        if value.get("ApplicationType") == "User" and value.get("CFBundleExecutable") == "FIFAStreetPS2":
+            return key
+    for key, value in records.items():
+        if value.get("CFBundleExecutable") == "FIFAStreetPS2":
+            return key
+    raise Failed("no installed app found -> ./rx device install first")
+
+
+def pipeline_cache_remote(udid, absolute=False):
+    """Shared learned-selector file, outside the per-run user directory.
+
+    Push and pull take a container-relative path; the app opens the file itself,
+    so RRV_PCSX2_GS_PIPELINE_CACHE needs the absolute container form.
+    """
+    relative = f"{remote_paths(udid)['user']}/rx-device-pipelines.txt"
+    if not absolute:
+        return relative
+    return f"{container_path(udid, installed_bundle_id(udid))}/{relative}"
+
+
+def push_pipeline_cache(udid, user_name):
+    """Seed a run's user directory with every selector learned on this device.
+
+    The app appends the selectors it compiles to <user dir>/gs-metal-pipelines.txt
+    and prewarms them at the next launch, but every ./rx device run uses a fresh
+    user directory, so without this each run pays first-encounter compiles (and
+    their audio bursts) again. Runs are measurements, not first installs.
+    """
+    cache = learned_cache_path(udid)
+    if not user_name or not cache.is_file() or not cache.stat().st_size:
+        return False
+    result = pmd("apps", "push", installed_bundle_id(udid), str(cache),
+                 pipeline_cache_remote(udid), *global_device_args(udid),
+                 timeout=120, check=False)
+    return result.returncode == 0
+
+
+def pull_pipeline_cache(udid, user_name):
+    """Merge the selectors this run learned back into the host union."""
+    cache = learned_cache_path(udid)
+    if not user_name:
+        return 0
+    with tempfile.TemporaryDirectory() as tmp:
+        result = pmd("apps", "pull", installed_bundle_id(udid),
+                     pipeline_cache_remote(udid), tmp,
+                     *global_device_args(udid), timeout=120, check=False)
+        if result.returncode != 0:
+            return 0
+        pulled = list(Path(tmp).rglob("gs-metal-pipelines.txt"))
+        if not pulled:
+            return 0
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        if not cache.is_file():
+            shutil.copyfile(pulled[0], cache)
+            return sum(1 for line in cache.read_text().splitlines() if line.startswith("vs="))
+        added, _total, _sections = merge_pipeline_keys(pulled[0], cache)
+        return added
 
 
 def merge_pipeline_keys(recorded, manifest=MANIFEST):
@@ -1778,6 +1857,8 @@ def main(argv=None):
     r.add_argument("--shots-every", type=int, default=20)
     r.add_argument("--app")
     r.add_argument("--udid")
+    r.add_argument("--no-pipeline-cache", action="store_true",
+                   help="do not seed/persist the learned Metal pipeline cache")
     s = sub.add_parser("summarize")
     s.add_argument("run_dir")
     c = sub.add_parser("compare")
@@ -1794,6 +1875,7 @@ def main(argv=None):
     ab.add_argument("--breakdown", action="store_true", help="enable sampled execution timing")
     ab.add_argument("--warmup", type=float, default=0)
     ab.add_argument("--udid")
+    ab.add_argument("--no-pipeline-cache", action="store_true")
     cov = sub.add_parser("coverage")
     cov.add_argument("--seconds", type=int, default=480)
     cov.add_argument("--label")
@@ -1803,6 +1885,7 @@ def main(argv=None):
     cov.add_argument("--warmup", type=float, default=0)
     cov.add_argument("--app")
     cov.add_argument("--udid")
+    cov.add_argument("--no-pipeline-cache", action="store_true")
     baseline = sub.add_parser("baseline")
     baseline.add_argument("--runs", type=int, required=True)
     baseline.add_argument("--seconds", type=int, required=True)
@@ -1811,6 +1894,7 @@ def main(argv=None):
     baseline.add_argument("--breakdown", action="store_true", help="enable sampled execution timing")
     baseline.add_argument("--warmup", type=float, default=0)
     baseline.add_argument("--udid")
+    baseline.add_argument("--no-pipeline-cache", action="store_true")
     args = ap.parse_args(argv)
     try:
         if args.sub == "doctor":
