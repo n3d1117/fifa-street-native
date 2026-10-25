@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 25 Oct 2026 07:23:49 +0100
-Subject: [PATCH 109/109] hang dump: attribute the executor's wall time
+Subject: [PATCH 109/110] hang dump: attribute the executor's wall time
 
 The thread list could not say whether a starved thread was slow or the executor
 was busy elsewhere. The dump now reports per-second guest blocks, injected

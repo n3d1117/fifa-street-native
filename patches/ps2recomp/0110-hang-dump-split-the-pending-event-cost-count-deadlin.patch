@@ -1,0 +1,153 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 25 Oct 2026 08:17:56 +0100
+Subject: [PATCH 110/110] hang dump: split the pending-event cost, count
+ deadlines
+
+The frozen Apple TV read events_ms=858-870, and the deadline bookkeeping was the
+first suspect. The dump now splits processDueDeadlines out of the pending-event
+time, times the VBlank gsVsync call, and counts scheduled/delivered/pending
+deadlines plus live alarms.
+
+Measured: deadlines are healthy (2 pending, 119 scheduled and 119 delivered per
+second, no alarms), and vsync_ms=864-884 nests inside due_ms=855-881. So the EE
+is not pacing itself to death, it is blocking in the GS ring drain on every
+VBlank.
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 4778bf0416d4dd0197c51b43b2493a56e1594227..607d61d404feadec053c17213a5dd7a83c2262f7 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -272,6 +272,14 @@ struct EeKernelSnapshot
+     uint64_t eventNanoseconds = 0;
+     uint64_t checkpointCalls = 0;
+     uint64_t checkpointHits = 0;
++    // Deadline bookkeeping: the pending-event path scans this list on every block,
++    // so a list that grows without being delivered starves the executor.
++    uint64_t deadlineCount = 0;
++    uint64_t deadlinesScheduled = 0;
++    uint64_t deadlinesDelivered = 0;
++    uint64_t alarmCount = 0;
++    uint64_t dueDeadlinesNanoseconds = 0;
++    uint64_t vsyncNanoseconds = 0;
+ };
+ 
+ enum class EeEventType : uint8_t
+@@ -497,6 +505,11 @@ private:
+     std::atomic<bool> m_stopRequested{false};
+     std::atomic<bool> m_checkpointPending{false};
+     uint32_t m_debugPublishCountdown = 0u;
++    std::atomic<uint64_t> m_deadlineCount{0};
++    std::atomic<uint64_t> m_deadlinesScheduled{0};
++    std::atomic<uint64_t> m_deadlinesDelivered{0};
++    uint64_t m_dueDeadlinesNanoseconds = 0;
++    uint64_t m_vsyncNanoseconds = 0;
+ 
+     // Executor throughput counters. Guest progress per wall second is what separates
+     // "the guest is doing more work" from "the executor is spending its time in
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index 2e904cfaf13387cf2e4ebd93f497c78976286b7f..ebfeea62f6155bb378db5eafb8d20c2fc4d51f38 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -18,6 +18,9 @@
+ #include <cstring>
+ #include <limits>
+ #include <stdexcept>
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
+ #if defined(PS2X_USE_METAL)
+ #endif
+ 
+@@ -1847,6 +1850,12 @@ void EeScheduler::publishSnapshot()
+     next.eventNanoseconds = m_eventNanoseconds;
+     next.checkpointCalls = m_checkpointCalls;
+     next.checkpointHits = m_checkpointHits;
++    next.deadlineCount = m_deadlineCount.load(std::memory_order_relaxed);
++    next.deadlinesScheduled = m_deadlinesScheduled.load(std::memory_order_relaxed);
++    next.deadlinesDelivered = m_deadlinesDelivered.load(std::memory_order_relaxed);
++    next.alarmCount = m_alarms.size();
++    next.dueDeadlinesNanoseconds = m_dueDeadlinesNanoseconds;
++    next.vsyncNanoseconds = m_vsyncNanoseconds;
+     next.eventFlags.reserve(m_eventFlags.size());
+     for (const auto &[id, item] : m_eventFlags)
+     {
+@@ -2131,7 +2140,17 @@ void EeScheduler::processPendingEvents()
+                 std::chrono::steady_clock::now() - start).count());
+         }
+     } eventTimer{*this, eventStart};
+-    processDueDeadlines();
++    if (eeProfileEnabled())
++    {
++        const auto dueStart = std::chrono::steady_clock::now();
++        processDueDeadlines();
++        m_dueDeadlinesNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now() - dueStart).count());
++    }
++    else
++    {
++        processDueDeadlines();
++    }
+     const uint32_t timerInterrupts = m_pendingEeTimerInterrupts;
+     m_pendingEeTimerInterrupts = 0u;
+     for (uint32_t timer = 0u; timer < 4u; ++timer)
+@@ -2205,6 +2224,8 @@ void EeScheduler::processDueDeadlines()
+                                               [this, pacedNow](const ScheduledEvent &item)
+                                               { return item.deadlineCycle <= m_eeCycle &&
+                                                        item.hostDeadline <= pacedNow; });
++            m_deadlinesDelivered.fetch_add(static_cast<uint64_t>(std::distance(m_deadlines.begin(), firstFuture)),
++                                           std::memory_order_relaxed);
+             due.insert(due.end(),
+                        std::make_move_iterator(m_deadlines.begin()),
+                        std::make_move_iterator(firstFuture));
+@@ -2260,7 +2281,17 @@ void EeScheduler::processEvent(const EeEvent &event)
+     case EeEventType::VBlankStart:
+         ++m_vsyncTick;
+ #if defined(PS2X_USE_METAL)
+-        m_runtime.memory().dataStream().gsVsync(m_vsyncTick);
++        if (eeProfileEnabled())
++        {
++            const auto vsyncStart = std::chrono::steady_clock::now();
++            m_runtime.memory().dataStream().gsVsync(m_vsyncTick);
++            m_vsyncNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                std::chrono::steady_clock::now() - vsyncStart).count());
++        }
++        else
++        {
++            m_runtime.memory().dataStream().gsVsync(m_vsyncTick);
++        }
+ #endif
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+@@ -2464,6 +2495,7 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+     {
+         std::lock_guard lock(m_eventMutex);
+         m_deadlines.push_back(ScheduledEvent{deadlineCycle, hostDeadline, event, ++m_eventSequence});
++        m_deadlinesScheduled.fetch_add(1u, std::memory_order_relaxed);
+         updateNextDeadline();
+     }
+     m_eventCv.notify_one();
+@@ -2471,6 +2503,7 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+ 
+ void EeScheduler::updateNextDeadline()
+ {
++    m_deadlineCount.store(m_deadlines.size(), std::memory_order_relaxed);
+     if (m_deadlines.empty())
+     {
+         m_nextDeadlineCycle.store(0u, std::memory_order_release);
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index 954af3e10c7ab3fec9689cee5cdcf7cdabd356f7..4d146d3e41840cfb4a7d92405a69af4d2fd64551 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -128,6 +128,11 @@ void dumpState(PS2Runtime &runtime)
+             << " guest_ms=" << perSecond(ee.guestFunctionNanoseconds, last.guestFunctionNanoseconds, elapsedSeconds) / 1e6
+             << " timers_ms=" << perSecond(ee.timerNanoseconds, last.timerNanoseconds, elapsedSeconds) / 1e6
+             << " events_ms=" << perSecond(ee.eventNanoseconds, last.eventNanoseconds, elapsedSeconds) / 1e6
++            << " due_ms=" << perSecond(ee.dueDeadlinesNanoseconds, last.dueDeadlinesNanoseconds, elapsedSeconds) / 1e6
++            << " vsync_ms=" << perSecond(ee.vsyncNanoseconds, last.vsyncNanoseconds, elapsedSeconds) / 1e6
++            << " deadlines=" << static_cast<uint64_t>(perSecond(ee.deadlinesScheduled, last.deadlinesScheduled, elapsedSeconds))
++            << "/" << static_cast<uint64_t>(perSecond(ee.deadlinesDelivered, last.deadlinesDelivered, elapsedSeconds))
++            << "/" << ee.deadlineCount << " alarms=" << ee.alarmCount
+             << " checkpoints=" << static_cast<uint64_t>(perSecond(ee.checkpointCalls, last.checkpointCalls, elapsedSeconds))
+             << "/" << static_cast<uint64_t>(perSecond(ee.checkpointHits, last.checkpointHits, elapsedSeconds))
+             << "\n";

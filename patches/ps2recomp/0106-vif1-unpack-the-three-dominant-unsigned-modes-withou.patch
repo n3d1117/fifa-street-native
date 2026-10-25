@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sat, 24 Oct 2026 20:46:50 +0200
-Subject: [PATCH 106/109] vif1: unpack the three dominant unsigned modes
+Subject: [PATCH 106/110] vif1: unpack the three dominant unsigned modes
  without per-vector branching
 
 A full match executes 22.4M UNPACKs; 0x6c/0x6d/0x6e with cl=wl=4, MASK off and
