@@ -216,6 +216,7 @@ EA sound banks (`.ABK`, magic `ABKC`) embed relocated EE code; the game links it
 - FPU direction-index overflow and unaligned SQ are not needed to explain this skill-move fault: the missed `0x1E8480` stack restoration predicts both epilogue dispatches and v0; quadword macros already mask the low four address bits, as PCSX2 does.
 - Treating scheduler `source=target=0x3` as evidence of a missing translated function: both fields come from the same saved PC; the preceding guest epilogue can return an unchecked stack-loaded RA.
 
+- VU1 microprogram code at -O3 instead of -O2 (two-app A/B on the iPhone, 3 ABBA pairs x 120 s): `vu1_ms` p50 7.473 -> 7.177 ms but inside the 0.793 control noise, p95 10.699 -> 10.866, fps 59.013 -> 58.863 and late frames 9.32% -> 9.86% (noise 12.9); no repeatable gain, so -O2 stays.
 - Fast-math, FP contraction and FPCR flush-to-zero change PS2 arithmetic.
 - The VBlank poll is not a lost DMA IRQ: the VBlank handler clears the poll word after the VIF1 END tag and configured field count. A rejected language-menu input was a pad packet-ID mismatch.
 - EE-side texture upload corruption was ruled out by matching uploads and GS local memory; the dashed-texel issue was the upstream Metal FBMask alpha truncation, now fixed.
