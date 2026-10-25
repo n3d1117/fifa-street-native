@@ -3,6 +3,11 @@
 #include <TargetConditionals.h>
 #include <mach/mach.h>
 #include <mach/thread_info.h>
+#include <mach-o/dyld.h>
+#include <dlfcn.h>
+#if defined(__arm64__)
+#include <mach/arm/thread_status.h>
+#endif
 #if TARGET_OS_IPHONE
 #include <os/proc.h>
 #endif
@@ -21,6 +26,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <string>
 #include <vector>
 #include <unordered_map>
 #include <pthread.h>
@@ -29,6 +35,11 @@
 namespace {
 double monotonic() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+std::string hexString(uint64_t value) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%llx", static_cast<unsigned long long>(value));
+    return text;
 }
 double threadCpu(thread_t thread) {
     thread_basic_info_data_t info{};
@@ -47,6 +58,13 @@ struct Row {
     bool gameplay = false;
 };
 struct PerfLog {
+    struct NativeThread {
+        thread_t port;
+        std::string key;
+        std::unordered_map<std::string, uint64_t> sites;
+        std::unordered_map<uint64_t, std::string> resolved;
+        uint64_t skipped = 0, errors = 0;
+    };
     std::mutex mutex;
     std::condition_variable wake;
     std::vector<Row> pending;
@@ -61,6 +79,104 @@ struct PerfLog {
     FILE* file = nullptr;
     bool (*gameplay)() = nullptr;
     Ps2PerfSnapshot (*snapshot)() = nullptr;
+    bool nativeSampling = false;
+    int nativeIntervalMs = 20;
+    std::vector<NativeThread> nativeThreads;
+
+    void releaseNativeThreads() {
+        for (const auto& thread : nativeThreads)
+            mach_port_deallocate(mach_task_self(), thread.port);
+        nativeThreads.clear();
+    }
+    void refreshNativeThreads() {
+        releaseNativeThreads();
+        thread_act_array_t list = nullptr;
+        mach_msg_type_number_t count = 0;
+        if (task_threads(mach_task_self(), &list, &count) != KERN_SUCCESS) return;
+        for (mach_msg_type_number_t i = 0; i < count; ++i) {
+            thread_extended_info_data_t info{};
+            mach_msg_type_number_t size = THREAD_EXTENDED_INFO_COUNT;
+            bool retained = false;
+            if (thread_info(list[i], THREAD_EXTENDED_INFO, reinterpret_cast<thread_info_t>(&info), &size) == KERN_SUCCESS &&
+                (std::strcmp(info.pth_name, "GameThread") == 0 || std::strcmp(info.pth_name, "VU1GSWorker") == 0)) {
+                thread_identifier_info_data_t identity{};
+                size = THREAD_IDENTIFIER_INFO_COUNT;
+                if (thread_info(list[i], THREAD_IDENTIFIER_INFO, reinterpret_cast<thread_info_t>(&identity), &size) == KERN_SUCCESS) {
+                    nativeThreads.push_back({list[i], std::string(info.pth_name) + "#" + std::to_string(identity.thread_id), {}});
+                    retained = true;
+                }
+            }
+            if (!retained) mach_port_deallocate(mach_task_self(), list[i]);
+        }
+        vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(list), count * sizeof(thread_t));
+    }
+    void sampleNative() {
+#if defined(__arm64__)
+        for (auto& thread : nativeThreads) {
+            thread_basic_info_data_t info{};
+            mach_msg_type_number_t size = THREAD_BASIC_INFO_COUNT;
+            if (thread_info(thread.port, THREAD_BASIC_INFO, reinterpret_cast<thread_info_t>(&info), &size) != KERN_SUCCESS) {
+                ++thread.errors;
+                continue;
+            }
+            if (info.run_state != TH_STATE_RUNNING || info.suspend_count != 0) {
+                ++thread.skipped;
+                continue;
+            }
+            arm_thread_state64_t state{};
+            size = ARM_THREAD_STATE64_COUNT;
+            if (thread_suspend(thread.port) != KERN_SUCCESS) {
+                ++thread.errors;
+                continue;
+            }
+            const auto captured = thread_get_state(thread.port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state), &size);
+            // Resume before touching allocators or locks the sampled thread may own.
+            const auto resumed = thread_resume(thread.port);
+            if (captured == KERN_SUCCESS && resumed == KERN_SUCCESS) {
+                const uint64_t pc = static_cast<uint64_t>(arm_thread_state64_get_pc(state));
+                auto known = thread.resolved.find(pc);
+                if (known == thread.resolved.end()) {
+                    Dl_info info{};
+                    std::string site = "?";
+                    if (dladdr(reinterpret_cast<void*>(pc), &info) != 0) {
+                        const char* path = info.dli_fname ? info.dli_fname : "?";
+                        const char* slash = std::strrchr(path, '/');
+                        site = slash ? slash + 1 : path;
+                        site += "+0x" + hexString(pc - reinterpret_cast<uint64_t>(info.dli_fbase));
+                        if (info.dli_sname) site += " " + std::string(info.dli_sname);
+                    }
+                    known = thread.resolved.emplace(pc, std::move(site)).first;
+                }
+                ++thread.sites[known->second];
+            } else {
+                ++thread.errors;
+            }
+        }
+#endif
+    }
+    NSDictionary* nativeHistogram() {
+        NSMutableDictionary* result = [NSMutableDictionary dictionary];
+        for (const auto& thread : nativeThreads) {
+            NSMutableDictionary* sites = [NSMutableDictionary dictionary];
+            for (const auto& [site, count] : thread.sites)
+                sites[[NSString stringWithUTF8String:site.c_str()]] = @(count);
+            result[[NSString stringWithUTF8String:thread.key.c_str()]] =
+                @{@"sites": sites, @"not_running": @(thread.skipped), @"errors": @(thread.errors)};
+        }
+        return result;
+    }
+    NSDictionary* nativeImages() {
+        NSMutableDictionary* result = [NSMutableDictionary dictionary];
+        for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
+            const char* path = _dyld_get_image_name(i);
+            if (path && std::strstr(path, "/FIFA Street PS2.app/")) {
+                NSString* name = [[NSString stringWithUTF8String:path] lastPathComponent];
+                result[name] = [NSString stringWithFormat:@"0x%llx",
+                    static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_dyld_get_image_header(i)))];
+            }
+        }
+        return result;
+    }
 
     NSDictionary* threads() {
         thread_act_array_t list = nullptr;
@@ -123,15 +239,26 @@ struct PerfLog {
         pthread_setname_np("PerfLog");
         double last = monotonic();
         uint64_t lastCompiles = 0, lastFallbacks = 0;
-        @autoreleasepool { threads(); }
+        @autoreleasepool {
+            threads();
+            if (nativeSampling) refreshNativeThreads();
+        }
         for (;;) {
+            if (nativeSampling) {
+                while (running.load() && monotonic() - last < 1.0) {
+                    sampleNative();
+                    std::unique_lock lock(mutex);
+                    wake.wait_for(lock, std::chrono::milliseconds(nativeIntervalMs), [&] { return !running.load(); });
+                }
+            }
             std::vector<Row> rows;
             rows.reserve(8192);
             uint64_t lost;
             bool stopping;
             {
                 std::unique_lock lock(mutex);
-                wake.wait_for(lock, std::chrono::seconds(1), [&] { return !running.load(); });
+                if (!nativeSampling)
+                    wake.wait_for(lock, std::chrono::seconds(1), [&] { return !running.load(); });
                 rows.swap(pending);
                 lost = dropped;
                 stopping = !running.load();
@@ -168,16 +295,24 @@ struct PerfLog {
 #if TARGET_OS_IPHONE
                 if (@available(iOS 13.0, tvOS 13.0, *)) available = @(os_proc_available_memory());
 #endif
-                write(@{@"type": @"summary", @"t": @(now), @"wall_time": @([[NSDate date] timeIntervalSince1970]), @"thermal_state": @([[NSProcessInfo processInfo] thermalState]),
+                NSMutableDictionary* summary = [NSMutableDictionary dictionaryWithDictionary:@{@"type": @"summary", @"t": @(now), @"wall_time": @([[NSDate date] timeIntervalSince1970]), @"thermal_state": @([[NSProcessInfo processInfo] thermalState]),
                     @"os_proc_available_memory": available, @"phys_footprint": footprint,
                     @"thread_cpu_s": threads(), @"thread_qos": threadQos(), @"audio_underruns": @(ps2x_spu2_host_underruns()),
                     @"pipeline_compiles": @(lastCompiles), @"vu_fallbacks": @(lastFallbacks),
-                    @"fps": @(rows.size() / std::max(1e-6, now - last)), @"dropped_frames": @(lost)});
+                    @"fps": @(rows.size() / std::max(1e-6, now - last)), @"dropped_frames": @(lost)}];
+                if (nativeSampling) {
+                    summary[@"native_pc"] = nativeHistogram();
+                    summary[@"native_pc_interval_ms"] = @(nativeIntervalMs);
+                    summary[@"native_pc_images"] = nativeImages();
+                    if (!stopping) refreshNativeThreads();
+                }
+                write(summary);
                 std::fflush(file);
                 last = now;
             }
             if (stopping) break;
         }
+        releaseNativeThreads();
         std::fclose(file);
     }
     void frame(const RrvPcsx2GsPerfFrame& frame) {
@@ -270,6 +405,14 @@ void ps2x_perf_start(const std::filesystem::path& userDirectory,
     s_log->file = output;
     s_log->gameplay = gameplay;
     s_log->snapshot = snapshot;
+#if defined(__arm64__)
+    const char* nativeSampling = std::getenv("PS2X_NATIVE_PC_SAMPLING");
+    s_log->nativeSampling = nativeSampling && std::strcmp(nativeSampling, "1") == 0;
+    if (const char* interval = std::getenv("PS2X_NATIVE_PC_SAMPLING_MS")) {
+        const int parsed = std::atoi(interval);
+        if (parsed >= 2 && parsed <= 1000) s_log->nativeIntervalMs = parsed;
+    }
+#endif
     s_log->pending.reserve(8192);
     s_log->writer = std::thread([log = s_log] { log->run(); });
     rrv_pcsx2_gs_bridge_set_perf_callback(frameCallback, s_log);
