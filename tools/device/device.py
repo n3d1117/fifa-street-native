@@ -1467,8 +1467,9 @@ def do_run(args):
     if not getattr(args, "no_pipeline_cache", False):
         # The learned-selector cache lives outside the per-run user directory so
         # it accumulates across runs; point the app at it and seed it first.
-        if push_pipeline_cache(udid, run_user_name):
-            env.append(f"RRV_PCSX2_GS_PIPELINE_CACHE={pipeline_cache_remote(udid, absolute=True)}")
+        cache_path = seed_pipeline_cache(udid, run_user_name)
+        if cache_path:
+            env.append(f"RRV_PCSX2_GS_PIPELINE_CACHE={cache_path}")
     launch = ["developer", "dvt", "launch", "--tunnel", udid]
     for e in env:
         launch += ["--env", e]
@@ -1687,26 +1688,32 @@ def pipeline_cache_remote(udid, absolute=False):
     return f"{container_path(udid, installed_bundle_id(udid))}/{relative}"
 
 
-def push_pipeline_cache(udid, user_name):
-    """Seed a run's user directory with every selector learned on this device.
+def seed_pipeline_cache(udid, user_name):
+    """Push the learned-selector union and return the path the app must write to.
 
-    The app appends the selectors it compiles to <user dir>/gs-metal-pipelines.txt
-    and prewarms them at the next launch, but every ./rx device run uses a fresh
-    user directory, so without this each run pays first-encounter compiles (and
-    their audio bursts) again. Runs are measurements, not first installs.
+    The app appends every selector it compiles to RRV_PCSX2_GS_PIPELINE_CACHE and
+    prewarms the same file at the next launch, so the run has to point the app at
+    a file outside its per-run user directory and harvest it afterwards.
+
+    The push is best effort: a device that has not learned anything yet has no
+    union to send, and the app creates the file itself on the first compile. Only
+    the path matters, so it is always returned.
     """
+    if not user_name:
+        return None
     cache = learned_cache_path(udid)
-    if not user_name or not cache.is_file() or not cache.stat().st_size:
-        return False
+    remote = pipeline_cache_remote(udid, absolute=True)
+    if not cache.is_file() or not cache.stat().st_size:
+        return remote
     for _attempt in range(3):
         result = pmd("apps", "push", installed_bundle_id(udid), str(cache),
                      pipeline_cache_remote(udid), *global_device_args(udid),
                      timeout=120, check=False)
         if result.returncode == 0:
-            return True
+            return remote
         time.sleep(1.0)
     print("WARNING: could not seed the learned pipeline cache; this run may recompile", file=sys.stderr)
-    return False
+    return remote
 
 
 def pull_pipeline_cache(udid, user_name):
