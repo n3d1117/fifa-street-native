@@ -51,14 +51,6 @@ std::atomic<uint32_t> g_audio_peak_scaled{0};
 std::atomic<uint32_t> g_audio_queued_high_water{0};
 std::atomic<bool> g_audio_noisy_window{false};
 std::atomic<uint64_t> g_advanceGapNs{0};
-// Output-ring servo: the tvOS audio device pulls 48,128 frames/s for a stream
-// opened at 48 kHz, 0.27% faster than the guest produces, so a fixed prime
-// drains and underruns every few seconds. Hold the ring at the target depth by
-// resampling the output stream slightly; the pitch shift is 0.27% (under 5
-// cents) and no frames are dropped.
-
-std::atomic<double> g_audioRatio{1.0};
-std::atomic<uint64_t> g_audio_pull_total{0}; // frames the device asked for, never reset
 uint64_t g_previousAdvanceNs = 0;
 uint64_t monotonic_ns();
 
@@ -74,14 +66,6 @@ bool audio_perf_enabled() {
     static const bool enabled = [] {
         const char* value = std::getenv("PS2X_PERF_LOG");
         return value && value[0] == '1' && value[1] == '\0';
-    }();
-    return enabled;
-}
-
-bool audio_sync_enabled() {
-    static const bool enabled = [] {
-        const char* value = std::getenv("PS2X_AUDIO_SYNC");
-        return !value || value[0] != '0' || value[1] != '\0';
     }();
     return enabled;
 }
@@ -183,15 +167,14 @@ void report_audio_health(uint64_t iop_cycle) {
     if (traceAudio) {
         std::fprintf(stderr,
                      "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
-                     "pull=%llu/%llu ringFrames=%llu ratio=%.5f rms=%.4f peak=%.4f clipped=%llu nonfinite=%llu queuedMaxB=%u errors=%llu\n",
+                     "pull=%llu/%llu ringFrames=%llu rms=%.4f peak=%.4f clipped=%llu nonfinite=%llu queuedMaxB=%u errors=%llu\n",
                      static_cast<double>(elapsedCycles) / seconds / 1.0e6,
                      static_cast<double>(mixedFrames) / seconds / 1000.0,
                      static_cast<unsigned long long>(underruns),
                      static_cast<unsigned long long>(overruns),
                      static_cast<unsigned long long>(real),
                      static_cast<unsigned long long>(requested),
-                     static_cast<unsigned long long>(ringFrames),
-                     g_audioRatio.load(std::memory_order_relaxed), rms,
+                     static_cast<unsigned long long>(ringFrames), rms,
                      static_cast<double>(peak) / 10000.0,
                      static_cast<unsigned long long>(clipped),
                      static_cast<unsigned long long>(nonfinite), queuedHighWater,
@@ -199,15 +182,14 @@ void report_audio_health(uint64_t iop_cycle) {
     } else {
         std::fprintf(stderr,
                      "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
-                     "pull=%llu/%llu ringFrames=%llu ratio=%.5f\n",
+                     "pull=%llu/%llu ringFrames=%llu\n",
                      static_cast<double>(elapsedCycles) / seconds / 1.0e6,
                      static_cast<double>(mixedFrames) / seconds / 1000.0,
                      static_cast<unsigned long long>(underruns),
                      static_cast<unsigned long long>(overruns),
                      static_cast<unsigned long long>(real),
                      static_cast<unsigned long long>(requested),
-                     static_cast<unsigned long long>(ringFrames),
-                     g_audioRatio.load(std::memory_order_relaxed));
+                     static_cast<unsigned long long>(ringFrames));
     }
 
     previousWallNs = now;
@@ -217,52 +199,12 @@ void report_audio_health(uint64_t iop_cycle) {
     previousOverrunFrames = stats.overrun_frames;
 }
 
-// Runs on the audio thread. The stream is opened at 48 kHz, but the device
-// pulls 1024-frame buffers at its own clock (48,050-48,300 frames/s measured on
-// tvOS and macOS), so the ring drifts against the guest's 48 kHz production.
-// Outside a +-20% deadband around the primed depth, slide the resample ratio
-// toward recovery at 0.02%/s: inaudible, no frames dropped, and silent while the
-// ring stays near its target.
-void serve_ring_depth(SDL_AudioStream* stream) {
-    if (!audio_sync_enabled() || !g_spu2)
-        return;
-    static uint64_t lastNs = 0;
-    static double applied = 1.0;
-    const uint64_t now = monotonic_ns();
-    if (lastNs == 0) {
-        lastNs = now;
-        return;
-    }
-    if (now - lastNs < 1'000'000'000ull)
-        return;
-    lastNs = now;
-    rrv_spu2_stats stats{};
-    rrv_spu2_get_stats(g_spu2, &stats);
-    const uint64_t consumed = g_audio_real_total_frames.load(std::memory_order_relaxed);
-    if (stats.frames_enqueued < consumed)
-        return;
-    const double target = static_cast<double>(rrv_spu2_target_frames(g_spu2));
-    const double error = static_cast<double>(stats.frames_enqueued - consumed) - target;
-    if (std::abs(error) < target * 0.20)
-        return;
-    const double ratio = std::clamp(applied + std::copysign(2.0e-4, error), 0.98, 1.02);
-    if (std::abs(ratio - applied) < 1e-6)
-        return;
-    if (SDL_SetAudioStreamFrequencyRatio(stream, static_cast<float>(ratio))) {
-        applied = ratio;
-        g_audioRatio.store(ratio, std::memory_order_relaxed);
-    }
-}
-
 void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amount, int) {
     if (!g_spu2 || additional_amount <= 0)
         return;
 
-    serve_ring_depth(stream);
-
     const size_t bytes_per_frame = sizeof(float) * 2;
     size_t remaining_frames = static_cast<size_t>(additional_amount) / bytes_per_frame;
-    g_audio_pull_total.fetch_add(remaining_frames, std::memory_order_relaxed);
     std::array<float, kAudioChunkFrames * 2> samples{};
     while (remaining_frames != 0) {
         const size_t frames = std::min(remaining_frames, kAudioChunkFrames);

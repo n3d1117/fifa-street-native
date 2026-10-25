@@ -108,10 +108,6 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* interleaved_stereo, size_t frame
 /* Any thread. Counters are relaxed snapshots. */
 void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* out);
 
-/* Output-ring depth the pull path primes to; the host audio servo holds the
- * ring at this depth. */
-uint64_t rrv_spu2_target_frames(rrv_spu2* s);
-
 /* Barrier: hash of guest-visible SPU2 state at t (register file, SPU RAM,
  * per-core/per-voice state incl. ADSR/volume slides/decoder, DMA state,
  * mixer position, core clock). For determinism tests. */

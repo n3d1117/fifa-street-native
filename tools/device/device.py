@@ -1467,7 +1467,13 @@ def do_run(args):
                 check=False,
             )
     env = [] if args.no_match else ["PS2X_BOOT_MATCH=venue=3", "PS2X_AUTOPILOT=match"]
-    env += ["PS2X_PERF_LOG=1", f"PS2X_PERF_BREAKDOWN={int(getattr(args, 'breakdown', False))}", f"PS2X_USER_DIR=rx-run-{stamp}-{label}"] + args.env
+    env += ["PS2X_PERF_LOG=1", f"PS2X_PERF_BREAKDOWN={int(getattr(args, 'breakdown', False))}"]
+    # A manual playtest keeps the real user directory: the app writes its log and
+    # perf rows under the default container locations, which the pull below
+    # already handles when no PS2X_USER_DIR is set.
+    if not getattr(args, "real_user_dir", False):
+        env.append(f"PS2X_USER_DIR=rx-run-{stamp}-{label}")
+    env += args.env
     run_user_name = dict(value.split("=", 1) for value in env).get("PS2X_USER_DIR")
     if not getattr(args, "no_pipeline_cache", False):
         # The learned-selector cache lives outside the per-run user directory so
@@ -1882,6 +1888,8 @@ def main(argv=None):
     r.add_argument("--udid")
     r.add_argument("--no-pipeline-cache", action="store_true",
                    help="do not seed/persist the learned Metal pipeline cache")
+    r.add_argument("--real-user-dir", action="store_true",
+                   help="use the app's default user directory instead of an isolated one")
     s = sub.add_parser("summarize")
     s.add_argument("run_dir")
     c = sub.add_parser("compare")

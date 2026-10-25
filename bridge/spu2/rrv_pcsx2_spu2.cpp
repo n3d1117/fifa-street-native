@@ -578,7 +578,7 @@ struct rrv_spu2
 	bool output_primed{false};
 	// 96 ms: a guest stall of two fields (goal replay entry) must not empty the
 	// ring, and tvOS pulls ~0.3% more frames per second than the guest mixes.
-	u64 prime_frames{3072};
+	u64 prime_frames{4608};
 	rrv_audio_stretcher audio_stretcher;
 	std::array<float, 64 * 2> stretch_input{};
 	size_t stretch_input_frames{};
@@ -1031,11 +1031,6 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 			frames - avail, static_cast<unsigned long long>(head - tail));
 	}
 	return avail;
-}
-
-uint64_t rrv_spu2_target_frames(rrv_spu2* s)
-{
-	return s ? s->prime_frames : 0;
 }
 
 void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* o)
