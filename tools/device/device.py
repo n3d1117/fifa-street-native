@@ -472,6 +472,11 @@ def install_prepared(app, lean, udid, stage=None, bundle=None, force=False):
         "source": str(app),
         "udid": udid,
     }
+    # A reinstall can land in a new app container, so the pushed game data is gone
+    # even when the files themselves did not change. Forget the pushed manifest so
+    # ./rx device push-data sends it again instead of skipping everything.
+    state.pop("game_manifest", None)
+    state.pop("game_manifest_target", None)
     state_write(state)
     return elapsed, True
 
