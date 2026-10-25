@@ -1,0 +1,309 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 25 Oct 2026 07:23:49 +0100
+Subject: [PATCH 109/109] hang dump: attribute the executor's wall time
+
+The thread list could not say whether a starved thread was slow or the executor
+was busy elsewhere. The dump now reports per-second guest blocks, injected
+invocations, thread switches, snapshots and checkpoint calls/hits, plus the wall
+time spent in the guest code, EE timers, IOP stepping, pending-event pacing and
+snapshot publishing. The clock reads sit on the per-block path, so they are
+enabled with PS2X_EE_PROFILE=1; the counters themselves are always on.
+
+First user: the Apple TV soft-lock reads events_ms=858-870 with guest_ms=123-137,
+i.e. the deadline wait in processDueDeadlines takes 86% of the executor.
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 9102e1432ccf69f66a0e23d8c2b24374a38e1f9b..4778bf0416d4dd0197c51b43b2493a56e1594227 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -260,6 +260,18 @@ struct EeKernelSnapshot
+     uint32_t workerOpType = 0;
+     std::vector<EeSemaphoreSnapshot> semaphores;
+     std::vector<EeEventFlagSnapshot> eventFlags;
++    // Executor throughput since boot (see the counters in EeScheduler).
++    uint64_t blocksExecuted = 0;
++    uint64_t invocationsExecuted = 0;
++    uint64_t threadSwitches = 0;
++    uint64_t snapshotCount = 0;
++    uint64_t iopStepNanoseconds = 0;
++    uint64_t snapshotNanoseconds = 0;
++    uint64_t guestFunctionNanoseconds = 0;
++    uint64_t timerNanoseconds = 0;
++    uint64_t eventNanoseconds = 0;
++    uint64_t checkpointCalls = 0;
++    uint64_t checkpointHits = 0;
+ };
+ 
+ enum class EeEventType : uint8_t
+@@ -486,6 +498,22 @@ private:
+     std::atomic<bool> m_checkpointPending{false};
+     uint32_t m_debugPublishCountdown = 0u;
+ 
++    // Executor throughput counters. Guest progress per wall second is what separates
++    // "the guest is doing more work" from "the executor is spending its time in
++    // runtime code": a block is one recompiled unit, an invocation is one injected
++    // handler, and the two nanosecond totals attribute the wall time.
++    uint64_t m_blocksExecuted = 0;
++    uint64_t m_invocationsExecuted = 0;
++    uint64_t m_threadSwitches = 0;
++    uint64_t m_snapshotCount = 0;
++    uint64_t m_iopStepNanoseconds = 0;
++    uint64_t m_snapshotNanoseconds = 0;
++    uint64_t m_guestFunctionNanoseconds = 0;
++    uint64_t m_timerNanoseconds = 0;
++    uint64_t m_eventNanoseconds = 0;
++    uint64_t m_checkpointCalls = 0;
++    uint64_t m_checkpointHits = 0;
++
+     mutable std::mutex m_eventMutex;
+     std::condition_variable m_eventCv;
+     std::deque<EeEvent> m_events;
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index be12a516b86f3f39c7d80b699851ba23ea9f2963..2e904cfaf13387cf2e4ebd93f497c78976286b7f 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -66,6 +66,20 @@ namespace
+     constexpr uint64_t kVBlankDurationCycles = microsecondsToEeCycles(500u);
+     constexpr uint64_t kAlarmTickCycles = microsecondsToEeCycles(kAlarmTickMicroseconds);
+ 
++
++namespace {
++// PS2X_EE_PROFILE=1 enables the wall-time attribution in the hang dump. The clock
++// reads sit on the per-block path, so they stay off unless a profile is requested.
++bool eeProfileEnabled()
++{
++    static const bool enabled = [] {
++        const char *value = std::getenv("PS2X_EE_PROFILE");
++        return value && value[0] == '1';
++    }();
++    return enabled;
++}
++} // namespace
++
+     struct WallClockState
+     {
+         const EeScheduler *owner = nullptr;
+@@ -302,6 +316,7 @@ void EeScheduler::run()
+                 recordContext("invocation-save", *owner);
+                 owner->invocations.push_back(std::move(invocation));
+                 recordContext("invocation-enter", *owner);
++                ++m_invocationsExecuted;
+             }
+         }
+ 
+@@ -337,6 +352,7 @@ void EeScheduler::run()
+         }
+ 
+         publishDebugContext(context);
++        ++m_blocksExecuted;
+ 
+         if (context.pc == 0u)
+         {
+@@ -388,6 +404,7 @@ void EeScheduler::run()
+             recordContext("invocation-save", *running);
+             running->invocations.push_back(std::move(invocation));
+             recordContext("invocation-enter", *running);
++            ++m_invocationsExecuted;
+             continue;
+         }
+ 
+@@ -428,7 +445,17 @@ void EeScheduler::run()
+             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
+             m_guestExecuting.store(true, std::memory_order_release);
+             g_ps2GuestUnwinding = false;
+-            function(m_rdram, &context, &m_runtime);
++            if (eeProfileEnabled())
++            {
++                const auto guestStart = std::chrono::steady_clock::now();
++                function(m_rdram, &context, &m_runtime);
++                m_guestFunctionNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                    std::chrono::steady_clock::now() - guestStart).count());
++            }
++            else
++            {
++                function(m_rdram, &context, &m_runtime);
++            }
+             recordPerf();
+             m_guestExecuting.store(false, std::memory_order_release);
+             m_insideInterrupt = false;
+@@ -492,11 +519,13 @@ void EeScheduler::postEvent(EeEvent event)
+ 
+ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ {
++    ++m_checkpointCalls;
+     accountCycles(cycles);
+ 
+     if (m_checkpointPending.load(std::memory_order_acquire) ||
+         m_stopRequested.load(std::memory_order_acquire))
+     {
++        ++m_checkpointHits;
+         return true;
+     }
+ 
+@@ -504,6 +533,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+     if (nextEventCycle != 0u && m_eeCycle >= nextEventCycle)
+     {
+         m_checkpointPending.store(true, std::memory_order_release);
++        ++m_checkpointHits;
+         return true;
+     }
+ 
+@@ -517,6 +547,7 @@ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+     {
+         m_rescheduleRequested = true;
+         m_timeSliceExpired = true;
++        ++m_checkpointHits;
+         return true;
+     }
+ 
+@@ -559,8 +590,22 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+     }
+     const uint64_t elapsed = next - m_eeCycle;
+     m_eeCycle = next;
+-    m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
+-    m_runtime.advanceIopEeCycles(elapsed);
++    if (eeProfileEnabled())
++    {
++        const auto timerStart = std::chrono::steady_clock::now();
++        m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
++        m_timerNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now() - timerStart).count());
++        const auto iopStart = std::chrono::steady_clock::now();
++        m_runtime.advanceIopEeCycles(elapsed);
++        m_iopStepNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::steady_clock::now() - iopStart).count());
++    }
++    else
++    {
++        m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
++        m_runtime.advanceIopEeCycles(elapsed);
++    }
+     if (m_pendingEeTimerInterrupts != 0u)
+     {
+         m_checkpointPending.store(true, std::memory_order_release);
+@@ -1324,6 +1369,7 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
+     recordContext("invocation-save", *owner);
+     owner->invocations.push_back(std::move(invocation));
+     recordContext("invocation-enter", *owner);
++                ++m_invocationsExecuted;
+     publishSnapshot();
+     throw EeDispatcherTransfer{};
+ }
+@@ -1344,6 +1390,7 @@ void EeScheduler::queueInvocation(GuestInvocation invocation)
+         recordContext("invocation-save", *owner);
+         owner->invocations.push_back(std::move(*it));
+         recordContext("invocation-enter", *owner);
++                ++m_invocationsExecuted;
+     }
+     publishSnapshot();
+     throw EeDispatcherTransfer{};
+@@ -1719,6 +1766,21 @@ EeKernelSnapshot EeScheduler::snapshot() const
+ 
+ void EeScheduler::publishSnapshot()
+ {
++    const auto snapshotStart = eeProfileEnabled() ? std::chrono::steady_clock::now()
++                                                 : std::chrono::steady_clock::time_point{};
++    struct SnapshotTimer
++    {
++        EeScheduler &self;
++        std::chrono::steady_clock::time_point start;
++        ~SnapshotTimer()
++        {
++            ++self.m_snapshotCount;
++            if (start == std::chrono::steady_clock::time_point{})
++                return;
++            self.m_snapshotNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                std::chrono::steady_clock::now() - start).count());
++        }
++    } snapshotTimer{*this, snapshotStart};
+     EeKernelSnapshot next{};
+     next.sequence = ++m_snapshotSequence;
+     next.eeCycle = m_eeCycle;
+@@ -1774,6 +1836,17 @@ void EeScheduler::publishSnapshot()
+     }
+     std::sort(next.semaphores.begin(), next.semaphores.end(), [](const auto &left, const auto &right)
+               { return left.id < right.id; });
++    next.blocksExecuted = m_blocksExecuted;
++    next.invocationsExecuted = m_invocationsExecuted;
++    next.threadSwitches = m_threadSwitches;
++    next.snapshotCount = m_snapshotCount;
++    next.iopStepNanoseconds = m_iopStepNanoseconds;
++    next.snapshotNanoseconds = m_snapshotNanoseconds;
++    next.guestFunctionNanoseconds = m_guestFunctionNanoseconds;
++    next.timerNanoseconds = m_timerNanoseconds;
++    next.eventNanoseconds = m_eventNanoseconds;
++    next.checkpointCalls = m_checkpointCalls;
++    next.checkpointHits = m_checkpointHits;
+     next.eventFlags.reserve(m_eventFlags.size());
+     for (const auto &[id, item] : m_eventFlags)
+     {
+@@ -1929,6 +2002,7 @@ GuestThread *EeScheduler::selectReady()
+ void EeScheduler::makeRunning(GuestThread &item)
+ {
+     assert(m_currentThreadId == 0);
++    ++m_threadSwitches;
+     assert(item.status == EeThreadStatus::Ready);
+     recordContext("switch-in", item);
+     item.status = EeThreadStatus::Running;
+@@ -2043,6 +2117,20 @@ void EeScheduler::applyPendingPreemption()
+ void EeScheduler::processPendingEvents()
+ {
+     assertExecutor();
++    const auto eventStart = eeProfileEnabled() ? std::chrono::steady_clock::now()
++                                              : std::chrono::steady_clock::time_point{};
++    struct EventTimer
++    {
++        EeScheduler &self;
++        std::chrono::steady_clock::time_point start;
++        ~EventTimer()
++        {
++            if (start == std::chrono::steady_clock::time_point{})
++                return;
++            self.m_eventNanoseconds += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
++                std::chrono::steady_clock::now() - start).count());
++        }
++    } eventTimer{*this, eventStart};
+     processDueDeadlines();
+     const uint32_t timerInterrupts = m_pendingEeTimerInterrupts;
+     m_pendingEeTimerInterrupts = 0u;
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index 5a608b1673a703a26ba358f6caca087e342d0b20..954af3e10c7ab3fec9689cee5cdcf7cdabd356f7 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -106,6 +106,35 @@ void dumpState(PS2Runtime &runtime)
+         }
+         out << "\n";
+     }
++    // Per-second deltas of the executor counters, so a slow guest reads as either
++    // more work or less executor throughput.
++    {
++        static EeKernelSnapshot last{};
++        static bool haveLast = false;
++        const auto perSecond = [](uint64_t now, uint64_t before, double seconds) {
++            if (!haveLast || seconds <= 0.0)
++                return 0.0;
++            return static_cast<double>(now - before) / seconds;
++        };
++        static auto lastAt = std::chrono::steady_clock::now();
++        const auto nowAt = std::chrono::steady_clock::now();
++        const double elapsedSeconds = std::chrono::duration<double>(nowAt - lastAt).count();
++        out << "ee executor/s blocks=" << static_cast<uint64_t>(perSecond(ee.blocksExecuted, last.blocksExecuted, elapsedSeconds))
++            << " invocations=" << static_cast<uint64_t>(perSecond(ee.invocationsExecuted, last.invocationsExecuted, elapsedSeconds))
++            << " switches=" << static_cast<uint64_t>(perSecond(ee.threadSwitches, last.threadSwitches, elapsedSeconds))
++            << " snapshots=" << static_cast<uint64_t>(perSecond(ee.snapshotCount, last.snapshotCount, elapsedSeconds))
++            << " iop_step_ms=" << perSecond(ee.iopStepNanoseconds, last.iopStepNanoseconds, elapsedSeconds) / 1e6
++            << " snapshot_ms=" << perSecond(ee.snapshotNanoseconds, last.snapshotNanoseconds, elapsedSeconds) / 1e6
++            << " guest_ms=" << perSecond(ee.guestFunctionNanoseconds, last.guestFunctionNanoseconds, elapsedSeconds) / 1e6
++            << " timers_ms=" << perSecond(ee.timerNanoseconds, last.timerNanoseconds, elapsedSeconds) / 1e6
++            << " events_ms=" << perSecond(ee.eventNanoseconds, last.eventNanoseconds, elapsedSeconds) / 1e6
++            << " checkpoints=" << static_cast<uint64_t>(perSecond(ee.checkpointCalls, last.checkpointCalls, elapsedSeconds))
++            << "/" << static_cast<uint64_t>(perSecond(ee.checkpointHits, last.checkpointHits, elapsedSeconds))
++            << "\n";
++        last = ee;
++        haveLast = true;
++        lastAt = nowAt;
++    }
+     out << "ee pending_invocations=" << ee.pendingInvocations;
+     if (ee.pendingInvocations != 0u)
+         out << " oldest_kind=" << invocationKindName(static_cast<uint8_t>(ee.oldestPendingKind));

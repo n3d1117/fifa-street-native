@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 20:32:19 +0200
-Subject: [PATCH 056/108] VIF1: UNPACK with CYCLE still 0 reads its source data
+Subject: [PATCH 056/109] VIF1: UNPACK with CYCLE still 0 reads its source data
  consecutively (CL treated as WL); PS2X_TRACE_FAULTS logs the codes before an
  invalid VIF1 code
 

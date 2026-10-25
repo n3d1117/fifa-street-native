@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 01:13:49 +0200
-Subject: [PATCH 068/108] IOP: advance SPU2 while guest code runs (snddrv init
+Subject: [PATCH 068/109] IOP: advance SPU2 while guest code runs (snddrv init
  busy-waits on DMA completion); diagnostics for IOP threads, imports, SIF
  commands, RDRAM dump
 
