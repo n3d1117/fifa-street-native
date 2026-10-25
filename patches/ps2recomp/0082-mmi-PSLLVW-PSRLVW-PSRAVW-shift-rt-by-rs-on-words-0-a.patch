@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 16:25:44 +0200
-Subject: [PATCH 082/107] mmi: PSLLVW/PSRLVW/PSRAVW shift rt by rs on words 0
+Subject: [PATCH 082/108] mmi: PSLLVW/PSRLVW/PSRAVW shift rt by rs on words 0
  and 2 with 64-bit sign-extended results; PADDUH/PSUBUH saturate unsigned
  (PCSX2 MMI.cpp semantics)
 

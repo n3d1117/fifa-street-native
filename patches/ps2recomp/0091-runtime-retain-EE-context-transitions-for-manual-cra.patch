@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 18:03:59 +0200
-Subject: [PATCH 091/107] runtime: retain EE context transitions for manual
+Subject: [PATCH 091/108] runtime: retain EE context transitions for manual
  crash diagnosis
 
 Keep the last 32 scheduler transitions in fixed storage without normal-path I/O; dump them and live nested contexts on missing targets, guest exceptions and uncaught executor faults. Capture PC/RA/SP/EPC and delay-slot identity before invocation and scheduling changes. No guest behavior change or claim of fixing the skill-move fault.

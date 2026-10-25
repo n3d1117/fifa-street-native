@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Mon, 19 Oct 2026 18:00:30 +0200
-Subject: [PATCH 047/107] Control flow: a JALR is a call; it needs its return
+Subject: [PATCH 047/108] Control flow: a JALR is a call; it needs its return
  point, not an entry at every instruction
 
 

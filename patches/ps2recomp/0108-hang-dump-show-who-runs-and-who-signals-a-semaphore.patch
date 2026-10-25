@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Sun, 25 Oct 2026 06:47:47 +0100
+Subject: [PATCH 108/108] hang dump: show who runs, and who signals a semaphore
+
+A guest thread that never blocks starves every lower-priority thread, and the
+thread list alone cannot show it. The dump now samples the running thread id
+next to the pc, counts immediate versus blocking waits per semaphore, and
+records where the last signal came from (thread, and the invocation kind it was
+executing). PS2X_DUMP_CONTEXT=1 appends the scheduler's last-32 context
+transitions.
+
+diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
+index 88afa0577885cc10e6495c76047d10a3ec41c521..9102e1432ccf69f66a0e23d8c2b24374a38e1f9b 100644
+--- a/ps2xRuntime/include/runtime/ee_scheduler.h
++++ b/ps2xRuntime/include/runtime/ee_scheduler.h
+@@ -145,6 +145,17 @@ struct EeSemaphore
+     int initCount = 0;
+     uint32_t attr = 0;
+     uint32_t option = 0;
++    // How many waits found the count already set (immediate) and how many had to
++    // block. A thread that never blocks on the semaphore it loops over keeps the
++    // executor for itself, so this is what separates a spin from a wait.
++    uint64_t waitsImmediate = 0;
++    uint64_t waitsBlocked = 0;
++    uint64_t signals = 0;
++    // Where the last signal came from: a thread (interrupt handler runs on it) and,
++    // when the signaller was executing an invocation, that invocation's kind.
++    int lastSignalThread = 0;
++    uint32_t lastSignalInvocationKind = 0xFFFFFFFFu;
++    uint32_t lastSignalPc = 0;
+     std::deque<int> waiters;
+ };
+ 
+@@ -211,6 +222,12 @@ struct EeSemaphoreSnapshot
+     int count = 0;
+     int maxCount = 0;
+     uint32_t waiters = 0;
++    uint64_t waitsImmediate = 0;
++    uint64_t waitsBlocked = 0;
++    uint64_t signals = 0;
++    int lastSignalThread = 0;
++    uint32_t lastSignalInvocationKind = 0;
++    uint32_t lastSignalPc = 0;
+ };
+ 
+ struct EeEventFlagSnapshot
+diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+index e4836633d0ec53c8ef2a8d9ad6c840351bb7f24b..be12a516b86f3f39c7d80b699851ba23ea9f2963 100644
+--- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
++++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
+@@ -1063,6 +1063,16 @@ int EeScheduler::signalSemaphore(int id, bool interruptSafe)
+     {
+         return KE_UNKNOWN_SEMID;
+     }
++    ++object->signals;
++    if (GuestThread *self = m_currentThreadId != 0 ? thread(m_currentThreadId) : nullptr)
++    {
++        const R5900Context &ctx = self->activeContext();
++        object->lastSignalThread = self->id;
++        object->lastSignalPc = ctx.pc;
++        object->lastSignalInvocationKind = self->invocations.empty()
++                                               ? 0xFFFFFFFFu
++                                               : static_cast<uint32_t>(self->invocations.back().kind);
++    }
+     if (!object->waiters.empty())
+     {
+         const int waiterId = object->waiters.front();
+@@ -1113,6 +1123,7 @@ void EeScheduler::waitSemaphore(int id)
+     if (object->count != 0)
+     {
+         --object->count;
++        ++object->waitsImmediate;
+         GuestThread *self = currentThread();
+         assert(self != nullptr);
+         setReturnS32(&self->activeContext(), id);
+@@ -1121,6 +1132,7 @@ void EeScheduler::waitSemaphore(int id)
+     }
+     GuestThread *self = currentThread();
+     assert(self != nullptr);
++    ++object->waitsBlocked;
+     object->waiters.push_back(self->id);
+     blockCurrent(EeWaitState{EeWaitReason::Semaphore, EeSemaphoreWait{id}});
+ }
+@@ -1752,7 +1764,13 @@ void EeScheduler::publishSnapshot()
+         next.semaphores.push_back(EeSemaphoreSnapshot{id,
+                                                       item.count,
+                                                       item.maxCount,
+-                                                      static_cast<uint32_t>(item.waiters.size())});
++                                                      static_cast<uint32_t>(item.waiters.size()),
++                                                      item.waitsImmediate,
++                                                      item.waitsBlocked,
++                                                      item.signals,
++                                                      item.lastSignalThread,
++                                                      item.lastSignalInvocationKind,
++                                                      item.lastSignalPc});
+     }
+     std::sort(next.semaphores.begin(), next.semaphores.end(), [](const auto &left, const auto &right)
+               { return left.id < right.id; });
+diff --git a/ps2xRuntime/src/lib/ps2_state_dump.cpp b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+index 95e9bdb3485bd5395e410626d48154d0aff4940d..5a608b1673a703a26ba358f6caca087e342d0b20 100644
+--- a/ps2xRuntime/src/lib/ps2_state_dump.cpp
++++ b/ps2xRuntime/src/lib/ps2_state_dump.cpp
+@@ -71,13 +71,17 @@ const char *waitName(EeWaitReason reason)
+ void dumpState(PS2Runtime &runtime)
+ {
+     // Sample the running guest pc for one second (racy reads of a 32-bit pc are fine for a histogram).
++    // What matters for a starved thread is which thread the executor was running during the
++    // second, so the samples are also counted per thread id.
+     std::map<uint32_t, uint32_t> histogram;
++    std::map<int, uint32_t> cpuSamples;
+     uint32_t samples = 0;
+     for (int i = 0; i < 200; ++i)
+     {
+         if (const R5900Context *ctx = runtime.eeScheduler().currentContext())
+         {
+             ++histogram[ctx->pc];
++            ++cpuSamples[runtime.eeScheduler().currentThreadId()];
+             ++samples;
+         }
+         std::this_thread::sleep_for(std::chrono::milliseconds(5));
+@@ -113,7 +117,11 @@ void dumpState(PS2Runtime &runtime)
+     else
+         out << "data ring inline worker_op=0\n";
+     for (const EeSemaphoreSnapshot &s : ee.semaphores)
+-        out << "ee sema id=" << s.id << " count=" << s.count << "/" << s.maxCount << " waiters=" << s.waiters << "\n";
++        out << "ee sema id=" << s.id << " count=" << s.count << "/" << s.maxCount << " waiters=" << s.waiters
++            << " waits=" << s.waitsImmediate << "+" << s.waitsBlocked << " signals=" << s.signals
++            << " last_signal=thread" << s.lastSignalThread << "/"
++            << invocationKindName(static_cast<uint8_t>(s.lastSignalInvocationKind))
++            << std::hex << "@0x" << s.lastSignalPc << std::dec << "\n";
+     for (const EeEventFlagSnapshot &f : ee.eventFlags)
+         out << "ee eventflag id=" << f.id << std::hex << " bits=0x" << f.bits << std::dec << " waiters=" << f.waiters << "\n";
+ 
+@@ -128,6 +136,10 @@ void dumpState(PS2Runtime &runtime)
+     }
+     std::vector<std::pair<uint32_t, uint32_t>> top(histogram.begin(), histogram.end());
+     std::sort(top.begin(), top.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
++    out << "ee cpu samples (thread id -> 5ms samples of the last second):";
++    for (const auto &[id, count] : cpuSamples)
++        out << " " << id << "x" << count;
++    out << "\n";
+     out << "ee pc samples=" << samples << ":";
+     for (size_t i = 0; i < top.size() && i < 12u; ++i)
+         out << std::hex << " 0x" << top[i].first << "x" << std::dec << top[i].second;
