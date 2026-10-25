@@ -602,6 +602,11 @@ def metric_summary(rows, keys, prefix):
     return result
 
 
+def current_launch_log(log):
+    starts = list(re.finditer(r"^\[settings\] videoMode=", log, re.MULTILINE))
+    return log[starts[-1].start():] if starts else log
+
+
 def summarize(run_dir):
     root = Path(run_dir)
     perf = []
@@ -616,6 +621,7 @@ def summarize(run_dir):
         if (root / "native.log").exists()
         else ""
     )
+    log = current_launch_log(log)
     launch_time = run_meta.get("launch_host_time")
     summaries = [r for r in perf if r.get("type") == "summary" and "wall_time" in r]
     if summaries and launch_time is not None:
@@ -765,6 +771,7 @@ def summarize(run_dir):
 
 
 def hud_clock_progress(log):
+    log = current_launch_log(log)
     samples = [(float(clock), float(wall)) for clock, wall in re.findall(
         r"\[autopilot\] clock_seconds=([-+0-9.eE]+) wall_seconds=([-+0-9.eE]+)", log
     )]
@@ -1083,10 +1090,16 @@ def device_battery_temp(udid):
 
 def cooldown(udid, target, max_wait=180):
     start = time.monotonic()
+    if target is None:
+        return {"seconds": 0, "temperature_c": None, "target_c": None,
+                "timed_out": False, "unavailable": True}
     while True:
         temp = device_battery_temp(udid)
         waited = time.monotonic() - start
-        if temp is not None and target is not None and abs(temp - target) <= 1.0:
+        if temp is None:
+            return {"seconds": waited, "temperature_c": None, "target_c": target,
+                    "timed_out": False, "unavailable": True}
+        if abs(temp - target) <= 1.0:
             return {"seconds": waited, "temperature_c": temp, "target_c": target, "timed_out": False}
         if waited >= max_wait:
             return {"seconds": waited, "temperature_c": temp, "target_c": target, "timed_out": True}
@@ -1291,11 +1304,27 @@ def capture_screenshot(udid, dest):
             raise Failed(f"screenshot command wrote an invalid PNG: {dest}")
 
 
+def stop_collector(process):
+    if process is None:
+        return
+    try:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=3)
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+
+
 def stream(cmd, output, stop, ready_event=None, device=False):
     output.parent.mkdir(parents=True, exist_ok=True)
+    p = None
     try:
-        with output.open("w") as f:
-            errors = output.with_suffix(output.suffix + ".stderr.log").open("w")
+        with output.open("w") as f, output.with_suffix(output.suffix + ".stderr.log").open("w") as errors:
             env = os.environ.copy()
             env.pop("__PYVENV_LAUNCHER__", None)
             p = subprocess.Popen(
@@ -1349,15 +1378,11 @@ def stream(cmd, output, stop, ready_event=None, device=False):
                 buffer += data.decode(errors="replace")
                 parse_buffer()
             parse_buffer(final=True)
-            p.terminate()
-            try:
-                p.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                p.kill()
-            errors.close()
     except Exception as e:
         with output.open("a") as f:
             f.write(json.dumps({"_error": str(e), "_host_time": time.time()}) + "\n")
+    finally:
+        stop_collector(p)
 
 
 def stream_sysmon(cmd, output, stop):
@@ -1365,6 +1390,7 @@ def stream_sysmon(cmd, output, stop):
     errors = output.with_suffix(output.suffix + ".stderr.log")
     output.parent.mkdir(parents=True, exist_ok=True)
     offset = 0
+    p = None
     try:
         env = os.environ.copy()
         env.pop("__PYVENV_LAUNCHER__", None)
@@ -1408,16 +1434,14 @@ def stream_sysmon(cmd, output, stop):
                         obj["_host_time"] = time.time()
                         f.write(json.dumps(obj) + "\n")
                         f.flush()
-            p.terminate()
-            try:
-                p.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                p.kill()
     except Exception as e:
         with output.open("a") as f:
             f.write(json.dumps({"_error": str(e), "_host_time": time.time()}) + "\n")
     finally:
-        raw.unlink(missing_ok=True)
+        try:
+            stop_collector(p)
+        finally:
+            raw.unlink(missing_ok=True)
 
 
 def do_run(args):
@@ -1494,108 +1518,115 @@ def do_run(args):
         )
     pid = int(match.group(1))
     stop = threading.Event()
-    (out / "run.json").write_text(
-        json.dumps(
-            {
-                "udid": udid,
-                "bundle": bundle,
-                "pid": pid,
-                "launch_host_time": launch_host_time,
-                "seconds": args.seconds,
-                "warmup_s": args.warmup,
-                "env": env,
-            },
-            indent=2,
+    threads = []
+    try:
+        (out / "run.json").write_text(
+            json.dumps(
+                {
+                    "udid": udid,
+                    "bundle": bundle,
+                    "pid": pid,
+                    "launch_host_time": launch_host_time,
+                    "seconds": args.seconds,
+                    "warmup_s": args.warmup,
+                    "env": env,
+                },
+                indent=2,
+            )
+            + "\n"
         )
-        + "\n"
-    )
-    # DVT's process launch can outlive the initial RemoteXPC service
-    # transition.
-    time.sleep(2)
-    gpu_ready = threading.Event()
-    gpu_thread = threading.Thread(
-        target=stream,
-        args=(
-            ["developer", "dvt", "graphics", "--tunnel", udid],
-            out / "gpu.jsonl",
-            stop,
-            gpu_ready,
-        ),
-        daemon=True,
-    )
-    gpu_thread.start()
-    gpu_ready.wait(timeout=5)
-    sys_thread = threading.Thread(
-        target=stream_sysmon,
-        args=(
-            [
-                "developer",
-                "dvt",
-                "sysmon",
-                "process",
-                "monitor",
-                "process",
-                "--filter",
-                f"pid={pid}",
-                "--choose",
-                "first",
-                "--keep-monitoring",
-                "--key",
-                "pid",
-                "--key",
-                "cpuUsage",
-                "--key",
-                "physFootprint",
-                "--key",
-                "threadCount",
-                "--tunnel",
-                udid,
-            ],
-            out / "sysmon.jsonl",
-            stop,
-        ),
-        daemon=True,
-    )
-    sys_thread.start()
-    threads = [gpu_thread, sys_thread]
-    began = launch_monotonic
-    deadline = began + args.warmup + args.seconds
-    next_battery = began
-    shots = 0
-    while time.monotonic() < deadline:
-        now = time.monotonic()
-        if now >= next_battery:
-            try:
-                b = pmd(
-                    "diagnostics",
-                    "battery",
-                    "single",
-                    *global_device_args(udid),
-                    timeout=15,
-                    check=False,
-                )
-                obj = json.loads(b.stdout)
-                with (out / "battery.jsonl").open("a") as f:
-                    obj["_host_time"] = time.time()
-                    f.write(json.dumps(obj) + "\n")
-            except Exception as e:
-                with (out / "battery.jsonl").open("a") as f:
-                    f.write(
-                        json.dumps({"_error": str(e), "_host_time": time.time()}) + "\n"
+        # DVT's process launch can outlive the initial RemoteXPC service
+        # transition.
+        time.sleep(2)
+        gpu_ready = threading.Event()
+        gpu_thread = threading.Thread(
+            target=stream,
+            args=(
+                ["developer", "dvt", "graphics", "--tunnel", udid],
+                out / "gpu.jsonl",
+                stop,
+                gpu_ready,
+            ),
+            daemon=True,
+        )
+        gpu_thread.start()
+        threads.append(gpu_thread)
+        gpu_ready.wait(timeout=5)
+        sys_thread = threading.Thread(
+            target=stream_sysmon,
+            args=(
+                [
+                    "developer",
+                    "dvt",
+                    "sysmon",
+                    "process",
+                    "monitor",
+                    "process",
+                    "--filter",
+                    f"pid={pid}",
+                    "--choose",
+                    "first",
+                    "--duration",
+                    str(math.ceil((args.seconds + args.warmup + 30) * 1000)),
+                    "--key",
+                    "pid",
+                    "--key",
+                    "cpuUsage",
+                    "--key",
+                    "physFootprint",
+                    "--key",
+                    "threadCount",
+                    "--tunnel",
+                    udid,
+                ],
+                out / "sysmon.jsonl",
+                stop,
+            ),
+            daemon=True,
+        )
+        sys_thread.start()
+        threads.append(sys_thread)
+        began = launch_monotonic
+        deadline = began + args.warmup + args.seconds
+        next_battery = began
+        shots = 0
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_battery:
+                try:
+                    b = pmd(
+                        "diagnostics",
+                        "battery",
+                        "single",
+                        *global_device_args(udid),
+                        timeout=15,
+                        check=False,
                     )
-            next_battery = now + 10
-        if args.shots_every > 0 and now - began >= (shots + 1) * args.shots_every:
-            dest = out / "shots" / f"{shots:04d}.png"
-            try:
-                capture_screenshot(udid, dest)
-            except Exception as e:
-                (out / "shots" / f"{shots:04d}.error").write_text(str(e))
-            shots += 1
-        time.sleep(0.25)
-    pmd("developer", "dvt", "kill", "--tunnel", udid, str(pid), timeout=20, check=False)
-    stop.set()
-    for t in threads:
-        t.join(timeout=5)
+                    obj = json.loads(b.stdout)
+                    with (out / "battery.jsonl").open("a") as f:
+                        obj["_host_time"] = time.time()
+                        f.write(json.dumps(obj) + "\n")
+                except Exception as e:
+                    with (out / "battery.jsonl").open("a") as f:
+                        f.write(
+                            json.dumps({"_error": str(e), "_host_time": time.time()}) + "\n"
+                        )
+                next_battery = now + 10
+            if args.shots_every > 0 and now - began >= (shots + 1) * args.shots_every:
+                dest = out / "shots" / f"{shots:04d}.png"
+                try:
+                    capture_screenshot(udid, dest)
+                except Exception as e:
+                    (out / "shots" / f"{shots:04d}.error").write_text(str(e))
+                shots += 1
+            time.sleep(0.25)
+    finally:
+        stop.set()
+        try:
+            pmd("developer", "dvt", "kill", "--tunnel", udid, str(pid), timeout=20, check=False)
+        finally:
+            for thread in threads:
+                thread.join(timeout=8)
     effective_env = dict(value.split("=", 1) for value in env)
     user_name = effective_env.get("PS2X_USER_DIR")
     paths = remote_paths(udid)

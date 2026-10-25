@@ -2,10 +2,12 @@
 import datetime as dt
 import json
 import pathlib
+import subprocess
+import threading
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools/device"))
@@ -15,6 +17,124 @@ import probe
 
 
 class DeviceHarnessTests(unittest.TestCase):
+    def test_summary_uses_only_latest_launch_in_appended_log(self):
+        old = "[settings] videoMode=ntsc scale=3\nthermalState=3\n" + "\n".join(
+            f"[autopilot] clock_seconds={seconds} wall_seconds={seconds}"
+            for seconds in range(0, 14, 2)) + "\n"
+        current = "[settings] videoMode=ntsc scale=1\nthermalState=1\n"
+        appended = old + current
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / "native.log").write_text(appended)
+            with patch.object(device, "ledger_control_reference", return_value=(None, None, None)), \
+                 patch.object(device, "print_summary"):
+                result = device.summarize(root)
+            self.assertEqual((root / "native.log").read_text(), appended)
+        self.assertEqual(result["thermal_state_max"], 1)
+        self.assertIsNone(result["hud_clock"]["rate"])
+        self.assertEqual(result["hud_clock"]["samples"], 0)
+        self.assertTrue(any("HUD clock progression unavailable" in reason
+                            for reason in result["validity"]["reasons"]))
+        self.assertEqual(device.hud_clock_progress(appended)["samples"], 0)
+        self.assertEqual(device.current_launch_log(appended), current)
+        self.assertEqual(device.current_launch_log("log without startup marker"), "log without startup marker")
+
+    def test_cooldown_skips_unavailable_temperature_without_sleep(self):
+        for target, observed in ((None, 20), (20, None)):
+            with self.subTest(target=target, observed=observed), \
+                 patch.object(device, "device_battery_temp", return_value=observed) as temperature, \
+                 patch.object(device.time, "sleep") as sleep, \
+                 patch.object(device.time, "monotonic", side_effect=[0, 1, 181]):
+                result = device.cooldown("tv", target)
+            sleep.assert_not_called()
+            self.assertTrue(result["unavailable"])
+            self.assertFalse(result["timed_out"])
+            if target is None:
+                temperature.assert_not_called()
+
+    def test_collectors_reap_children_after_read_failure(self):
+        real_popen = subprocess.Popen
+        for collector in (device.stream, device.stream_sysmon):
+            with self.subTest(collector=collector.__name__), tempfile.TemporaryDirectory() as temp:
+                children = []
+
+                def launch(*args, **kwargs):
+                    child = real_popen(*args, **kwargs)
+                    children.append(child)
+                    return child
+
+                output = pathlib.Path(temp) / "samples.jsonl"
+                try:
+                    with patch.object(device, "cli", return_value=sys.executable), \
+                         patch.object(device.subprocess, "Popen", side_effect=launch), \
+                         patch.object(device.select, "select", side_effect=OSError("collector read failed")):
+                        collector(["-c", "import time; time.sleep(60)"], output, threading.Event())
+                    self.assertEqual(len(children), 1)
+                    self.assertIsNotNone(children[0].poll())
+                    self.assertTrue(children[0].stdout.closed)
+                    self.assertIn("collector read failed", output.read_text())
+                    self.assertFalse(output.with_suffix(".raw.jsonl").exists())
+                finally:
+                    for child in children:
+                        if child.poll() is None:
+                            child.kill()
+                        child.wait(timeout=3)
+                        child.stdout.close()
+
+    def test_run_stops_collectors_on_interrupt_and_kill_failure(self):
+        for failure in ("interrupt", "kill"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp)
+                events = []
+                threads = []
+
+                def event():
+                    result = Mock()
+                    events.append(result)
+                    return result
+
+                def thread(**kwargs):
+                    result = Mock()
+                    result.kwargs = kwargs
+                    threads.append(result)
+                    return result
+
+                def pmd(*args, **kwargs):
+                    if args[:3] == ("developer", "dvt", "launch"):
+                        return SimpleNamespace(stdout="pid 123")
+                    if args[:3] == ("developer", "dvt", "kill") and failure == "kill":
+                        raise device.Failed("device kill timed out")
+                    return SimpleNamespace(stdout="")
+
+                def sleep(seconds):
+                    if seconds == 0.25:
+                        raise KeyboardInterrupt()
+
+                args = SimpleNamespace(seconds=1, warmup=0, udid="tv", app=None,
+                    label="cleanup", no_match=False, env=[], shots_every=0,
+                    no_pipeline_cache=True)
+                with patch.object(device, "ROOT", root), \
+                     patch.object(device, "choose_udid", return_value="tv"), \
+                     patch.object(device, "default_app", return_value=root / "app"), \
+                     patch.object(device, "info_plist", return_value={"CFBundleExecutable": "game"}), \
+                     patch.object(device, "state_read", return_value={}), \
+                     patch.object(device, "installed_bundle", return_value="game.bundle"), \
+                     patch.object(device, "pmd", side_effect=pmd), \
+                     patch.object(device.threading, "Event", side_effect=event), \
+                     patch.object(device.threading, "Thread", side_effect=thread), \
+                     patch.object(device.time, "sleep", side_effect=sleep), \
+                     patch.object(device.time, "monotonic", side_effect=None if failure == "interrupt" else [0, 2], return_value=0):
+                    with self.assertRaises(KeyboardInterrupt if failure == "interrupt" else device.Failed):
+                        device.do_run(args)
+                self.assertEqual(len(threads), 2)
+                events[0].set.assert_called_once_with()
+                for collector in threads:
+                    collector.start.assert_called_once_with()
+                    collector.join.assert_called_once_with(timeout=8)
+                sysmon_args = threads[1].kwargs["args"][0]
+                self.assertNotIn("--keep-monitoring", sysmon_args)
+                self.assertEqual(sysmon_args[sysmon_args.index("--duration") + 1], "31000")
+
     def test_abba_order_and_control_noise_verdict(self):
         self.assertEqual(device.abba_order(3), ["control", "candidate", "candidate", "control", "control", "candidate"])
         table, verdicts = device.compare_metrics(
@@ -306,6 +426,7 @@ class DeviceHarnessTests(unittest.TestCase):
 
             with patch.object(device, "ROOT", root), patch.object(device, "choose_udid", return_value="current"), \
                  patch.object(device, "installed_bundle", return_value="example.signed"), \
+                 patch.object(device, "product_type", return_value="iPhone12,1"), \
                  patch.object(device, "state_read", return_value=state), patch.object(device, "state_write"), \
                  patch.object(device, "pmd", side_effect=transfer):
                 device.do_push(SimpleNamespace(udid=None, app=str(app)))
