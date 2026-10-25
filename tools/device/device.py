@@ -1795,10 +1795,7 @@ def merge_pipeline_keys(recorded, manifest=MANIFEST):
 def do_coverage(args):
     """Record the Metal pipelines a device run reaches and merge them in."""
     udid = choose_udid(args.udid)
-    bundle = app_records(udid)
-    bundle = next((key for key, value in bundle.items() if value.get("CFBundleExecutable")), None)
-    if not bundle:
-        raise Failed("no installed app found -> ./rx device install first")
+    bundle = installed_bundle_id(udid)
     env = list(args.env)
     target = record_target(udid, bundle)
     env.append(f"RRV_PCSX2_GS_PIPELINE_RECORD={target}")
