@@ -1650,16 +1650,20 @@ def container_path(udid, bundle):
 
 
 def record_target(udid, bundle):
-    """Absolute path the app should record pipeline keys to, inside its perf dir.
+    """Absolute path the app should record pipeline keys to.
 
     RRV_PCSX2_GS_PIPELINE_RECORD is opened by the GS bridge itself, so the app
     sandbox needs an absolute container path; a relative one resolves against the
-    read-only bundle directory and silently never records.
+    read-only bundle directory and silently never records. It lives beside the
+    learned-selector cache because that directory exists on every platform: on
+    tvOS the app cannot create the perf directory the recorder would need.
     """
-    paths = remote_paths(udid)
-    # The app opens this itself, so it must be absolute; the perf log lives in
-    # <user base>/perf, the same directory the harness pulls.
-    return f"{container_path(udid, bundle)}/{paths['perf']}/perf/coverage.txt"
+    return f"{container_path(udid, bundle)}/{coverage_record_remote(udid)}"
+
+
+def coverage_record_remote(udid):
+    """Container-relative coverage file, in the directory that holds game data."""
+    return f"{remote_paths(udid)['game']}/rx-coverage-pipelines.txt"
 
 
 def learned_cache_path(udid):
@@ -1802,7 +1806,11 @@ def do_coverage(args):
         seconds=args.seconds, breakdown=False, warmup=args.warmup, label=args.label or "coverage",
         env=env, no_match=args.no_match, shots_every=args.shots_every, app=args.app, udid=udid)
     run_dir = do_run(run_args)
-    candidates = list((Path(run_dir) / "perf").rglob("coverage.txt"))
+    pulled = Path(run_dir) / "perf" / "coverage.txt"
+    pulled.parent.mkdir(exist_ok=True)
+    pmd("apps", "pull", bundle, coverage_record_remote(udid), str(pulled),
+        *global_device_args(udid), timeout=120, check=False)
+    candidates = [pulled] if pulled.is_file() and pulled.stat().st_size else []
     if not candidates:
         summary = json.loads((Path(run_dir) / "summary.json").read_text())
         compiles = (summary.get("metrics") or {}).get("pipeline_compiles_delta_run") or 0
