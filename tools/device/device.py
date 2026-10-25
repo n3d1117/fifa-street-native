@@ -1677,10 +1677,11 @@ def installed_bundle_id(udid):
 def pipeline_cache_remote(udid, absolute=False):
     """Shared learned-selector file, outside the per-run user directory.
 
-    Push and pull take a container-relative path; the app opens the file itself,
-    so RRV_PCSX2_GS_PIPELINE_CACHE needs the absolute container form.
+    Documents is the container directory push and pull handle reliably on every
+    platform (tvOS included); the app opens the file itself, so
+    RRV_PCSX2_GS_PIPELINE_CACHE needs the absolute container form.
     """
-    relative = f"{remote_paths(udid)['user']}/rx-device-pipelines.txt"
+    relative = f"{remote_paths(udid)['game']}/rx-learned-pipelines.txt"
     if not absolute:
         return relative
     return f"{container_path(udid, installed_bundle_id(udid))}/{relative}"
@@ -1697,10 +1698,15 @@ def push_pipeline_cache(udid, user_name):
     cache = learned_cache_path(udid)
     if not user_name or not cache.is_file() or not cache.stat().st_size:
         return False
-    result = pmd("apps", "push", installed_bundle_id(udid), str(cache),
-                 pipeline_cache_remote(udid), *global_device_args(udid),
-                 timeout=120, check=False)
-    return result.returncode == 0
+    for _attempt in range(3):
+        result = pmd("apps", "push", installed_bundle_id(udid), str(cache),
+                     pipeline_cache_remote(udid), *global_device_args(udid),
+                     timeout=120, check=False)
+        if result.returncode == 0:
+            return True
+        time.sleep(1.0)
+    print("WARNING: could not seed the learned pipeline cache; this run may recompile", file=sys.stderr)
+    return False
 
 
 def pull_pipeline_cache(udid, user_name):
@@ -1708,21 +1714,21 @@ def pull_pipeline_cache(udid, user_name):
     cache = learned_cache_path(udid)
     if not user_name:
         return 0
-    with tempfile.TemporaryDirectory() as tmp:
-        result = pmd("apps", "pull", installed_bundle_id(udid),
-                     pipeline_cache_remote(udid), tmp,
-                     *global_device_args(udid), timeout=120, check=False)
-        if result.returncode != 0:
-            return 0
-        pulled = list(Path(tmp).rglob("gs-metal-pipelines.txt"))
-        if not pulled:
-            return 0
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        if not cache.is_file():
-            shutil.copyfile(pulled[0], cache)
-            return sum(1 for line in cache.read_text().splitlines() if line.startswith("vs="))
-        added, _total, _sections = merge_pipeline_keys(pulled[0], cache)
-        return added
+    for _attempt in range(3):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = pmd("apps", "pull", installed_bundle_id(udid),
+                         pipeline_cache_remote(udid), tmp,
+                         *global_device_args(udid), timeout=120, check=False)
+            pulled = list(Path(tmp).rglob("*.txt")) if result.returncode == 0 else []
+            if pulled:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                if not cache.is_file():
+                    shutil.copyfile(pulled[0], cache)
+                    return sum(1 for line in cache.read_text().splitlines() if line.startswith("vs="))
+                added, _total, _sections = merge_pipeline_keys(pulled[0], cache)
+                return added
+        time.sleep(1.0)
+    return 0
 
 
 def merge_pipeline_keys(recorded, manifest=MANIFEST):
