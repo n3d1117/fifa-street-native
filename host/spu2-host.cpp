@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "spu2-host.hpp"
+#include "settings.hpp"
+#include <filesystem>
 #include <mutex>
 
 #include "ps2x/iop/iop_host_spu2.h"
@@ -192,6 +194,10 @@ void report_audio_health(uint64_t iop_cycle) {
                      static_cast<unsigned long long>(ringFrames));
     }
 
+    std::fprintf(stderr, "[spu2-source-health] dmaOverlaps=%llu dmaTruncated=%llu backwardsTime=%llu\n",
+                 static_cast<unsigned long long>(stats.dma_overlaps),
+                 static_cast<unsigned long long>(stats.dma_truncated),
+                 static_cast<unsigned long long>(stats.clamp_violations));
     previousWallNs = now;
     previousIopCycle = iop_cycle;
     previousFramesMixed = stats.frames_mixed;
@@ -209,6 +215,7 @@ void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amoun
     while (remaining_frames != 0) {
         const size_t frames = std::min(remaining_frames, kAudioChunkFrames);
         const size_t realFrames = rrv_spu2_pull_output(g_spu2, samples.data(), frames);
+        rrv_spu2_capture_output(g_spu2, samples.data(), frames, realFrames);
         const bool traceAudio = audio_trace_enabled();
         if (traceAudio || audio_ring_trace_enabled() || audio_perf_enabled()) {
             g_audio_requested_frames.fetch_add(frames, std::memory_order_relaxed);
@@ -405,6 +412,26 @@ bool ps2x_spu2_host_start() {
     if (!g_spu2) {
         std::fprintf(stderr, "[spu2] PCSX2 SPU2 core creation failed\n");
         return false;
+    }
+    if (const char* prefix = std::getenv("PS2X_AUDIO_CAPTURE"); prefix && *prefix) {
+        auto seconds = [](const char* name, unsigned fallback, unsigned low, unsigned high) {
+            const char* value = std::getenv(name);
+            if (!value) return fallback;
+            char* end = nullptr;
+            const unsigned long parsed = std::strtoul(value, &end, 10);
+            return end != value && *end == '\0' && parsed >= low && parsed <= high
+                ? static_cast<unsigned>(parsed) : fallback;
+        };
+        std::filesystem::path capturePath(prefix);
+        if (capturePath.is_relative()) capturePath = std::filesystem::path(host::user_directory()) / capturePath;
+        std::error_code error;
+        std::filesystem::create_directories(capturePath.parent_path(), error);
+        const unsigned delay = seconds("PS2X_AUDIO_CAPTURE_DELAY", 20, 0, 600);
+        const unsigned duration = seconds("PS2X_AUDIO_CAPTURE_SECONDS", 30, 1, 60);
+        if (error || !rrv_spu2_capture_start(g_spu2, capturePath.c_str(), delay, duration))
+            std::fprintf(stderr, "[spu2-capture] could not start capture at %s\n", capturePath.c_str());
+        else
+            std::fprintf(stderr, "[spu2-capture] armed delay=%us duration=%us prefix=%s\n", delay, duration, capturePath.c_str());
     }
     std::fprintf(stderr, "[spu2] output ring capacity=%u frames\n", outputRingFrames);
 

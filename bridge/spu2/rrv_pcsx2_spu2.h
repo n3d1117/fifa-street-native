@@ -18,6 +18,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -104,6 +105,13 @@ size_t rrv_spu2_sync(rrv_spu2* s, uint64_t t, rrv_spu2_event* out, size_t max);
  * Never blocks and never back-pressures the core. Returns frames of real
  * audio delivered (the rest is silence). */
 size_t rrv_spu2_pull_output(rrv_spu2* s, float* interleaved_stereo, size_t frames);
+
+/* Diagnostic only. Start before any producer or consumer thread uses the instance.
+ * Output prefix is resolved by the host; files flush on a background thread once
+ * both bounded tracks complete. Caller must stop both owners before destroy. */
+bool rrv_spu2_capture_start(rrv_spu2* s, const char* prefix, unsigned delay_seconds, unsigned seconds);
+/* Single audio consumer, after pull_output and before SDL conversion. */
+void rrv_spu2_capture_output(rrv_spu2* s, const float* samples, size_t frames, size_t real_frames);
 
 /* Any thread. Counters are relaxed snapshots. */
 void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* out);

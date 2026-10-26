@@ -14,6 +14,8 @@
 
 #include "rrv_pcsx2_spu2.h"
 #include "rrv_audio_stretcher.hpp"
+#include "rrv_audio_capture.hpp"
+#include <memory>
 
 #include "SPU2/defs.h"
 #include "SPU2/regs.h"
@@ -576,9 +578,8 @@ struct rrv_spu2
 	// without consuming or counting underruns, so playback begins with a cushion
 	// against the producer's per-frame burstiness instead of a permanently empty ring.
 	bool output_primed{false};
-	// 96 ms: a guest stall of two fields (goal replay entry) must not empty the
-	// ring, and tvOS pulls ~0.3% more frames per second than the guest mixes.
 	u64 prime_frames{4608};
+	std::unique_ptr<rrv_audio_capture> capture;
 	rrv_audio_stretcher audio_stretcher;
 	std::array<float, 64 * 2> stretch_input{};
 	size_t stretch_input_frames{};
@@ -610,7 +611,10 @@ void rrv_out::push_frame(float l, float r, s16 raw_l, s16 raw_r)
 	u32 raw = (u32(u16(raw_l)) << 16) | u16(raw_r);
 	st.out_hash = (st.out_hash ^ raw) * 0x100000001b3ull;
 	s->output_hash.store(st.out_hash, std::memory_order_relaxed);
-	s->frames_mixed.fetch_add(1, std::memory_order_relaxed);
+	const u64 mixed_frame = s->frames_mixed.fetch_add(1, std::memory_order_relaxed);
+	if (s->capture)
+		s->capture->mixed(l, r, mixed_frame, s->ring_head.load(std::memory_order_relaxed),
+			s->ring_tail.load(std::memory_order_relaxed));
 	auto push_output = [](void* context, float left, float right) -> bool {
 		auto* instance = static_cast<rrv_spu2*>(context);
 		const u64 out_head = instance->ring_head.load(std::memory_order_relaxed);
@@ -1031,6 +1035,28 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 			frames - avail, static_cast<unsigned long long>(head - tail));
 	}
 	return avail;
+}
+
+bool rrv_spu2_capture_start(rrv_spu2* s, const char* prefix, unsigned delay_seconds, unsigned seconds)
+{
+    if (!s || s->capture || !prefix || !*prefix || seconds < 1 || seconds > 60 || delay_seconds > 600)
+        return false;
+    try {
+        s->capture = std::make_unique<rrv_audio_capture>(prefix, delay_seconds, seconds);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+void rrv_spu2_capture_output(rrv_spu2* s, const float* samples, size_t frames, size_t real_frames)
+{
+    if (s && s->capture) {
+        const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
+        s->capture->output(samples, frames, real_frames,
+            s->frames_mixed.load(std::memory_order_relaxed),
+            s->ring_head.load(std::memory_order_relaxed), tail - real_frames);
+    }
 }
 
 void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* o)

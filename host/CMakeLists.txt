@@ -99,6 +99,14 @@ if(RX_GAME_READY)
 endif()
 
 if(NOT RX_EMBEDDED)
+find_package(Threads REQUIRED)
+add_executable(audioCaptureTest "${CMAKE_CURRENT_SOURCE_DIR}/audio-capture-test.cpp")
+target_include_directories(audioCaptureTest PRIVATE "${RX_ROOT}")
+target_compile_features(audioCaptureTest PRIVATE cxx_std_20)
+target_link_libraries(audioCaptureTest PRIVATE Threads::Threads)
+add_test(NAME audio_capture COMMAND audioCaptureTest)
+set_tests_properties(audio_capture PROPERTIES TIMEOUT 10)
+
 add_executable(audioStretcherTest
     "${RX_ROOT}/bridge/spu2/rrv_audio_stretcher.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/audio-stretcher-test.cpp")

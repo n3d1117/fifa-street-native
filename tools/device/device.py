@@ -1176,13 +1176,14 @@ def run_experiment(args, kind):
             label=f"{label}-{arm}-{index + 1:02d}", breakdown=getattr(args, "breakdown", False),
             env=[f"{k}={v}" for k, v in arms[arm].items()], no_match=False,
             shots_every=max(1, args.seconds + args.warmup - 1), app=str(prepared_apps[arm][0]) if arm in prepared_apps else None,
-            udid=udid, _stamp=stamp)
+            udid=udid, _stamp=stamp,
+            no_device_telemetry=getattr(args, "no_device_telemetry", False))
         if arm in prepared_apps:
             app, stage, bundle = prepared_apps[arm]
             elapsed, _installed = install_prepared(app, True, udid, stage, bundle)
             install_seconds.append(elapsed)
         run_dir = do_run(run_args)
-        if first_temp is None:
+        if first_temp is None and not getattr(args, "no_device_telemetry", False):
             first_temp = _battery_start(run_dir)
         run_dirs.append(str(run_dir.relative_to(ROOT)))
         summary = json.loads((run_dir / "summary.json").read_text()) if (run_dir / "summary.json").is_file() else {}
@@ -1445,6 +1446,7 @@ def stream_sysmon(cmd, output, stop):
 
 
 def do_run(args):
+    device_telemetry = not getattr(args, "no_device_telemetry", False)
     if args.seconds < 1 or args.warmup < 0:
         raise Failed("seconds must be positive and warmup non-negative")
     udid = choose_udid(args.udid)
@@ -1529,6 +1531,7 @@ def do_run(args):
                     "launch_host_time": launch_host_time,
                     "seconds": args.seconds,
                     "warmup_s": args.warmup,
+                    "device_telemetry": device_telemetry,
                     "env": env,
                 },
                 indent=2,
@@ -1538,61 +1541,62 @@ def do_run(args):
         # DVT's process launch can outlive the initial RemoteXPC service
         # transition.
         time.sleep(2)
-        gpu_ready = threading.Event()
-        gpu_thread = threading.Thread(
-            target=stream,
-            args=(
-                ["developer", "dvt", "graphics", "--tunnel", udid],
-                out / "gpu.jsonl",
-                stop,
-                gpu_ready,
-            ),
-            daemon=True,
-        )
-        gpu_thread.start()
-        threads.append(gpu_thread)
-        gpu_ready.wait(timeout=5)
-        sys_thread = threading.Thread(
-            target=stream_sysmon,
-            args=(
-                [
-                    "developer",
-                    "dvt",
-                    "sysmon",
-                    "process",
-                    "monitor",
-                    "process",
-                    "--filter",
-                    f"pid={pid}",
-                    "--choose",
-                    "first",
-                    "--duration",
-                    str(math.ceil((args.seconds + args.warmup + 30) * 1000)),
-                    "--key",
-                    "pid",
-                    "--key",
-                    "cpuUsage",
-                    "--key",
-                    "physFootprint",
-                    "--key",
-                    "threadCount",
-                    "--tunnel",
-                    udid,
-                ],
-                out / "sysmon.jsonl",
-                stop,
-            ),
-            daemon=True,
-        )
-        sys_thread.start()
-        threads.append(sys_thread)
+        if device_telemetry:
+            gpu_ready = threading.Event()
+            gpu_thread = threading.Thread(
+                target=stream,
+                args=(
+                    ["developer", "dvt", "graphics", "--tunnel", udid],
+                    out / "gpu.jsonl",
+                    stop,
+                    gpu_ready,
+                ),
+                daemon=True,
+            )
+            gpu_thread.start()
+            threads.append(gpu_thread)
+            gpu_ready.wait(timeout=5)
+            sys_thread = threading.Thread(
+                target=stream_sysmon,
+                args=(
+                    [
+                        "developer",
+                        "dvt",
+                        "sysmon",
+                        "process",
+                        "monitor",
+                        "process",
+                        "--filter",
+                        f"pid={pid}",
+                        "--choose",
+                        "first",
+                        "--duration",
+                        str(math.ceil((args.seconds + args.warmup + 30) * 1000)),
+                        "--key",
+                        "pid",
+                        "--key",
+                        "cpuUsage",
+                        "--key",
+                        "physFootprint",
+                        "--key",
+                        "threadCount",
+                        "--tunnel",
+                        udid,
+                    ],
+                    out / "sysmon.jsonl",
+                    stop,
+                ),
+                daemon=True,
+            )
+            sys_thread.start()
+            threads.append(sys_thread)
         began = launch_monotonic
         deadline = began + args.warmup + args.seconds
         next_battery = began
         shots = 0
         while time.monotonic() < deadline:
             now = time.monotonic()
-            if now >= next_battery:
+            if device_telemetry and now >= next_battery:
                 try:
                     b = pmd(
                         "diagnostics",
@@ -1838,7 +1842,8 @@ def do_coverage(args):
     env.append(f"RRV_PCSX2_GS_PIPELINE_RECORD={target}")
     run_args = argparse.Namespace(
         seconds=args.seconds, breakdown=False, warmup=args.warmup, label=args.label or "coverage",
-        env=env, no_match=args.no_match, shots_every=args.shots_every, app=args.app, udid=udid)
+        env=env, no_match=args.no_match, shots_every=args.shots_every, app=args.app, udid=udid,
+        no_device_telemetry=getattr(args, "no_device_telemetry", False))
     run_dir = do_run(run_args)
     pulled = Path(run_dir) / "perf" / "coverage.txt"
     pulled.parent.mkdir(exist_ok=True)
@@ -1957,6 +1962,9 @@ def main(argv=None):
     baseline.add_argument("--warmup", type=float, default=0)
     baseline.add_argument("--udid")
     baseline.add_argument("--no-pipeline-cache", action="store_true")
+    for command_parser in (r, ab, cov, baseline):
+        command_parser.add_argument("--no-device-telemetry", action="store_true",
+            help="keep in-app perf; skip continuous DVT graphics/sysmon and battery polling")
     args = ap.parse_args(argv)
     try:
         if args.sub == "doctor":

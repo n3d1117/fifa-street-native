@@ -1,5 +1,6 @@
 """Unit tests for the USB device harness profile selection and run summaries."""
 import datetime as dt
+from contextlib import ExitStack
 import json
 import pathlib
 import subprocess
@@ -17,6 +18,117 @@ import probe
 
 
 class DeviceHarnessTests(unittest.TestCase):
+    def test_run_can_skip_device_telemetry_and_keep_capture_outputs(self):
+        for quiet in (False, True):
+            with self.subTest(no_device_telemetry=quiet), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp)
+                threads = []
+
+                def thread(**kwargs):
+                    result = Mock()
+                    result.start.side_effect = lambda: kwargs["target"](*kwargs["args"])
+                    threads.append(result)
+                    return result
+
+                def pmd(*args, **kwargs):
+                    return SimpleNamespace(stdout="pid 123" if args[:3] ==
+                        ("developer", "dvt", "launch") else "{}" if args[:2] ==
+                        ("diagnostics", "battery") else "", returncode=0)
+
+                args = SimpleNamespace(seconds=3, warmup=0, udid="tv", app=None,
+                    label="quiet", no_match=False, env=[], shots_every=1,
+                    no_pipeline_cache=True, no_device_telemetry=quiet)
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(device, "ROOT", root))
+                    stack.enter_context(patch.object(device, "choose_udid", return_value="tv"))
+                    stack.enter_context(patch.object(device, "default_app", return_value=root / "app"))
+                    stack.enter_context(patch.object(device, "info_plist", return_value={"CFBundleExecutable": "game"}))
+                    stack.enter_context(patch.object(device, "state_read", return_value={}))
+                    stack.enter_context(patch.object(device, "installed_bundle", return_value="game.bundle"))
+                    commands = stack.enter_context(patch.object(device, "pmd", side_effect=pmd))
+                    stack.enter_context(patch.object(device, "remote_paths",
+                        return_value={"isolated": "Library/Caches", "perf": "Library/Caches"}))
+                    graphics = stack.enter_context(patch.object(device, "stream"))
+                    sysmon = stack.enter_context(patch.object(device, "stream_sysmon"))
+                    popen = stack.enter_context(patch.object(device.subprocess, "Popen"))
+                    event = stack.enter_context(patch.object(device.threading, "Event"))
+                    stack.enter_context(patch.object(device.threading, "Thread", side_effect=thread))
+                    stack.enter_context(patch.object(device.time, "sleep"))
+                    stack.enter_context(patch.object(device.time, "monotonic", side_effect=[0, 1.5, 1.5, 4]))
+                    screenshot = stack.enter_context(patch.object(device, "capture_screenshot"))
+                    summarize = stack.enter_context(patch.object(device, "summarize", return_value={"shots_count": 1}))
+                    stack.enter_context(patch("builtins.print"))
+                    out = device.do_run(args)
+                popen.assert_not_called()
+                self.assertEqual(len(threads), 0 if quiet else 2)
+                self.assertEqual(event.return_value.wait.call_count, 0 if quiet else 1)
+                self.assertEqual(graphics.call_count, 0 if quiet else 1)
+                self.assertEqual(sysmon.call_count, 0 if quiet else 1)
+                battery = [call for call in commands.call_args_list if call.args[:2] == ("diagnostics", "battery")]
+                self.assertEqual(len(battery), 0 if quiet else 1)
+                screenshot.assert_called_once()
+                summarize.assert_called_once_with(out)
+                pulls = [call for call in commands.call_args_list if call.args[:2] == ("apps", "pull")]
+                self.assertEqual(len(pulls), 2)
+                metadata = json.loads((out / "run.json").read_text())
+                self.assertEqual(metadata["device_telemetry"], not quiet)
+                self.assertIn("PS2X_PERF_LOG=1", metadata["env"])
+                self.assertEqual((out / "battery.jsonl").exists(), not quiet)
+
+    def test_device_telemetry_option_cli_defaults_and_dispatch(self):
+        commands = {
+            "run": ["--seconds", "1"],
+            "ab": ["--control", "K=0", "--candidate", "K=1", "--pairs", "1", "--seconds", "1", "--label", "quiet"],
+            "baseline": ["--runs", "1", "--seconds", "1", "--label", "quiet"],
+            "coverage": [],
+        }
+        for command, argv in commands.items():
+            for quiet in (False, True):
+                with self.subTest(command=command, quiet=quiet), \
+                     patch.object(device, "do_run") as run, \
+                     patch.object(device, "do_coverage") as coverage, \
+                     patch.object(device, "run_experiment") as experiment:
+                    self.assertEqual(device.main([command, *argv, *(["--no-device-telemetry"] if quiet else [])]), 0)
+                selected = run if command == "run" else coverage if command == "coverage" else experiment
+                self.assertEqual(selected.call_args.args[0].no_device_telemetry, quiet)
+
+    def test_experiments_and_coverage_propagate_no_device_telemetry(self):
+        for kind in ("ab", "baseline", "coverage"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp)
+                runs = []
+
+                def run(args):
+                    runs.append(args)
+                    out = root / "run" / str(len(runs))
+                    out.mkdir(parents=True)
+                    (out / "summary.json").write_text('{"metrics":{}}')
+                    return out
+
+                args = SimpleNamespace(pairs=1, runs=2, seconds=1, warmup=0,
+                    label="quiet", control=["K=0"], candidate=["K=1"], env=[],
+                    control_app=None, candidate_app=None, udid="tv", no_device_telemetry=True,
+                    no_match=False, shots_every=1, app=None)
+                with patch.object(device, "ROOT", root), \
+                     patch.object(device, "choose_udid", return_value="tv"), \
+                     patch.object(device, "do_run", side_effect=run), \
+                     patch.object(device, "run_metrics", return_value={"fps": 60}), \
+                     patch.object(device, "_battery_start") as battery_start, \
+                     patch.object(device, "device_battery_temp") as battery_temperature, \
+                     patch.object(device, "installed_bundle_id", return_value="game.bundle"), \
+                     patch.object(device, "record_target", return_value="/coverage.txt"), \
+                     patch.object(device, "coverage_record_remote", return_value="coverage.txt"), \
+                     patch.object(device, "pmd", return_value=SimpleNamespace(returncode=0)), \
+                     patch("builtins.print"):
+                    if kind == "coverage":
+                        device.do_coverage(args)
+                    else:
+                        device.run_experiment(args, kind)
+                self.assertEqual(len(runs), 1 if kind == "coverage" else 2)
+                self.assertTrue(all(run.no_device_telemetry for run in runs))
+                battery_start.assert_not_called()
+                battery_temperature.assert_not_called()
+
     def test_summary_uses_only_latest_launch_in_appended_log(self):
         old = "[settings] videoMode=ntsc scale=3\nthermalState=3\n" + "\n".join(
             f"[autopilot] clock_seconds={seconds} wall_seconds={seconds}"
