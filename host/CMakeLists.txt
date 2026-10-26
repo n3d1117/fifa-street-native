@@ -107,6 +107,13 @@ target_link_libraries(audioCaptureTest PRIVATE Threads::Threads)
 add_test(NAME audio_capture COMMAND audioCaptureTest)
 set_tests_properties(audio_capture PROPERTIES TIMEOUT 10)
 
+add_executable(audioCallbackTraceTest "${CMAKE_CURRENT_SOURCE_DIR}/audio-callback-trace-test.cpp")
+target_include_directories(audioCallbackTraceTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(audioCallbackTraceTest PRIVATE cxx_std_20)
+target_link_libraries(audioCallbackTraceTest PRIVATE Threads::Threads)
+add_test(NAME audio_callback_trace COMMAND audioCallbackTraceTest)
+set_tests_properties(audio_callback_trace PROPERTIES TIMEOUT 10)
+
 add_executable(audioStretcherTest
     "${RX_ROOT}/bridge/spu2/rrv_audio_stretcher.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/audio-stretcher-test.cpp")

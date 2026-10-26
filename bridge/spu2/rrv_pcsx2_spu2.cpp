@@ -1039,7 +1039,7 @@ size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
 
 bool rrv_spu2_capture_start(rrv_spu2* s, const char* prefix, unsigned delay_seconds, unsigned seconds)
 {
-    if (!s || s->capture || !prefix || !*prefix || seconds < 1 || seconds > 60 || delay_seconds > 600)
+    if (!s || s->capture || !prefix || !*prefix || seconds < 1 || seconds > 300 || delay_seconds > 600)
         return false;
     try {
         s->capture = std::make_unique<rrv_audio_capture>(prefix, delay_seconds, seconds);

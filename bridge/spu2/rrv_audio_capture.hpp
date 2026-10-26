@@ -24,7 +24,7 @@ struct rrv_audio_capture
     };
     struct Pull { size_t offset, frames, real; uint64_t ring_tail; };
     Track producer, callback;
-    std::array<Pull, 8192> pulls{};
+    std::array<Pull, 32768> pulls{};
     size_t pull_count = 0, lost_pulls = 0;
     const std::string prefix;
     const uint64_t target_ns;

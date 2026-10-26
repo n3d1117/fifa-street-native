@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "spu2-host.hpp"
+#include "audio-callback-trace.hpp"
 #include "settings.hpp"
 #include <filesystem>
 #include <mutex>
@@ -38,6 +39,7 @@ rrv_spu2* g_spu2{};
 std::mutex g_perfStatsMutex;
 uint64_t g_finalUnderruns = 0;
 SDL_AudioStream* g_audio_stream{};
+host::AudioCallbackTrace* g_audio_timing{};
 bool g_audio_subsystem_initialized{};
 DmaState g_dma[2]{};
 std::atomic<uint64_t> g_last_cycle{0};
@@ -184,14 +186,15 @@ void report_audio_health(uint64_t iop_cycle) {
     } else {
         std::fprintf(stderr,
                      "[spu2-health] iopMcps=%.2f mixedKfps=%.2f underrun=%llu overrun=%llu "
-                     "pull=%llu/%llu ringFrames=%llu\n",
+                     "pull=%llu/%llu ringFrames=%llu errors=%llu\n",
                      static_cast<double>(elapsedCycles) / seconds / 1.0e6,
                      static_cast<double>(mixedFrames) / seconds / 1000.0,
                      static_cast<unsigned long long>(underruns),
                      static_cast<unsigned long long>(overruns),
                      static_cast<unsigned long long>(real),
                      static_cast<unsigned long long>(requested),
-                     static_cast<unsigned long long>(ringFrames));
+                     static_cast<unsigned long long>(ringFrames),
+                     static_cast<unsigned long long>(errors));
     }
 
     std::fprintf(stderr, "[spu2-source-health] dmaOverlaps=%llu dmaTruncated=%llu backwardsTime=%llu\n",
@@ -205,9 +208,10 @@ void report_audio_health(uint64_t iop_cycle) {
     previousOverrunFrames = stats.overrun_frames;
 }
 
-void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amount, int) {
-    if (!g_spu2 || additional_amount <= 0)
-        return;
+void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amount, int total_amount) {
+    host::AudioCallbackTrace::Invocation timing(g_audio_timing, additional_amount, total_amount);
+    if (!g_spu2) { timing.no_backend(); return; }
+    if (additional_amount <= 0) return;
 
     const size_t bytes_per_frame = sizeof(float) * 2;
     size_t remaining_frames = static_cast<size_t>(additional_amount) / bytes_per_frame;
@@ -235,8 +239,10 @@ void SDLCALL audio_callback(void*, SDL_AudioStream* stream, int additional_amoun
         }
         if (!SDL_PutAudioStreamData(stream, samples.data(), static_cast<int>(frames * bytes_per_frame))) {
             g_audio_callback_errors.fetch_add(1, std::memory_order_relaxed);
+            timing.write_error();
             return;
         }
+        timing.fed(frames);
         remaining_frames -= frames;
     }
 }
@@ -427,7 +433,7 @@ bool ps2x_spu2_host_start() {
         std::error_code error;
         std::filesystem::create_directories(capturePath.parent_path(), error);
         const unsigned delay = seconds("PS2X_AUDIO_CAPTURE_DELAY", 20, 0, 600);
-        const unsigned duration = seconds("PS2X_AUDIO_CAPTURE_SECONDS", 30, 1, 60);
+        const unsigned duration = seconds("PS2X_AUDIO_CAPTURE_SECONDS", 30, 1, 300);
         if (error || !rrv_spu2_capture_start(g_spu2, capturePath.c_str(), delay, duration))
             std::fprintf(stderr, "[spu2-capture] could not start capture at %s\n", capturePath.c_str());
         else
@@ -449,6 +455,17 @@ bool ps2x_spu2_host_start() {
     g_audio_peak_scaled.store(0, std::memory_order_relaxed);
     g_audio_queued_high_water.store(0, std::memory_order_relaxed);
     std::fill(std::begin(g_dma), std::end(g_dma), DmaState{});
+
+    if (const char* prefix = std::getenv("PS2X_AUDIO_TIMING"); prefix && *prefix) {
+        std::filesystem::path timingPath(prefix);
+        if (timingPath.is_relative()) timingPath = std::filesystem::path(host::user_directory()) / timingPath;
+        std::error_code error;
+        std::filesystem::create_directories(timingPath.parent_path(), error);
+        if (error)
+            std::fprintf(stderr, "[audio-timing] cannot create directory for %s\n", timingPath.c_str());
+        else
+            g_audio_timing = new host::AudioCallbackTrace(timingPath.string());
+    }
 
     ps2x::iop::IopHostSpu2 hooks{};
     hooks.read16 = read16;
@@ -485,9 +502,12 @@ void ps2x_spu2_host_stop() {
 
     if (g_audio_stream) {
         SDL_PauseAudioStreamDevice(g_audio_stream);
+        if (g_audio_timing) g_audio_timing->stop();
         SDL_DestroyAudioStream(g_audio_stream);
         g_audio_stream = nullptr;
     }
+    delete g_audio_timing;
+    g_audio_timing = nullptr;
     if (g_audio_subsystem_initialized) {
         SDL_QuitSubSystem(SDL_INIT_AUDIO);
         g_audio_subsystem_initialized = false;
