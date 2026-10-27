@@ -247,6 +247,13 @@ set_source_files_properties("${RX_ROOT}/tests/metal-gs-adapter-test.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/metal-gs-adapter.cpp" PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 add_test(NAME metal_gs_adapter COMMAND metalGsAdapterTest)
 
+add_executable(prewarmQualityTest "${RX_ROOT}/tests/prewarm-quality-test.cpp")
+target_include_directories(prewarmQualityTest PRIVATE
+    "${RX_ROOT}/deps/pcsx2/pcsx2/GS/Renderers/Metal")
+target_compile_features(prewarmQualityTest PRIVATE cxx_std_20)
+target_compile_options(prewarmQualityTest PRIVATE -UNDEBUG)
+add_test(NAME prewarm_quality COMMAND prewarmQualityTest)
+
 add_executable(bootMatchTest
     "${RX_ROOT}/tests/boot-match-test.cpp")
 target_include_directories(bootMatchTest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

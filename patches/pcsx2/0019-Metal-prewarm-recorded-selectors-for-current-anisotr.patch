@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Tue, 27 Oct 2026 17:55:39 +0100
+Subject: [PATCH 19/19] Metal: prewarm recorded selectors for current
+ anisotropy
+
+GSRendererHW emits software anisotropy zero or the configured maximum. Project only startup keys onto those values and deduplicate; actual draw selectors and recording stay untouched. Keep a legacy warm-set switch and report source/projected counts.
+
+diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+index a5c9443954b543a8403bb752dffe05e658ee592a..b1750a50317f6551ab21049ae79608f6d2026cdf 100644
+--- a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
++++ b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
+@@ -6,6 +6,7 @@
+ #include "GS/Renderers/Metal/GSMetalCPPAccessible.h"
+ #include "GS/Renderers/Metal/GSDeviceMTL.h"
+ #include "GS/Renderers/Metal/RRVMetalLifetimeDiag.h"
++#include "GS/Renderers/Metal/RRVMetalPrewarmQuality.h"
+ #include "GS/Renderers/Metal/GSTextureMTL.h"
+ #include "GS/GSPerfMon.h"
+ #include "GS/GSShaderCompileIndicator.h"
+@@ -2808,8 +2809,12 @@ static bool RrvReadPipelineKeys(const std::string& path, const std::string& feat
+ 		RrvReadPipelineKeys(manifest, tag, keys);
+ 	if (const char* user = std::getenv("RRV_PCSX2_GS_PIPELINE_CACHE"))
+ 		RrvReadPipelineKeys(user, tag, keys);
++	const size_t source_count = keys.size();
++	const char* quality = std::getenv("RRV_PCSX2_GS_PREWARM_QUALITY");
++	const bool project_quality = !quality || std::strcmp(quality, "0") != 0;
++	keys = RRVMetal::CurrentQualityPrewarmKeys(keys, GSConfig.MaxAnisotropy, project_quality);
+ 	const bool synchronous = enabled && std::strcmp(enabled, "sync") == 0;
+-	auto compile = [this, keys = std::move(keys)]() {
++	auto compile = [this, source_count, project_quality, keys = std::move(keys)]() {
+ 		@autoreleasepool
+ 		{
+ 			const auto start = std::chrono::steady_clock::now();
+@@ -2825,8 +2830,8 @@ static bool RrvReadPipelineKeys(const std::string& path, const std::string& feat
+ 				if (!existed) ++compiled;
+ 			}
+ 			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+-			fprintf(stderr, "[RRV_PCSX2_GS_PIPELINE_PREWARM] keys=%zu compiled=%zu ms=%lld library_ms=%lld\n",
+-				keys.size(), compiled, static_cast<long long>(ms), m_dev.shader_library_compile_ms);
++			fprintf(stderr, "[RRV_PCSX2_GS_PIPELINE_PREWARM] source=%zu projected=%zu quality_projection=%d keys=%zu compiled=%zu ms=%lld library_ms=%lld\n",
++				source_count, keys.size(), int(project_quality), keys.size(), compiled, static_cast<long long>(ms), m_dev.shader_library_compile_ms);
+ 		}
+ 	};
+ 	if (synchronous)
+diff --git a/pcsx2/GS/Renderers/Metal/RRVMetalPrewarmQuality.h b/pcsx2/GS/Renderers/Metal/RRVMetalPrewarmQuality.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..f037ab678902fee77997a2a2da0b2f01d639dc42
+--- /dev/null
++++ b/pcsx2/GS/Renderers/Metal/RRVMetalPrewarmQuality.h
+@@ -0,0 +1,46 @@
++// SPDX-License-Identifier: GPL-3.0+
++#pragma once
++
++#include <algorithm>
++#include <vector>
++
++namespace RRVMetal
++{
++template <typename Selector>
++std::vector<Selector> CurrentQualityPrewarmKeys(const std::vector<Selector>& recorded,
++	unsigned max_anisotropy, bool enabled = true)
++{
++	if (!enabled)
++		return recorded;
++	switch (max_anisotropy)
++	{
++		case 0:
++		case 2:
++		case 4:
++		case 8:
++		case 16:
++			break;
++		default:
++			return recorded;
++	}
++
++	std::vector<Selector> result;
++	result.reserve(recorded.size() * (max_anisotropy ? 2 : 1));
++	auto append = [&result](const Selector& key) {
++		if (std::find(result.begin(), result.end(), key) == result.end())
++			result.push_back(key);
++	};
++	for (const auto& source : recorded)
++	{
++		Selector key = source;
++		key.ps.sw_aniso = 0;
++		append(key);
++		if (max_anisotropy)
++		{
++			key.ps.sw_aniso = max_anisotropy;
++			append(key);
++		}
++	}
++	return result;
++}
++}

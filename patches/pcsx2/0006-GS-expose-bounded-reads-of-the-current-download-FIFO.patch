@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Wed, 21 Oct 2026 04:09:41 +0200
-Subject: [PATCH 06/18] GS: expose bounded reads of the current download FIFO
+Subject: [PATCH 06/19] GS: expose bounded reads of the current download FIFO
 
 Let VIF1 reverse DMA consume the native transfer cursor without rebuilding descriptors on the EE. Limit each request to the remaining image, use the checked native InitReadFIFO/ReadFIFO path and preserve incremental cursor state.
 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 22:30:26 +0200
-Subject: [PATCH 04/18] GS: count completed game frames (FRAME retarget onto
+Subject: [PATCH 04/19] GS: count completed game frames (FRAME retarget onto
  the displayed buffer) and log game_fps
 
 

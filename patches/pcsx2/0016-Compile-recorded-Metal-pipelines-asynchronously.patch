@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Thu, 22 Oct 2026 21:57:10 +0200
-Subject: [PATCH 16/18] Compile recorded Metal pipelines asynchronously
+Subject: [PATCH 16/19] Compile recorded Metal pipelines asynchronously
 
 
 diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.h

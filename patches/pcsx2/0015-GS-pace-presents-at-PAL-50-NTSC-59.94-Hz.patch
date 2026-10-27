@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Thu, 22 Oct 2026 21:10:53 +0200
-Subject: [PATCH 15/18] GS: pace presents at PAL 50 / NTSC 59.94 Hz
+Subject: [PATCH 15/19] GS: pace presents at PAL 50 / NTSC 59.94 Hz
 
 
 diff --git a/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm b/pcsx2/GS/Renderers/Metal/GSDeviceMTL.mm
