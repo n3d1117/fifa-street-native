@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 27 Oct 2026 17:55:39 +0100
-Subject: [PATCH 19/19] Metal: prewarm recorded selectors for current
+Subject: [PATCH 19/20] Metal: prewarm recorded selectors for current
  anisotropy
 
 GSRendererHW emits software anisotropy zero or the configured maximum. Project only startup keys onto those values and deduplicate; actual draw selectors and recording stay untouched. Keep a legacy warm-set switch and report source/projected counts.

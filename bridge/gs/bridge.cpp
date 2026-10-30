@@ -673,6 +673,12 @@ extern "C" void rrv_pcsx2_gs_bridge_set_perf_callback(
     g_rrv_perf_callback.store(ForwardPerfFrame, std::memory_order_release);
 }
 
+extern "C" void rrv_pcsx2_gs_bridge_set_presented_register(
+    RrvPcsx2GsPresentedRegister callback)
+{
+    g_rrv_presented_register.store(callback, std::memory_order_release);
+}
+
 extern "C" void rrv_pcsx2_gs_bridge_set_host_present_callback(
     RrvPcsx2GsHostPresentCallback callback)
 {

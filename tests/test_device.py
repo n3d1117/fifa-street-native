@@ -562,6 +562,31 @@ class DeviceHarnessTests(unittest.TestCase):
                 with self.assertRaisesRegex(device.Failed, "without writing"):
                     device.capture_screenshot("device", dest)
 
+    def test_presented_events_do_not_change_existing_frame_summaries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / "perf").mkdir()
+            path = root / "perf/frames.jsonl"
+            rows = [
+                {"t": 100, "gameplay": True, "game_frame": 1, "present_dt_ms": 16.7,
+                 "draws": 100, "pipeline_compiles": 0},
+                {"type": "summary", "t": 101, "wall_time": 1001,
+                 "pipeline_compiles": 0, "audio_underruns": 0},
+            ]
+            with patch.object(device, "print_summary"):
+                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+                control = device.summarize(root)
+                rows.extend([
+                    {"type": "presented", "present_id": 1, "game_frame": 999999,
+                     "submitted_t": 100, "presented_time": 500},
+                    {"type": "presented_summary", "t": 1000000, "registered": 1,
+                     "collected": 1, "lost": 0, "uncollected": 0, "final": False},
+                ])
+                path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+                candidate = device.summarize(root)
+            for key in ("in_app_perf", "in_app_summary", "metrics"):
+                self.assertEqual(candidate[key], control[key])
+
 
     def test_h2_summary_uses_device_clock_and_separates_counters(self):
         with tempfile.TemporaryDirectory() as temp:

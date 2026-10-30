@@ -769,7 +769,7 @@ def summarize(run_dir):
     frame_rows = [
         r
         for r in perf
-        if r.get("type") not in ("summary",)
+        if r.get("type") not in ("summary", "presented", "presented_summary")
         and any(
             isinstance(v, (int, float))
             for k, v in r.items()

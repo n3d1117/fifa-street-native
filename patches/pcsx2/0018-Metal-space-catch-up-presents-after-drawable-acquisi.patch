@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 25 Oct 2026 08:58:26 +0100
-Subject: [PATCH 18/19] Metal: space catch-up presents after drawable
+Subject: [PATCH 18/20] Metal: space catch-up presents after drawable
  acquisition completes
 
 The flood guard recorded time before nextDrawable, crediting a blocked drawable-pool wait as spacing for the next catch-up field. On Apple TV this repeated a 16.6 ms drawable wait per field and starved EE guest execution through the previous-VSync fence. Record successful acquisition completion instead; the next catch-up field can skip host presentation while GS state and Merge still run. Keep the existing 8 ms threshold and MIN_US=0 kill switch. The disabled control froze during the intro; the enabled 3x/8 NTSC route sustained over 100 seconds of live play at 56.37 fps, 27.79% late frames, 464 underrun frames and zero pipeline compiles. macOS retained 60.0 NTSC / 50.0 PAL and zero underruns; the iPhone route remained live.

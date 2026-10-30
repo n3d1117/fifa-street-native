@@ -169,6 +169,12 @@ typedef struct RrvPcsx2GsPerfFrame {
 typedef void (*RrvPcsx2GsPerfCallback)(const RrvPcsx2GsPerfFrame*, void*);
 RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_set_perf_callback(
     RrvPcsx2GsPerfCallback callback, void* context);
+// Called synchronously before presentation scheduling on the GS owner. The
+// opaque drawable is valid for this call only. Registered asynchronous blocks
+// and their captured storage must belong to the host, which outlives the bridge.
+typedef void (*RrvPcsx2GsPresentedRegister)(void* drawable, uint64_t field);
+RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_set_presented_register(
+    RrvPcsx2GsPresentedRegister callback);
 typedef void (*RrvPcsx2GsHostPresentCallback)(int active);
 RRV_PCSX2_GS_BRIDGE_API void rrv_pcsx2_gs_bridge_set_host_present_callback(
     RrvPcsx2GsHostPresentCallback callback);

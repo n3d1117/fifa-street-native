@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
 #include <TargetConditionals.h>
 #include <mach/mach.h>
 #include <mach/thread_info.h>
@@ -18,6 +19,9 @@
 #include "runtime/ps2_perf.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <memory>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -49,6 +53,76 @@ double threadCpu(thread_t thread) {
     return info.user_time.seconds + info.system_time.seconds +
         (info.user_time.microseconds + info.system_time.microseconds) * 1e-6;
 }
+// A slot is reserved before its single Metal callback is installed. Callback
+// threads publish different slots; the writer alone recycles ready slots.
+struct PresentedQueue : std::enable_shared_from_this<PresentedQueue> {
+    static constexpr size_t capacity = 4096;
+    static_assert(std::atomic<uint32_t>::is_always_lock_free);
+    struct Event {
+        uint64_t id = 0, field = 0;
+        double submitted = 0, presented = 0;
+    };
+    struct Slot {
+        std::atomic<uint32_t> state{0}; // free, reserved, ready
+        Event event;
+    };
+    std::array<Slot, capacity> slots;
+    std::mutex enrollment;
+    bool accepting = true;
+    size_t cursor = 0;
+    std::atomic<uint64_t> attempted{0}, registered{0}, lost{0};
+
+    void complete(Slot* slot, double at) noexcept {
+        slot->event.presented = at;
+        slot->state.store(2, std::memory_order_release);
+    }
+    void record(void* opaque, uint64_t field) {
+        std::lock_guard lock(enrollment);
+        if (!accepting) return;
+        const uint64_t presentId = attempted.fetch_add(1, std::memory_order_relaxed) + 1;
+        Slot* slot = nullptr;
+        for (size_t i = 0; i < capacity; ++i) {
+            Slot& candidate = slots[cursor++ % capacity];
+            uint32_t free = 0;
+            if (candidate.state.compare_exchange_strong(free, 1, std::memory_order_acquire)) {
+                slot = &candidate;
+                break;
+            }
+        }
+        if (!slot) {
+            lost.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        slot->event = {presentId, field, monotonic(), 0};
+        registered.fetch_add(1, std::memory_order_relaxed);
+        const auto owner = shared_from_this();
+        id<MTLDrawable> drawable = (__bridge id<MTLDrawable>)opaque;
+        if (@available(macOS 10.15.4, iOS 10.3, tvOS 10.2, *)) {
+            [drawable addPresentedHandler:^(id<MTLDrawable> shown) {
+                owner->complete(slot, shown.presentedTime);
+            }];
+        }
+    }
+    void close() {
+        std::lock_guard lock(enrollment);
+        accepting = false;
+    }
+    std::vector<Event> drain() {
+        std::vector<Event> events;
+        events.reserve(capacity);
+        for (Slot& slot : slots) {
+            if (slot.state.load(std::memory_order_acquire) != 2) continue;
+            events.push_back(slot.event);
+            slot.state.store(0, std::memory_order_release);
+        }
+        std::sort(events.begin(), events.end(), [](const Event& a, const Event& b) {
+            const double ta = std::isfinite(a.presented) ? a.presented : 0;
+            const double tb = std::isfinite(b.presented) ? b.presented : 0;
+            return ta == tb ? a.id < b.id : ta < tb;
+        });
+        return events;
+    }
+};
 struct Row {
     RrvPcsx2GsPerfFrame gs;
     double cpu = -1, vu1 = 0, submit = 0, drainWait = 0, audioAdvanceGap = 0, streamFullWait = 0;
@@ -68,6 +142,9 @@ struct PerfLog {
     std::mutex mutex;
     std::condition_variable wake;
     std::vector<Row> pending;
+    std::shared_ptr<PresentedQueue> presented;
+    uint64_t presentedCollected = 0, presentedZero = 0, presentedInvalid = 0, presentedOutOfOrder = 0;
+    double latestPresented = 0;
     std::unordered_map<uint64_t, Row> inFlight;
     std::thread writer;
     std::atomic<bool> running{true};
@@ -235,6 +312,30 @@ struct PerfLog {
         std::fwrite([bytes bytes], 1, [bytes length], file);
         std::fputc('\n', file);
     }
+    void writePresented(bool stopping) {
+        if (!presented) return;
+        const auto events = presented->drain();
+        for (const auto& event : events) {
+            const bool valid = std::isfinite(event.presented) && event.presented >= 0;
+            const bool outOfOrder = valid && event.presented > 0 && event.presented < latestPresented;
+            if (outOfOrder) ++presentedOutOfOrder;
+            if (!valid) ++presentedInvalid;
+            else if (event.presented == 0) ++presentedZero;
+            else latestPresented = std::max(latestPresented, event.presented);
+            ++presentedCollected;
+            // submitted_t is steady_clock; presented_time is Metal's host
+            // clock. Match CPU windows by game_frame, not by absolute epochs.
+            write(@{@"type": @"presented", @"present_id": @(event.id), @"game_frame": @(event.field),
+                @"submitted_t": @(event.submitted), @"presented_time": valid ? @(event.presented) : (id)[NSNull null],
+                @"out_of_order": @(outOfOrder)});
+        }
+        const uint64_t registered = presented->registered.load(std::memory_order_relaxed);
+        write(@{@"type": @"presented_summary", @"t": @(monotonic()), @"final": @(stopping),
+            @"attempted": @(presented->attempted.load(std::memory_order_relaxed)), @"registered": @(registered),
+            @"lost": @(presented->lost.load(std::memory_order_relaxed)), @"collected": @(presentedCollected),
+            @"zero": @(presentedZero), @"invalid": @(presentedInvalid), @"out_of_order": @(presentedOutOfOrder),
+            @"uncollected": @(registered - presentedCollected)});
+    }
     void run() {
         pthread_setname_np("PerfLog");
         double last = monotonic();
@@ -307,6 +408,7 @@ struct PerfLog {
                     if (!stopping) refreshNativeThreads();
                 }
                 write(summary);
+                writePresented(stopping);
                 std::fflush(file);
                 last = now;
             }
@@ -371,6 +473,9 @@ struct PerfLog {
     }
 };
 PerfLog* s_log = nullptr;
+void registerPresented(void* drawable, uint64_t field) {
+    if (s_log && s_log->presented) s_log->presented->record(drawable, field);
+}
 void frameCallback(const RrvPcsx2GsPerfFrame* frame, void* context) {
     if (frame && frame->struct_size == sizeof(*frame) && context)
         static_cast<PerfLog*>(context)->frame(*frame);
@@ -413,13 +518,21 @@ void ps2x_perf_start(const std::filesystem::path& userDirectory,
         if (parsed >= 2 && parsed <= 1000) s_log->nativeIntervalMs = parsed;
     }
 #endif
+    const char* actual = std::getenv("PS2X_PERF_PRESENTED");
+    if (!actual || std::strcmp(actual, "0") != 0) {
+        if (@available(macOS 10.15.4, iOS 10.3, tvOS 10.2, *))
+            s_log->presented = std::make_shared<PresentedQueue>();
+    }
     s_log->pending.reserve(8192);
     s_log->writer = std::thread([log = s_log] { log->run(); });
     rrv_pcsx2_gs_bridge_set_perf_callback(frameCallback, s_log);
+    if (s_log->presented) rrv_pcsx2_gs_bridge_set_presented_register(registerPresented);
     std::fprintf(stderr, "[perf] frames -> %s\n", (directory / "frames.jsonl").c_str());
 }
 void ps2x_perf_stop() {
     if (!s_log) return;
+    rrv_pcsx2_gs_bridge_set_presented_register(nullptr);
+    if (s_log->presented) s_log->presented->close();
     {
         std::lock_guard lock(s_log->mutex);
         if (!s_log->running.exchange(false)) return;
