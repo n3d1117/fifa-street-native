@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 25 Oct 2026 06:47:47 +0100
-Subject: [PATCH 108/111] hang dump: show who runs, and who signals a semaphore
+Subject: [PATCH 108/112] hang dump: show who runs, and who signals a semaphore
 
 A guest thread that never blocks starves every lower-priority thread, and the
 thread list alone cannot show it. The dump now samples the running thread id

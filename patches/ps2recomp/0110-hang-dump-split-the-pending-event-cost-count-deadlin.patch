@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 25 Oct 2026 08:17:56 +0100
-Subject: [PATCH 110/111] hang dump: split the pending-event cost, count
+Subject: [PATCH 110/112] hang dump: split the pending-event cost, count
  deadlines
 
 The frozen Apple TV read events_ms=858-870, and the deadline bookkeeping was the

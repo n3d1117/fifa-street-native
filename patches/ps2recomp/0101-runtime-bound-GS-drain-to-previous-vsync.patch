@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Fri, 23 Oct 2026 12:17:23 +0200
-Subject: [PATCH 101/111] runtime: bound GS drain to previous vsync
+Subject: [PATCH 101/112] runtime: bound GS drain to previous vsync
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

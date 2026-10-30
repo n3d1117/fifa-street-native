@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Sun, 25 Oct 2026 08:58:26 +0100
-Subject: [PATCH 111/111] runtime: sample live data-worker op dwell in hang
+Subject: [PATCH 111/112] runtime: sample live data-worker op dwell in hang
  dumps
 
 Publish an atomic op/start stamp only for EE profiling or timed state dumps. Sample live op ages separately from the cached EE snapshot so repeated ring positions cannot be mistaken for a wedged worker. The tvOS reproduction showed repeated GsVsync operations, usually about one field old, rather than a seconds-long readback op. Full runtime test tier passes (60 tests); macOS NTSC/PAL and physical iOS/tvOS routes exercised the diagnostics and disabled path.

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: ned <github@edoardo.fyi>
 Date: Tue, 20 Oct 2026 05:31:39 +0200
-Subject: [PATCH 075/111] Pad: accept diagnostic analog directions
+Subject: [PATCH 075/112] Pad: accept diagnostic analog directions
 
 
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp

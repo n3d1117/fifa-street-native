@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ned <github@edoardo.fyi>
+Date: Fri, 30 Oct 2026 10:12:14 +0100
+Subject: [PATCH 112/112] runtime: skip redundant native VU FMAC boundary
+ correction
+
+Retain separate FP32 multiply/add rounding. For signed zero or unbiased
+exponents [-30,30], exact nonzero sums lie on the 2^-106 lattice below
+2^63; exact cancellation has a float-representable product and the same
+zero sign. Keep legacy correction for every other input.
+
+PS2X_VU1_FMAC_FAST=0 restores the old path; verify compares all result bits.
+Boundary/random tests cover rounding modes, FZ, signed zero and OPMSUB.
+
+Apple TV 1x/off, two ABBA pairs, 120 s excluded + 210 s measured:
+VU p50 9.103 -> 7.843 ms (-13.8%; control spread 0.345 ms), p95
+15.422 -> 12.629 ms (-18.1%; spread 1.953 ms). CPU submission cadence
+51.23 -> 52.43 fps remains inside 3.70 fps control spread. All comparison
+runs had zero audio underruns and runtime compiles. Long device bit
+verification found no differences. Full tests and 60 s Mac route pass.
+
+diff --git a/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h b/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h
+index 1717128785e1259ab3145a50c9fba12f9e60ad50..ecc09deb8a03817f614e4d1f669faea15e5f6511 100644
+--- a/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h
++++ b/ps2xRuntime/include/runtime/ps2_vu1_recomp_support.h
+@@ -17,6 +17,8 @@
+ #include <cfenv>
+ #include <cmath>
+ #include <cstdint>
++#include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ 
+@@ -119,7 +121,7 @@ static inline float vr_fmac_exact_override(float rounded, float a, float s, floa
+         return vr_bits2f(sign | 0x7F7FFFFFu);
+     return rounded;
+ }
+-static inline float32x4_t vr_fmac_override(float32x4_t rounded, float32x4_t acc,
++static inline float32x4_t vr_fmac_override_legacy(float32x4_t rounded, float32x4_t acc,
+                                             float32x4_t s, float32x4_t t, bool subtract)
+ {
+     const float64x2_t minNormal = vdupq_n_f64(static_cast<double>(std::numeric_limits<float>::min()));
+@@ -148,6 +150,87 @@ static inline float32x4_t vr_fmac_override(float32x4_t rounded, float32x4_t acc,
+     return vcombine_f32(correct(vget_low_f32(rounded), vget_low_f32(acc), vget_low_f32(s), vget_low_f32(t)),
+                         correct(vget_high_f32(rounded), vget_high_f32(acc), vget_high_f32(s), vget_high_f32(t)));
+ }
++using Vu1FmacLegacy = float32x4_t (*)(float32x4_t, float32x4_t, float32x4_t, float32x4_t, bool);
++
++enum class Vu1FmacMode { legacy, fast, verify };
++inline const Vu1FmacMode vr_fmac_mode = [] {
++    const char *value = std::getenv("PS2X_VU1_FMAC_FAST");
++    if (value && std::strcmp(value, "0") == 0)
++        return Vu1FmacMode::legacy;
++    if (value && std::strcmp(value, "verify") == 0)
++        return Vu1FmacMode::verify;
++    return Vu1FmacMode::fast;
++}();
++
++static inline bool vr_fmac_bounded(float32x4_t acc, float32x4_t s, float32x4_t t)
++{
++    const auto magnitude = [](float32x4_t v) {
++        return vandq_u32(vreinterpretq_u32_f32(v), vdupq_n_u32(0x7FFFFFFFu));
++    };
++    const auto bounded = [&](float32x4_t v) {
++        const uint32x4_t bits = magnitude(v);
++        const uint32x4_t exponent = vshrq_n_u32(bits, 23);
++        return vorrq_u32(vceqzq_u32(bits),
++                         vcleq_u32(vsubq_u32(exponent, vdupq_n_u32(97)), vdupq_n_u32(60)));
++    };
++    const uint32x4_t good = vandq_u32(vandq_u32(bounded(acc), bounded(s)), bounded(t));
++    // Zero or unbiased exponents [-30,30] put nonzero exact sums on the
++    // 2^-106 lattice below 2^63, so FP64
++    // correction cannot see float underflow/overflow. Exact cancellation
++    // requires a float-representable product, so both precisions multiply
++    // exactly and their zero signs agree under every rounding mode.
++    return vminvq_u32(good) != 0;
++}
++
++[[gnu::noinline]] inline float32x4_t vr_fmac_verify(float32x4_t result, float32x4_t rounded,
++                                                  float32x4_t acc, float32x4_t s,
++                                                  float32x4_t t, bool subtract, bool fast, Vu1FmacLegacy legacy)
++{
++    std::fenv_t candidateEnv;
++    if (std::fegetenv(&candidateEnv) != 0)
++        std::abort();
++    const float32x4_t reference = legacy(rounded, acc, s, t, subtract);
++    if (std::fesetenv(&candidateEnv) != 0)
++        std::abort();
++    if (vmaxvq_u32(veorq_u32(vreinterpretq_u32_f32(result), vreinterpretq_u32_f32(reference))) != 0)
++    {
++        uint32_t actual[4], expected[4], a[4], x[4], y[4];
++        vst1q_u32(actual, vreinterpretq_u32_f32(result));
++        vst1q_u32(expected, vreinterpretq_u32_f32(reference));
++        vst1q_u32(a, vreinterpretq_u32_f32(acc));
++        vst1q_u32(x, vreinterpretq_u32_f32(s));
++        vst1q_u32(y, vreinterpretq_u32_f32(t));
++        for (unsigned lane = 0; lane < 4; ++lane)
++            std::fprintf(stderr, "[vu1-fmac] mismatch sub=%d fast=%d lane=%u a=%08x s=%08x t=%08x actual=%08x expected=%08x\n",
++                         subtract, fast, lane, a[lane], x[lane], y[lane], actual[lane], expected[lane]);
++        std::abort();
++    }
++    struct Counts { uint64_t fast = 0, fallback = 0; };
++    static thread_local Counts counts;
++    if (fast)
++        ++counts.fast;
++    else
++        ++counts.fallback;
++    const uint64_t total = counts.fast + counts.fallback;
++    if (total == 1 || (total & ((1u << 20) - 1u)) == 0)
++        std::fprintf(stderr, "[vu1-fmac] verified fast=%llu fallback=%llu\n",
++                     static_cast<unsigned long long>(counts.fast),
++                     static_cast<unsigned long long>(counts.fallback));
++    return result;
++}
++
++static inline float32x4_t vr_fmac_override(float32x4_t rounded, float32x4_t acc,
++                                            float32x4_t s, float32x4_t t, bool subtract)
++{
++    if (vr_fmac_mode == Vu1FmacMode::legacy)
++        return vr_fmac_override_legacy(rounded, acc, s, t, subtract);
++    const bool fast = vr_fmac_bounded(acc, s, t);
++    const float32x4_t result = fast ? rounded : vr_fmac_override_legacy(rounded, acc, s, t, subtract);
++    if (vr_fmac_mode == Vu1FmacMode::verify)
++        return vr_fmac_verify(result, rounded, acc, s, t, subtract, fast, vr_fmac_override_legacy);
++    return result;
++}
++
+ static inline float32x4_t vr_madd(float32x4_t acc, float32x4_t s, float32x4_t t)
+ {
+     return vr_fmac_override(vaddq_f32(acc, vmulq_f32(s, t)), acc, s, t, false);
+diff --git a/ps2xTest/src/ps2_vu_tests.cpp b/ps2xTest/src/ps2_vu_tests.cpp
+index abb2e74c932293816fd8bfc00615c4cff4d45ada..c6f71199bf75c4f9f11d405caf3d217835806001 100644
+--- a/ps2xTest/src/ps2_vu_tests.cpp
++++ b/ps2xTest/src/ps2_vu_tests.cpp
+@@ -259,6 +259,95 @@ void register_ps2_vu_tests()
+             }
+             t.IsTrue(matches, "NEON FMAC override must match scalar exact handling bit-for-bit for all rounding modes");
+         });
++
++        tc.Run("FmacBounded_matches_legacy_with_zero_signs_and_permutations", [](TestCase &t)
++        {
++            FenvRestore restore;
++            struct FpcrRestore
++            {
++                uint64_t saved;
++                FpcrRestore() { asm volatile("mrs %0, fpcr" : "=r"(saved)); }
++                ~FpcrRestore() { asm volatile("msr fpcr, %0" : : "r"(saved)); }
++            } fpcr;
++            constexpr int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
++            uint32_t state = 0xF1FA1234u;
++            auto next = [&] {
++                state ^= state << 13;
++                state ^= state >> 17;
++                state ^= state << 5;
++                return state;
++            };
++            auto equal = [](float32x4_t a, float32x4_t b) {
++                return vmaxvq_u32(veorq_u32(vreinterpretq_u32_f32(a), vreinterpretq_u32_f32(b))) == 0;
++            };
++            bool matches = true;
++            uint64_t fast = 0, fallback = 0;
++            bool guardCoverage = true;
++            for (int mode : modes)
++            {
++                if (std::fesetround(mode) != 0)
++                {
++                    matches = false;
++                    break;
++                }
++                uint64_t modeFpcr;
++                asm volatile("mrs %0, fpcr" : "=r"(modeFpcr));
++                for (unsigned fz = 0; fz < 2; ++fz)
++                {
++                    const uint64_t control = (modeFpcr & ~(1ull << 24)) | (uint64_t(fz) << 24);
++                    asm volatile("msr fpcr, %0" : : "r"(control));
++                    for (unsigned sample = 0; sample < 8192 && matches; ++sample)
++                    {
++                        uint32_t a[4], s[4], v[4];
++                        for (unsigned lane = 0; lane < 4; ++lane)
++                        {
++                            auto bounded = [&] { return (next() & 0x807FFFFFu) | ((97 + next() % 61) << 23); };
++                            a[lane] = bounded(); s[lane] = bounded(); v[lane] = bounded();
++                            if (sample < 16)
++                            {
++                                a[lane] = (sample & 1) << 31;
++                                s[lane] = (sample & 2) << 30;
++                                v[lane] = (sample & 4) << 29;
++                                if (sample & 8)
++                                    v[lane] |= 0x3F800000u;
++                            }
++                            else if ((sample & 7) == 0)
++                            {
++                                a[lane] = s[lane] ^ 0x80000000u;
++                                v[lane] = 0x3F800000u;
++                            }
++                            else if ((sample & 7) == 1)
++                                s[lane] = 0x00800000u;
++                        }
++                        const auto va = vreinterpretq_f32_u32(vld1q_u32(a));
++                        const auto vs = vreinterpretq_f32_u32(vld1q_u32(s));
++                        const auto vt = vreinterpretq_f32_u32(vld1q_u32(v));
++                        for (bool sub : {false, true})
++                        {
++                            const auto product = vmulq_f32(vs, vt);
++                            const auto rounded = sub ? vsubq_f32(va, product) : vaddq_f32(va, product);
++                            const bool hit = vr_fmac_bounded(va, vs, vt);
++                            if (sample < 16 || (sample & 7) == 0)
++                                guardCoverage &= hit;
++                            else if ((sample & 7) == 1)
++                                guardCoverage &= !hit;
++                            hit ? ++fast : ++fallback;
++                            const auto candidate = hit ? rounded : vr_fmac_override_legacy(rounded, va, vs, vt, sub);
++                            const auto reference = vr_fmac_override_legacy(rounded, va, vs, vt, sub);
++                            matches &= equal(candidate, reference);
++                            matches &= equal(sub ? vr_msub(va, vs, vt) : vr_madd(va, vs, vt), reference);
++                        }
++                        const auto sx = vr_yzxw(vs), tx = vr_zxyw(vt);
++                        const auto rounded = vsubq_f32(va, vmulq_f32(sx, tx));
++                        const auto reference = vsetq_lane_f32(0.0f, vr_fmac_override_legacy(rounded, va, sx, tx, true), 3);
++                        matches &= equal(vr_opmsub(va, vs, vt), reference);
++                    }
++                }
++            }
++            t.IsTrue(matches, "bounded FMAC, MADD/MSUB and OPMSUB must preserve all four result bits across rounding/FZ modes");
++            t.IsTrue(fast > 0 && fallback > 0, "exercise both bounded and legacy paths");
++            t.IsTrue(guardCoverage, "bounded cancellation and signed zeros must take the fast path; out-of-range operands must fall back");
++        });
+ #endif
+ 
+         tc.Run("ScaleVectorXYZ_scales_xyz", [](TestCase &t)
