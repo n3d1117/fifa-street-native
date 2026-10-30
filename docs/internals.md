@@ -125,6 +125,8 @@ A background worker compiles through the ordinary Metal pipeline path. Pipeline 
 
 ## Performance telemetry
 
+Device commands resolve tunnel endpoints through RSD `Properties.UniqueDeviceID` and `ProductType`. RemotePairing UUIDs are aliases; signing, saved state and data paths use the physical UDID. App and provisioning commands use the authenticated tunnel explicitly, so Wi-Fi-only Apple TVs do not require a usbmux listing. Regenerate the connection check with `./rx device doctor --udid <physical-udid>`.
+
 DVT collectors are owned by the run and terminated/reaped on failure or interruption. Process monitoring stops when its selected game exits and has a bounded duration; stale sessions otherwise continue sampling every device process even with a PID filter. Devices without battery temperature skip the temperature-based cooldown and report it unavailable. Summary analysis selects the last settings startup marker from an appended native log; the pulled log itself retains every launch.
 
 `./rx device run|ab|baseline|coverage --no-device-telemetry` keeps in-app perf and selected screenshots but omits continuous DVT graphics/process collection and battery polls. Use it for lightly instrumented cadence and audio investigations; screenshot calls still perturb their own intervals. `run.json` records whether external telemetry was enabled.

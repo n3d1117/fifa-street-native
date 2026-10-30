@@ -25,6 +25,7 @@ DEFAULT_APP = ROOT / "build/embedded/iphoneos/FIFA Street PS2.app"
 CONFIG = Path.home() / ".config/rx/device.json"
 STATE = ROOT / "build/device/state.json"
 TUNNEL_URL = os.environ.get("RX_TUNNEL_URL", "http://127.0.0.1:49151")
+_TUNNEL_INFO = {}
 
 
 class Missing(Exception):
@@ -101,26 +102,59 @@ def configured_udid():
 
 def choose_udid(requested=None):
     devices = tunnel_devices()
-    ids = sorted(devices) if isinstance(devices, dict) else []
+    aliases = {}
+    resolved = {}
+    unresolved = []
+    if isinstance(devices, dict):
+        for alias, endpoints in devices.items():
+            found = False
+            for endpoint in endpoints if isinstance(endpoints, list) else []:
+                try:
+                    address, port = endpoint["tunnel-address"], endpoint["tunnel-port"]
+                    if not isinstance(address, str) or not address or not 0 < int(port) < 65536:
+                        continue
+                    key = (address, int(port))
+                    if key not in resolved:
+                        result = pmd("remote", "rsd-info", "--rsd", address, str(port),
+                                     timeout=15, check=False)
+                        resolved[key] = json.loads(result.stdout)["Properties"] if not result.returncode else {}
+                    info = resolved[key]
+                    identity = info["UniqueDeviceID"]
+                    product = info["ProductType"]
+                    if not isinstance(identity, str) or not identity or not isinstance(product, str) or not product:
+                        continue
+                except (Failed, ValueError, KeyError, TypeError):
+                    continue
+                if alias == identity or re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", alias):
+                    aliases[alias] = identity
+                aliases[identity] = identity
+                _TUNNEL_INFO[identity] = info
+                found = True
+                break
+            if not found:
+                unresolved.append(alias)
+    ids = sorted(set(aliases.values()))
     requested = requested or configured_udid()
     if requested:
-        if requested not in ids:
+        if requested not in aliases:
             raise Missing(
-                f"device {requested} is not listed by tunneld -> connect and pair it, then retry"
+                f"device {requested} is not resolved by tunneld -> check its paired tunnel, then retry"
             )
-        return requested
-    if len(ids) != 1:
+        return aliases[requested]
+    if len(ids) != 1 or unresolved:
         raise Missing(
-            f"tunneld lists {len(ids)} devices -> pass --udid from: {', '.join(ids) or '(none)'}"
+            f"tunneld resolves {len(ids)} devices ({len(unresolved)} unavailable) -> pass --udid from: {', '.join(ids) or '(none)'}"
         )
     return ids[0]
 
 
 def global_device_args(udid):
-    return ["--udid", udid]
+    return ["--tunnel", udid]
 
 
 def product_type(udid):
+    if udid in _TUNNEL_INFO:
+        return str(_TUNNEL_INFO[udid].get("ProductType", ""))
     devices = pmd("usbmux", "list", timeout=15).stdout
     try:
         rows = json.loads(devices)
@@ -331,9 +365,6 @@ def state_write(data):
 def do_doctor(udid_arg):
     exe = cli()
     udid = choose_udid(udid_arg)
-    listed = pmd("usbmux", "list", timeout=15).stdout
-    if udid not in listed:
-        raise Failed(f"device {udid} is not paired/listed by usbmuxd")
     status = pmd(
         "amfi",
         "developer-mode-status",

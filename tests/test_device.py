@@ -18,6 +18,78 @@ import probe
 
 
 class DeviceHarnessTests(unittest.TestCase):
+    def test_remote_pairing_uses_physical_identity_and_tv_paths(self):
+        endpoints = [{"tunnel-address": "fd00::1", "tunnel-port": 5000}]
+        properties = {"UniqueDeviceID": "physical-tv", "ProductType": "AppleTV14,1"}
+        reply = SimpleNamespace(stdout=json.dumps({"Properties": properties}), returncode=0)
+        for requested in ("66682080-B7F2-44C6-B7CD-A176ECF457B8", "physical-tv", None):
+            with self.subTest(requested=requested), \
+                 patch.dict(device._TUNNEL_INFO, {}, clear=True), \
+                 patch.object(device, "configured_udid", return_value=None), \
+                 patch.object(device, "tunnel_devices", return_value={"66682080-B7F2-44C6-B7CD-A176ECF457B8": endpoints}), \
+                 patch.object(device, "pmd", return_value=reply) as pmd:
+                identity = device.choose_udid(requested)
+                self.assertEqual(identity, "physical-tv")
+                self.assertEqual(device.global_device_args(identity), ["--tunnel", "physical-tv"])
+                self.assertEqual(device.remote_paths(identity)["game"], "Library/Caches")
+                self.assertEqual(device.default_app(identity),
+                                 device.ROOT / "build/embedded/appletvos/FIFA Street PS2.app")
+                self.assertEqual(pmd.call_count, 1)
+
+    def test_tunnel_aliases_deduplicate_and_never_select_a_different_device(self):
+        endpoints = [{"tunnel-address": "fd00::1", "tunnel-port": 5000}]
+        reply = SimpleNamespace(stdout=json.dumps({"Properties": {
+            "UniqueDeviceID": "physical-tv", "ProductType": "AppleTV14,1"}}), returncode=0)
+        with patch.dict(device._TUNNEL_INFO, {}, clear=True), \
+             patch.object(device, "configured_udid", return_value=None), \
+             patch.object(device, "tunnel_devices", return_value={
+                 "66682080-B7F2-44C6-B7CD-A176ECF457B8": endpoints, "physical-tv": endpoints}), \
+             patch.object(device, "pmd", return_value=reply):
+            self.assertEqual(device.choose_udid(), "physical-tv")
+            with self.assertRaises(device.Missing):
+                device.choose_udid("different-tv")
+
+    def test_tunnel_identity_requires_a_successful_rsd_response(self):
+        endpoints = [{"tunnel-address": "fd00::1", "tunnel-port": 5000}]
+        for stdout, code in (("invalid", 0), ("{}", 0),
+                             ('{"Properties":{"UniqueDeviceID":""}}', 0),
+                             ('{"Properties":{"UniqueDeviceID":"physical-tv"}}', 0),
+                             ('{"Properties":{"UniqueDeviceID":"wrong"}}', 1)):
+            with self.subTest(stdout=stdout, code=code), \
+                 patch.dict(device._TUNNEL_INFO, {}, clear=True), \
+                 patch.object(device, "configured_udid", return_value=None), \
+                 patch.object(device, "tunnel_devices", return_value={"66682080-B7F2-44C6-B7CD-A176ECF457B8": endpoints}), \
+                 patch.object(device, "pmd", return_value=SimpleNamespace(stdout=stdout, returncode=code)):
+                with self.assertRaises(device.Missing):
+                    device.choose_udid("66682080-B7F2-44C6-B7CD-A176ECF457B8")
+
+    def test_stale_tunnel_cannot_mask_explicit_target_or_enable_auto_selection(self):
+        reply = SimpleNamespace(stdout=json.dumps({"Properties": {
+            "UniqueDeviceID": "physical-tv", "ProductType": "AppleTV14,1"}}), returncode=0)
+        def pmd(*args, **kwargs):
+            if "stale" in args:
+                raise device.Failed("timed out")
+            return reply
+        with patch.dict(device._TUNNEL_INFO, {}, clear=True), \
+             patch.object(device, "configured_udid", return_value=None), \
+             patch.object(device, "tunnel_devices", return_value={
+                 "offline": [None, {}, {"tunnel-address": "stale", "tunnel-port": 5000}],
+                 "physical-tv": [{"tunnel-address": "healthy", "tunnel-port": 5001}]}), \
+             patch.object(device, "pmd", side_effect=pmd):
+            self.assertEqual(device.choose_udid("physical-tv"), "physical-tv")
+            with self.assertRaises(device.Missing):
+                device.choose_udid()
+
+    def test_stale_physical_tunnel_alias_cannot_redirect_target(self):
+        reply = SimpleNamespace(stdout=json.dumps({"Properties": {
+            "UniqueDeviceID": "other-tv", "ProductType": "AppleTV14,1"}}), returncode=0)
+        with patch.dict(device._TUNNEL_INFO, {}, clear=True), \
+             patch.object(device, "tunnel_devices", return_value={"physical-tv": [
+                 {"tunnel-address": "fd00::1", "tunnel-port": 5000}]}), \
+             patch.object(device, "pmd", return_value=reply):
+            with self.assertRaises(device.Missing):
+                device.choose_udid("physical-tv")
+
     def test_run_can_skip_device_telemetry_and_keep_capture_outputs(self):
         for quiet in (False, True):
             with self.subTest(no_device_telemetry=quiet), tempfile.TemporaryDirectory() as temp:
