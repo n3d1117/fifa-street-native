@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Build a self-contained, ad-hoc-signed macOS app bundle whose main executable is the Metal runner itself.
-
-Generates the icon, builds build/dist/<app_name>.app (names from config/game.json), audits it (no disc image or game ELF outside
-Resources/game, no Mach-O with /Users, Downloads or tools/build paths, arm64 only) and with --install
-replaces /Applications/<app_name>.app (previous copy goes to the Trash).
-"""
+"""Create a self-contained macOS app from the native build and extracted disc."""
 import argparse
 from datetime import datetime
-import hashlib
-import json
 import os
 from pathlib import Path
 import plistlib
@@ -19,35 +12,22 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-import game  # noqa: E402
+from game import GAME
 
-GAME = game.GAME
 APP_NAME = GAME["app_name"]
-NATIVE = Path(os.environ.get("RX_NATIVE_TOOLS_ROOT") or ROOT)
-RUNNER_DEFAULT = ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner"
-BRIDGE_DEFAULT = ROOT / "build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"
-BRIDGE_RESOURCES_DEFAULT = BRIDGE_DEFAULT.parent / "resources"
-LLVM_LIB = Path(os.environ.get("RX_LLVM") or NATIVE / "tools/build/llvm19") / "lib"
-ICON_DEFAULT = ROOT / "build/AppIcon.icns"
-GAME_DEFAULT = ROOT / "extracted/disc"
-OUTPUT_DEFAULT = ROOT / "build" / "dist" / (APP_NAME + ".app")
+EXECUTABLE = GAME["executable"]
 BRIDGE_NAME = "librrv-pcsx2-gs-bridge.dylib"
-EXECUTABLE = GAME["executable"]  # the game itself: one process, no launcher
-
+RUNNER = ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner"
+BRIDGE = ROOT / "build/metal-bridge/pcsx2/pcsx2-gs-bridge" / BRIDGE_NAME
+LLVM_LIB = Path(os.environ.get("RX_LLVM") or ROOT / "tools/build/llvm19") / "lib"
+OUTPUT = ROOT / "build/dist" / (APP_NAME + ".app")
+MACHO_MAGIC = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+BAD_PATH = re.compile(r"/Users/|tools/build|[Dd]ownloads")
 
 def run(args, capture=False):
     return subprocess.run([str(x) for x in args], check=True, text=True,
                           stdout=subprocess.PIPE if capture else None,
                           stderr=subprocess.PIPE if capture else None)
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
 
 def copy_fresh(source, destination):
     source, destination = Path(source), Path(destination)
@@ -56,15 +36,12 @@ def copy_fresh(source, destination):
     if os.path.samefile(source, destination):
         raise RuntimeError("copy unexpectedly aliases its source inode")
 
-
 def architectures(path):
     return run(["lipo", "-archs", path], capture=True).stdout.strip().split()
-
 
 def dependencies(path):
     lines = run(["otool", "-L", path], capture=True).stdout.splitlines()[1:]
     return [line.strip().split(" ", 1)[0] for line in lines if line.strip()]
-
 
 def rpaths(path):
     lines = run(["otool", "-l", path], capture=True).stdout.splitlines()
@@ -77,7 +54,6 @@ def rpaths(path):
                     result.append(fields[1])
                     break
     return result
-
 
 def ensure_app_dependency_closure(runner, bridge, runtime_dir, bundle_runner):
     image_rpaths = {
@@ -111,21 +87,19 @@ def ensure_app_dependency_closure(runner, bridge, runtime_dir, bundle_runner):
             if not any(candidate.exists() for candidate in candidates):
                 raise RuntimeError("unbundled non-system dependency: " + str(image) + " -> " + dependency)
 
-
 def write_info_plist(contents):
     values = {
         "CFBundleDevelopmentRegion": "en", "CFBundleExecutable": EXECUTABLE,
-        "CFBundleIconFile": "AppIcon.icns", "CFBundleIdentifier": GAME["bundle_id"],
+        "CFBundleIdentifier": GAME["bundle_id"],
         "CFBundleInfoDictionaryVersion": "6.0", "CFBundleName": APP_NAME,
         "CFBundlePackageType": "APPL", "CFBundleShortVersionString": "1.0",
-        "CFBundleVersion": "19", "LSMinimumSystemVersion": "11.0",
+        "CFBundleVersion": "1", "LSMinimumSystemVersion": "11.0",
         "LSApplicationCategoryType": "public.app-category.games",
         "LSSupportsGameMode": True,
         "NSPrincipalClass": "NSApplication",
     }
     with (contents / "Info.plist").open("wb") as stream:
         plistlib.dump(values, stream)
-
 
 def remove_tree(path):
     def writable(func, p, _):
@@ -135,30 +109,6 @@ def remove_tree(path):
         if p.is_dir() and not p.is_symlink():
             p.chmod(0o755)
     shutil.rmtree(path, onerror=writable)
-
-
-def make_icon():
-    """Draw the project icon with native commands (no game artwork) into build/AppIcon.icns."""
-    build = ROOT / "build"
-    iconset = build / "AppIcon.iconset"
-    tool = build / "package-tools/make-icon"
-    png = build / "AppIcon-1024.png"
-    source = ROOT / "tools/package/make-icon.m"
-    if ICON_DEFAULT.is_file() and ICON_DEFAULT.stat().st_mtime >= source.stat().st_mtime:
-        return
-    tool.parent.mkdir(parents=True, exist_ok=True)
-    iconset.mkdir(parents=True, exist_ok=True)
-    run(["xcrun", "clang", "-fobjc-arc", "-framework", "AppKit", source, "-o", tool])
-    run([tool, png])
-    for size in (16, 32, 128, 256, 512):
-        run(["sips", "-z", size, size, png, "--out", iconset / f"icon_{size}x{size}.png"], capture=True)
-        run(["sips", "-z", size * 2, size * 2, png, "--out", iconset / f"icon_{size}x{size}@2x.png"], capture=True)
-    run(["iconutil", "-c", "icns", iconset, "-o", ICON_DEFAULT])
-
-
-MACHO_MAGIC = {b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
-BAD_PATH = re.compile(r"/Users/|tools/build|[Dd]ownloads")
-
 
 def audit_bundle(app):
     """Return a list of problems; empty means the bundle is clean."""
@@ -185,7 +135,6 @@ def audit_bundle(app):
                 problems.append(f"{rel}: references {ref}")
     return problems
 
-
 def install(source, applications):
     source = Path(source).resolve(strict=True)
     run(["codesign", "--verify", "--deep", "--strict", source])
@@ -209,161 +158,69 @@ def install(source, applications):
     if backup:
         print("Previous app is recoverable in Trash:", backup)
 
-
 def remove_nonbundle_rpaths(image):
     for entry in rpaths(image):
         absolute = entry.startswith("/") and not entry.startswith(("/System/Library/", "/usr/lib/"))
         if absolute or BAD_PATH.search(entry) or "../../" in entry:  # also build-tree-relative entries such as @loader_path/../../tools/build
             run(["install_name_tool", "-delete_rpath", entry, image])
 
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runner", type=Path, default=RUNNER_DEFAULT,
-                        help="Metal ps2EntryRunner; never falls back to build/game")
-    parser.add_argument("--bridge", type=Path, default=BRIDGE_DEFAULT)
-    parser.add_argument("--bridge-resources", type=Path, default=BRIDGE_RESOURCES_DEFAULT)
-    parser.add_argument("--game-dir", type=Path, default=GAME_DEFAULT)
-    parser.add_argument("--icon", type=Path, default=ICON_DEFAULT)
-    parser.add_argument("--output", type=Path, default=OUTPUT_DEFAULT)
-    parser.add_argument("--install", action="store_true",
-                        help="move the audited bundle to /Applications (previous copy to the Trash)")
-    parser.add_argument("--applications", type=Path, default=Path("/Applications"))
-    parser.add_argument("--prepare-only", action="store_true",
-                        help="Create a visibly incomplete app scaffold without runner or 1 GB game assets")
+    parser.add_argument("--install", action="store_true")
     args = parser.parse_args()
-
-    if sys.platform != "darwin":
-        raise RuntimeError("App bundle packaging requires macOS")
-    output = args.output.resolve()
-    if output.exists():
-        if output.parent != OUTPUT_DEFAULT.parent:
-            raise RuntimeError("refusing to overwrite existing bundle: " + str(output))
-        remove_tree(output)  # build/dist/ holds only our own build product
-    if args.icon == ICON_DEFAULT:
-        make_icon()
-    if not args.icon.is_file():
-        raise RuntimeError("custom icon is missing; run without --icon to generate it: " + str(args.icon))
-    runner = args.runner.resolve()
-    if not args.prepare_only and not runner.is_file():
-        raise RuntimeError("Metal runner is not ready at the expected path; build it or pass --runner.")
-    if args.prepare_only and args.runner and runner.exists():
-        print("Scaffold mode requested; runner and game assets will not be staged.")
-
-    app = output
-    contents = app / "Contents"
+    game_dir = ROOT / "extracted/disc"
+    if not RUNNER.is_file() or not BRIDGE.is_file() or not (game_dir / GAME["elf"]).is_file():
+        raise RuntimeError("run ./rx disc <iso> and ./rx build first")
+    if any(path.is_symlink() for path in game_dir.rglob("*")):
+        raise RuntimeError("game extraction contains a symlink")
+    if OUTPUT.exists():
+        remove_tree(OUTPUT)
+    contents = OUTPUT / "Contents"
     macos = contents / "MacOS"
-    frameworks = contents / "Frameworks"
     resources = contents / "Resources"
-    macos.mkdir(parents=True)
-    resources.mkdir(parents=True)
-    (frameworks / "PCSX2GSBridge").mkdir(parents=True)
-    (frameworks / "Runtime").mkdir(parents=True)
+    frameworks = contents / "Frameworks"
+    runtime = frameworks / "Runtime"
+    for directory in (macos, resources, runtime, frameworks / "PCSX2GSBridge"):
+        directory.mkdir(parents=True, exist_ok=True)
     write_info_plist(contents)
-    copy_fresh(args.icon, resources / "AppIcon.icns")
-
-    manifest = {"bundle": str(app), "app_icon_sha256": sha256(resources / "AppIcon.icns"),
-                "release_readiness": "not established by packaging; requires actual Metal capability and gameplay reports"}
-    if args.prepare_only:
-        (resources / "PACKAGE_INCOMPLETE.txt").write_text(
-            "Scaffold only. No game ELF or runner is bundled. This is not a runnable or release-approved app.\n",
-            encoding="utf-8")
-        manifest.update({"runner_bundled": False, "game_assets_bundled": False, "release_ready": False})
-    else:
-        bridge = args.bridge.resolve()
-        bridge_resources = args.bridge_resources.resolve()
-        game_dir = args.game_dir.resolve()
-        game_elf = game_dir / GAME["elf"]
-        if not bridge.is_file() or not game_elf.is_file() or not bridge_resources.is_dir():
-            raise RuntimeError("runner, verified Metal bridge/resources, and extracted " + GAME["elf"] + " are required")
-        if "arm64" not in architectures(runner) or "arm64" not in architectures(bridge):
-            raise RuntimeError("runner and bridge must contain arm64 Mach-O slices")
-        runner_deps = dependencies(runner)
-        if not any(BRIDGE_NAME in dep for dep in runner_deps):
-            raise RuntimeError("runner does not link the PCSX2 GS Metal bridge; refusing a runner without the Metal bridge")
-        imports = run(["nm", "-u", runner], capture=True).stdout
-        if "rrv_pcsx2_gs_bridge_create" not in imports:
-            raise RuntimeError("runner does not import the PCSX2 GS bridge create API")
-        if not (bridge_resources / "pcsx2-metal-shaders.metal").is_file():
-            raise RuntimeError("bridge resources are incomplete (missing pcsx2-metal-shaders.metal)")
-        for name in ("libc++.1.0.dylib", "libc++abi.1.0.dylib"):
-            if not (LLVM_LIB / name).is_file():
-                raise RuntimeError("matching LLVM 19 C++ runtime is missing: " + str(LLVM_LIB / name))
-
-        bundled_runner = macos / EXECUTABLE
-        bundled_bridge = frameworks / "PCSX2GSBridge" / BRIDGE_NAME
-        runtime = frameworks / "Runtime"
-        copy_fresh(runner, bundled_runner)
-        copy_fresh(bridge, bundled_bridge)
-        copy_fresh(LLVM_LIB / "libc++.1.0.dylib", runtime / "libc++.1.dylib")
-        copy_fresh(LLVM_LIB / "libc++abi.1.0.dylib", runtime / "libc++abi.1.dylib")
-        shutil.copytree(bridge_resources, frameworks / "PCSX2GSBridge/resources")
-        shutil.copy2(ROOT / "bridge/gs/pipelines-fifa.txt", frameworks / "PCSX2GSBridge/resources/pipelines-fifa.txt")
-        if any(path.is_symlink() for path in game_dir.rglob("*")):
-            raise RuntimeError("game extraction contains a symlink; refusing unsafe bundle copy")
-        shutil.copytree(game_dir, resources / "game", copy_function=shutil.copy2)
-        for path in sorted((resources / "game").rglob("*"), reverse=True):
-            if path.is_symlink():
-                raise RuntimeError("game extraction contains a symlink; refusing unsafe bundle copy: " + str(path))
-            path.chmod(0o555 if path.is_dir() else 0o444)
-        (resources / "game").chmod(0o555)
-
-        remove_nonbundle_rpaths(bundled_runner)
-        remove_nonbundle_rpaths(bundled_bridge)
-        for library in (runtime / "libc++.1.dylib", runtime / "libc++abi.1.dylib"):
-            remove_nonbundle_rpaths(library)
-            run(["install_name_tool", "-add_rpath", "@loader_path/", library])
-        run(["install_name_tool", "-id", "@rpath/libc++.1.dylib", runtime / "libc++.1.dylib"])
-        run(["install_name_tool", "-id", "@rpath/libc++abi.1.dylib", runtime / "libc++abi.1.dylib"])
-        run(["install_name_tool", "-id", "@rpath/" + BRIDGE_NAME, bundled_bridge])
-        run(["install_name_tool", "-add_rpath", "@executable_path/../Frameworks/Runtime", bundled_runner])
-        run(["install_name_tool", "-add_rpath", "@executable_path/../Frameworks/PCSX2GSBridge", bundled_runner])
-        run(["install_name_tool", "-add_rpath", "@loader_path/../Runtime", bundled_bridge])
-        ensure_app_dependency_closure(bundled_runner, bundled_bridge, runtime, bundled_runner)
-        manifest.update({
-            "runner_bundled": True, "runner_sha256": sha256(bundled_runner),
-            "runner_metal_bridge_link_verified": True, "bridge_sha256": sha256(bundled_bridge),
-            "bridge_resources_directory": "Contents/Frameworks/PCSX2GSBridge/resources",
-            "game_elf_sha256": sha256(resources / "game" / GAME["elf"]),
-            "game_asset_files": sum(1 for path in (resources / "game").rglob("*") if path.is_file()),
-            "runtime_capabilities_verified": False, "gameplay_verified": False,
-        })
-    # Sign inside out only after all Mach-O edits and assets are final.
-    for image in (frameworks / "Runtime/libc++abi.1.dylib", frameworks / "Runtime/libc++.1.dylib",
-                  frameworks / "PCSX2GSBridge" / BRIDGE_NAME):
-        if image.exists():
-            run(["codesign", "--force", "--sign", "-", image])
-    # The main executable is signed by the deep app signature below (signing it alone fails
-    # while Frameworks resources are still unsealed).
-    # GS resources live under Frameworks and need the recursive signing pass.
-    # Seal the final manifest afterward without re-signing nested binaries.
-    run(["codesign", "--force", "--deep", "--strict", "--sign", "-", app])
-    # Record hashes of the signed binaries; signing changes their bytes.
-    if not args.prepare_only:
-        manifest["runner_sha256"] = sha256(bundled_runner)
-        manifest["bridge_sha256"] = sha256(bundled_bridge)
-    with (resources / "package-manifest.json").open("w", encoding="utf-8") as stream:
-        json.dump(manifest, stream, indent=2)
-        stream.write("\n")
-    run(["codesign", "--force", "--strict", "--sign", "-", app])
-    run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", app])
-    print("Prepared scaffold (incomplete)" if args.prepare_only else "Built Metal-linked app bundle")
-    print(output)
-    problems = [] if args.prepare_only else audit_bundle(output)
-    for problem in problems:
-        print("audit: " + problem, file=sys.stderr)
+    runner = macos / EXECUTABLE
+    bridge = frameworks / "PCSX2GSBridge" / BRIDGE_NAME
+    copy_fresh(RUNNER, runner)
+    copy_fresh(BRIDGE, bridge)
+    for name in ("libc++", "libc++abi"):
+        source = LLVM_LIB / (name + ".1.0.dylib")
+        if not source.exists():
+            source = LLVM_LIB / (name + ".1.dylib")
+        copy_fresh(source, runtime / (name + ".1.dylib"))
+    shutil.copytree(BRIDGE.parent / "resources", bridge.parent / "resources")
+    shutil.copy2(ROOT / "bridge/gs/pipelines-fifa.txt", bridge.parent / "resources/pipelines-fifa.txt")
+    shutil.copytree(game_dir, resources / "game")
+    for image in (runner, bridge, *runtime.glob("*.dylib")):
+        remove_nonbundle_rpaths(image)
+    for image in runtime.glob("*.dylib"):
+        run(["install_name_tool", "-add_rpath", "@loader_path/", image])
+        run(["install_name_tool", "-id", "@rpath/" + image.name, image])
+    run(["install_name_tool", "-id", "@rpath/" + BRIDGE_NAME, bridge])
+    run(["install_name_tool", "-add_rpath", "@executable_path/../Frameworks/Runtime", runner])
+    run(["install_name_tool", "-add_rpath", "@executable_path/../Frameworks/PCSX2GSBridge", runner])
+    run(["install_name_tool", "-add_rpath", "@loader_path/../Runtime", bridge])
+    ensure_app_dependency_closure(runner, bridge, runtime, runner)
+    for image in (*runtime.glob("*.dylib"), bridge):
+        run(["codesign", "--force", "--sign", "-", image])
+    run(["codesign", "--force", "--deep", "--strict", "--sign", "-", OUTPUT])
+    run(["codesign", "--verify", "--deep", "--strict", OUTPUT])
+    problems = audit_bundle(OUTPUT)
     if problems:
-        raise RuntimeError(f"bundle audit failed ({len(problems)} problems); not installing")
-    if not args.prepare_only:
-        print("audit: clean")
+        raise RuntimeError("bundle: " + "; ".join(problems))
     if args.install:
-        install(output, args.applications)
-    return 0
+        install(OUTPUT, Path("/Applications"))
+    else:
+        print(OUTPUT)
 
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        main()
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print("package: " + str(error), file=sys.stderr)
-        raise SystemExit(1)
+        sys.exit(1)

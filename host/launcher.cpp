@@ -1,6 +1,4 @@
-#include "autopilot.hpp"
 #include "app.hpp"
-#include "perf-log.hpp"
 #include "metal-host.hpp"
 #include "settings.hpp"
 #include "ps2_runtime.h"
@@ -21,21 +19,15 @@
 #include <TargetConditionals.h>
 #include <mach-o/dyld.h>
 #include <CommonCrypto/CommonDigest.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-bool ps2x_boot_match_install(PS2Runtime &runtime, const std::filesystem::path &elfPath,
-                             const std::filesystem::path &userDir, const std::filesystem::path &realUserDir);
-bool ps2x_ra_watch_install(PS2Runtime &runtime, const std::filesystem::path &elfPath);
 bool ps2x_poll_idle_install(PS2Runtime &runtime, const std::filesystem::path &elfPath);
 bool ps2x_video_mode_install(PS2Runtime&, const std::filesystem::path&, host::VideoMode);
-bool ps2x_cheats_install(PS2Runtime &runtime, const std::filesystem::path &elfPath, bool unlockAllVenues);
 extern "C" void ps2x_show_error_alert(const char* message);
 
 namespace
 {
-struct PerfScope { ~PerfScope() { ps2x_perf_stop(); } };
 #if !TARGET_OS_IPHONE
 // When this executable is Contents/MacOS/<name> of an app bundle, keep lookup
 // inside Contents/Resources/game even when the ELF is missing so validation
@@ -57,32 +49,7 @@ std::filesystem::path bundledGameElf()
 }
 #endif
 
-// A GUI launch (LaunchServices) hands us /dev/null for stdout/stderr; keep the
-// runtime log in the user directory instead.
-void redirectLogsIfDetached(const std::filesystem::path &userDirectory)
-{
-    struct stat devNull{}, err{};
-#if TARGET_OS_IPHONE
-    const char* perf = std::getenv("PS2X_PERF_LOG");
-    const char* autopilot = std::getenv("PS2X_AUTOPILOT");
-    const bool requested = (perf && std::strcmp(perf, "1") == 0) ||
-        (autopilot && std::strcmp(autopilot, "match") == 0);
-#else
-    const bool requested = false;
-#endif
-    if (!requested && (stat("/dev/null", &devNull) != 0 || fstat(STDERR_FILENO, &err) != 0 ||
-        !S_ISCHR(err.st_mode) || err.st_rdev != devNull.st_rdev))
-        return;
-    std::error_code ec;
-    const std::filesystem::path logs = userDirectory / "Logs";
-    std::filesystem::create_directories(logs, ec);
-    const int fd = open((logs / "native.log").c_str(), O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (fd < 0)
-        return;
-    dup2(fd, STDOUT_FILENO);
-    dup2(fd, STDERR_FILENO);
-    close(fd);
-}
+
 
 bool isDetachedLaunch()
 {
@@ -259,16 +226,6 @@ bool parseOptions(int argc, char *argv[], LaunchOptions &options)
             options.userDirectorySpecified = true;
             continue;
         }
-        if (argument == "--NSDocumentRevisionsDebugMode" ||
-            argument == "-NSDocumentRevisionsDebugMode")
-        {
-            if (i + 1 < argc && argv[i + 1] &&
-                (std::string(argv[i + 1]) == "YES" || std::string(argv[i + 1]) == "NO"))
-            {
-                ++i;
-            }
-            continue;
-        }
         if (argument.starts_with('-'))
         {
             throw std::runtime_error("Unknown option: " + argument);
@@ -344,19 +301,13 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         if (error)
             throw std::runtime_error("Unable to resolve user directory: " + error.message());
 
-        redirectLogsIfDetached(userDirectory);
         validateGameElf(elfPath);
-        // Settings: the user's file plus the documented debug overrides, loaded once.
+        // Settings are loaded once before the runtime starts.
         host::configure_settings(userDirectory.c_str());
-        ps2x_perf_start(userDirectory, ps2x_autopilot_gameplay, ps2GetPerfSnapshot);
-        const PerfScope perfScope;
-        const auto pipelineCache = userDirectory / "gs-metal-pipelines.txt";
-        if (!std::getenv("RRV_PCSX2_GS_PIPELINE_CACHE"))
-            setenv("RRV_PCSX2_GS_PIPELINE_CACHE", pipelineCache.c_str(), 1);
         PS2HostConfig hostConfig;
         // Pace hardware time from the host clock. Estimated block costs must
         // neither slow it down nor accelerate audio during movie playback.
-        hostConfig.wallClock = host::active_settings().wallClock;
+        hostConfig.wallClock = true;
         ps2SetHostConfig(hostConfig);
         // Runtime-owned RAM (callback stacks, RPC packets, HLE buffers) lives below the ELF, never in the game's heap or stack.
         PS2KernelArena arena;
@@ -391,18 +342,8 @@ int ps2x_app_run(const Ps2xAppConfig *config)
         ioPaths.mcRoot = memoryCardDirectory;
         PS2Runtime::setIoPaths(ioPaths);
 
-        bool bootMatchArmed = false;
-        {
-            // Diagnostic only: inert unless `./rx run --match` set PS2X_BOOT_MATCH.
-            std::filesystem::path realUserDirectory;
-            try { realUserDirectory = defaultUserDirectory(); } catch (const std::exception &) {}
-            bootMatchArmed = ps2x_boot_match_install(runtime, elfPath, userDirectory, realUserDirectory);
-        }
-        ps2x_autopilot_install(runtime, elfPath, bootMatchArmed);
         ps2x_video_mode_install(runtime, elfPath, host::active_settings().videoMode);
         ps2x_poll_idle_install(runtime, elfPath);
-        ps2x_ra_watch_install(runtime, elfPath);
-        ps2x_cheats_install(runtime, elfPath, host::active_settings().unlockAllVenues);
         std::cout << "Game ELF: " << elfPath << std::endl;
         std::cout << "Memory cards: " << memoryCardDirectory << std::endl;
         runtime.run();

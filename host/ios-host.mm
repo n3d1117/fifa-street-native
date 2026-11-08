@@ -16,7 +16,6 @@
 #include "metal-gs-adapter.hpp"
 #include "settings.hpp"
 #include "gamepad-input.hpp"
-#include "diagnostic-input.hpp"
 #include "spu2-host.hpp"
 
 void ps2SetHostPaused(bool paused);
@@ -141,8 +140,7 @@ extern "C" void ps2x_show_error_alert(const char* message) {
     });
 }
 
-// Settings: no Settings window on touch/TV hosts; the file and debug overrides
-// still apply (same logic as settings-window.mm).
+// Embedded hosts load settings from the application data directory.
 namespace {
 host::Settings s_active;
 std::atomic<bool> s_configured{false};
@@ -155,10 +153,7 @@ void configure_settings(const char* userDirectory) {
     if (!s_configured.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) return;
     s_userDirectory = userDirectory ? userDirectory : "";
     Settings settings = load_settings_file(s_userDirectory);
-    apply_env_overrides(settings, [](const char* name) -> const char* { return std::getenv(name); });
     s_active = settings;
-    std::fprintf(stderr, "[settings] videoMode=%s scale=%d anisotropy=%d sharp=%d uiUpscale=%d rumble=%d rumbleIntensity=%d wallClock=%d unlockAllVenues=%d\n",
-                 settings.videoMode == VideoMode::NTSC ? "ntsc" : "pal", settings.renderScale, settings.anisotropy, settings.sharperImage, settings.smoothUiTextures, settings.rumble, settings.rumbleIntensity, settings.wallClock, settings.unlockAllVenues);
 }
 const Settings& active_settings() { return s_active; }
 const std::string& user_directory() { return s_userDirectory; }
@@ -166,28 +161,20 @@ void show_settings_window() {}
 }  // namespace host
 
 extern "C" int ps2x_metal_host_start(const char*, uint32_t, uint32_t) {
-    if (!std::getenv("RRV_PCSX2_GS_PIPELINE_MANIFEST")) {
+    {
         NSString* manifest = [[[NSBundle mainBundle] bundlePath]
             stringByAppendingPathComponent:@"Frameworks/resources/pipelines-fifa.txt"];
         if ([[NSFileManager defaultManager] fileExistsAtPath:manifest])
-            setenv("RRV_PCSX2_GS_PIPELINE_MANIFEST", [manifest fileSystemRepresentation], 0);
+            setenv("RRV_PCSX2_GS_PIPELINE_MANIFEST", [manifest fileSystemRepresentation], 1);
     }
     @autoreleasepool {
         host::configure_settings(nullptr);
         const host::Settings& settings = host::active_settings();
-        if (!std::getenv("RRV_PCSX2_GS_PRESENT_HZ"))
-            setenv("RRV_PCSX2_GS_PRESENT_HZ", settings.videoMode == host::VideoMode::NTSC ? "59.94" : "50", 0);
+        setenv("RRV_PCSX2_GS_PRESENT_HZ", settings.videoMode == host::VideoMode::NTSC ? "59.94" : "50", 1);
         ps2x_gamepad_set_rumble_settings(settings.rumble, static_cast<uint8_t>(settings.rumbleIntensity));
-        ps2x_diagnostic_input_configure(std::getenv("PS2X_DIAGNOSTIC_INPUT_FIFO"));
         const char* aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? "16:9" :
             settings.displayAspect == host::DisplayAspect::FourThree ? "4:3" : "auto";
         setenv("RRV_PCSX2_GS_ASPECT", aspect, 1);
-        if (settings.sharperImage) {
-            setenv("RRV_PCSX2_GS_CAS", "50", 1);
-            setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
-        }
-        setenv("RRV_PCSX2_GS_FXAA", settings.fxaa ? "1" : "0", 1);
-        setenv("RRV_PCSX2_GS_UI_UPSCALE", settings.smoothUiTextures && settings.renderScale > 1 ? "1" : "0", 1);
         if (settings.renderScale > 1) {
             const char scaleValue[] = {static_cast<char>('0' + settings.renderScale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
@@ -235,10 +222,9 @@ extern "C" int ps2x_metal_host_start(const char*, uint32_t, uint32_t) {
                         NSLog(@"[lifecycle] resumed guest after become-active");
                     }
                 }];
-            // SDL gamepad and diagnostic input are polled on main (as on macOS).
+            // SDL gamepad input is polled on main.
             s_inputTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 240.0 repeats:YES
                 block:^(NSTimer*) {
-                    ps2x_diagnostic_input_poll();
                     ps2x_gamepad_poll();
                 }];
             s_surface = {};
@@ -279,11 +265,10 @@ extern "C" void ps2x_metal_host_stop(void) {
             if (s_becomeObserver) [[NSNotificationCenter defaultCenter] removeObserver:s_becomeObserver];
             s_resignObserver = nil;
             s_becomeObserver = nil;
-            ps2x_diagnostic_input_shutdown();
             ps2x_gamepad_shutdown();
         });
     }
 }
-extern "C" int ps2x_metal_key_down(uint32_t key) {
-    return ps2x_diagnostic_input_key_down(key);
+extern "C" int ps2x_metal_key_down(uint32_t) {
+    return false;
 }

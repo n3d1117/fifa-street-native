@@ -11,4 +11,3 @@ The project is GPL-3.0-or-later (`LICENSE`). Upstream notices are retained in ea
 | FFmpeg, SDL3, sse2neon | built locally by `./rx setup` | LGPL-2.1+, zlib, MIT |
 
 No disc, game executable, assets, game-derived generated code or symbol maps are distributed.
-The app icon is drawn by `tools/package/make-icon.m` without game artwork.

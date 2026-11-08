@@ -7,7 +7,6 @@
 #include "keyboard-controls.hpp"
 #include "settings.hpp"
 #include "gamepad-input.hpp"
-#include "diagnostic-input.hpp"
 #include "spu2-host.hpp"
 
 #include <memory>
@@ -151,32 +150,24 @@ static id s_resignObserver;
 static id s_becomeObserver;
 
 extern "C" int ps2x_metal_host_start(const char* title, uint32_t width, uint32_t height) {
-    if (!std::getenv("RRV_PCSX2_GS_PIPELINE_MANIFEST")) {
+    {
         NSString* manifest = [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Contents/Frameworks/PCSX2GSBridge/resources/pipelines-fifa.txt"];
         if ([[NSFileManager defaultManager] fileExistsAtPath:manifest])
-            setenv("RRV_PCSX2_GS_PIPELINE_MANIFEST", [manifest fileSystemRepresentation], 0);
+            setenv("RRV_PCSX2_GS_PIPELINE_MANIFEST", [manifest fileSystemRepresentation], 1);
     }
     @autoreleasepool {
         // The launcher normally configured settings already; this is a no-op then.
         host::configure_settings(nullptr);
         const host::Settings& settings = host::active_settings();
-        if (!std::getenv("RRV_PCSX2_GS_PRESENT_HZ"))
-            setenv("RRV_PCSX2_GS_PRESENT_HZ", settings.videoMode == host::VideoMode::NTSC ? "59.94" : "50", 0);
+        setenv("RRV_PCSX2_GS_PRESENT_HZ", settings.videoMode == host::VideoMode::NTSC ? "59.94" : "50", 1);
         ps2x_gamepad_set_rumble_settings(settings.rumble, static_cast<uint8_t>(settings.rumbleIntensity));
         s_game_aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? 16.0 / 9.0 : 4.0 / 3.0;
         keyboard_controls_configure(host::user_directory().empty() ? nullptr : host::user_directory().c_str());
-        ps2x_diagnostic_input_configure(std::getenv("PS2X_DIAGNOSTIC_INPUT_FIFO"));
         // The GS bridge (a separate library) takes its options from RRV_* variables;
         // they are derived here from the Settings struct, never set by users.
         const char* aspect = settings.displayAspect == host::DisplayAspect::SixteenNine ? "16:9" :
             settings.displayAspect == host::DisplayAspect::FourThree ? "4:3" : "auto";
         setenv("RRV_PCSX2_GS_ASPECT", aspect, 1);
-        if (settings.sharperImage) {
-            setenv("RRV_PCSX2_GS_CAS", "50", 1);
-            setenv("RRV_PCSX2_GS_PRESENT_FILTER", "sharp", 1);
-        }
-        setenv("RRV_PCSX2_GS_FXAA", settings.fxaa ? "1" : "0", 1);
-        setenv("RRV_PCSX2_GS_UI_UPSCALE", settings.smoothUiTextures && settings.renderScale > 1 ? "1" : "0", 1);
         if (settings.renderScale > 1) {
             const char scaleValue[] = {static_cast<char>('0' + settings.renderScale), 0};
             setenv("RRV_PCSX2_GS_UPSCALE", scaleValue, 1);
@@ -286,9 +277,8 @@ extern "C" void ps2x_metal_host_poll(void) {
         NSEvent* event;
         while ((event = [NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate dateWithTimeIntervalSinceNow:1.0/240.0]
             inMode:NSDefaultRunLoopMode dequeue:YES])) {
-            // PID-targeted diagnostic key events can have no AppKit window.
             // A focused settings/remapping window must never control the game.
-            if (([NSApp keyWindow] == nil || [NSApp keyWindow] == s_window) &&
+            if ([NSApp keyWindow] == s_window &&
                 ([event type] == NSEventTypeKeyDown || [event type] == NSEventTypeKeyUp ||
                  [event type] == NSEventTypeFlagsChanged)) {
                 bool down = [event type] == NSEventTypeKeyDown;
@@ -306,7 +296,6 @@ extern "C" void ps2x_metal_host_poll(void) {
             }
             [NSApp sendEvent:event];
         }
-        ps2x_diagnostic_input_poll();
         ps2x_gamepad_poll();
         [NSApp updateWindows];
         if (s_lifecycle_pending.load(std::memory_order_acquire))
@@ -326,7 +315,6 @@ extern "C" void ps2x_metal_host_stop(void) {
         s_resignObserver=nil;
         s_becomeObserver=nil;
         ps2x_spu2_host_stop();
-        ps2x_diagnostic_input_shutdown();
         ps2x_gamepad_shutdown();
         [s_window setDelegate:nil];
         [NSApp setDelegate:nil];
@@ -335,5 +323,5 @@ extern "C" void ps2x_metal_host_stop(void) {
     }
 }
 extern "C" int ps2x_metal_key_down(uint32_t key) {
-    return (key < 19 && s_keys[key].load(std::memory_order_relaxed)) || ps2x_diagnostic_input_key_down(key);
+    return key < 19 && s_keys[key].load(std::memory_order_relaxed);
 }

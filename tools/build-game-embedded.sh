@@ -9,7 +9,7 @@ case "$PLATFORM" in
   *) echo "usage: $0 <iphonesimulator|iphoneos|appletvos|appletvsimulator>" >&2; exit 2 ;;
 esac
 
-export DEVELOPER_DIR="${DEVELOPER_DIR:-$HOME/Developer/Xcode-12.5.1/Xcode.app/Contents/Developer}"
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 export RX_JOBS="${RX_JOBS:-3}"
 BUILD="$ROOT/build/embedded/$PLATFORM/game"
 LLVM="${RX_LLVM:-$ROOT/tools/build/llvm19}"

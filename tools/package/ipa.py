@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Create and audit an unsigned, freshly zipped iOS or tvOS Payload IPA."""
 import argparse
-import os
 from pathlib import Path
 import re
 import shutil

@@ -6,16 +6,13 @@
 // fd9d310ccbb6b8b62c976da8886a3c8fd3a10ff3) and the IOP-side hooks the SPU2
 // core calls (IopDma.cpp spu2DMA4Irq/spu2DMA7Irq, IopIrq.cpp spu2Irq).
 //
-// Adapted from upstream spu2.cpp (see PROVENANCE.md): StereoOut32::Empty,
+// Adapted from upstream spu2.cpp: StereoOut32::Empty,
 // lClocks, SPU2read(), SPU2write(), SPU2{read,write}DMA{4,7}Mem(),
 // SPU2interruptDMA{4,7}(), SPU2::InternalReset(), DCFilter() and spu2Output().
 // The AudioStream backend is replaced by a lock-free SPSC ring; the IOP
 // CPU/DMA controller is replaced by timestamped commands.
 
 #include "rrv_pcsx2_spu2.h"
-#include "rrv_audio_stretcher.hpp"
-#include "rrv_audio_capture.hpp"
-#include <memory>
 
 #include "SPU2/defs.h"
 #include "SPU2/regs.h"
@@ -29,16 +26,9 @@
 #include <atomic>
 #include <array>
 #include <algorithm>
-#include <condition_variable>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <deque>
-#include <mutex>
-#include <thread>
 #include <vector>
+#include <cstring>
 
-#include <time.h>
 
 // ---------------------------------------------------------------------------
 // Globals the PCSX2 SPU2 core expects from the rest of the emulator.
@@ -67,120 +57,6 @@ constexpr u32 kMaxDmaHalfwords = kStagingBytesPerCore / 2;
 struct rrv_core_state;
 rrv_core_state* g_state = nullptr; // core-thread view of the live instance
 std::atomic<bool> g_instance_live{false};
-std::atomic<u64> g_perfMixNs{0};
-
-enum class StallKind : u32 { MixStart, MixEnd, Pull, Occupancy, Underrun };
-struct StallEvent {
-	std::atomic<u64> sequence{0};
-	std::atomic<u64> timestamp_ns{0};
-	std::atomic<u64> frames{0};
-	std::atomic<u64> occupancy{0};
-	std::atomic<u32> kind{0};
-};
-constexpr u64 kStallEventCapacity = 64;
-std::array<StallEvent, kStallEventCapacity> g_stallEvents{};
-std::atomic<u64> g_stallEventCount{0};
-std::atomic<bool> g_stallTraceDumped{false};
-std::atomic<bool> g_stallTraceDumpRequested{false};
-
-bool stall_trace_enabled()
-{
-	static const bool enabled = [] {
-		const char* value = std::getenv("PS2X_SPU2_STALL_TRACE");
-		return value && value[0] == '1' && value[1] == '\0';
-	}();
-	return enabled;
-}
-
-u64 stall_now_ns()
-{
-	return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-		std::chrono::steady_clock::now().time_since_epoch()).count());
-}
-
-void dump_stall_trace()
-{
-	if (!stall_trace_enabled())
-		return;
-	if (g_stallTraceDumped.exchange(true, std::memory_order_acq_rel))
-		return;
-	const u64 count = g_stallEventCount.load(std::memory_order_acquire);
-	const u64 first = count > kStallEventCapacity ? count - kStallEventCapacity : 0;
-	u64 first_timestamp = 0;
-	u64 previous_mix_end = 0;
-	u64 largest_mix_end_gap = 0;
-	u64 biggest_underrun_frames = 0;
-	u64 biggest_underrun_timestamp = 0;
-	struct Snapshot { u64 timestamp; u64 frames; u64 occupancy; u32 kind; };
-	std::array<Snapshot, kStallEventCapacity> events{};
-	u64 event_count = 0;
-	for (u64 i = first; i < count; ++i) {
-		const StallEvent& slot = g_stallEvents[i % kStallEventCapacity];
-		const u64 expected = i + 1;
-		if (slot.sequence.load(std::memory_order_acquire) != expected)
-			continue;
-		Snapshot event{slot.timestamp_ns.load(std::memory_order_relaxed),
-			slot.frames.load(std::memory_order_relaxed), slot.occupancy.load(std::memory_order_relaxed),
-			slot.kind.load(std::memory_order_relaxed)};
-		if (slot.sequence.load(std::memory_order_acquire) != expected)
-			continue;
-		events[event_count++] = event;
-	}
-	if (event_count == 0)
-		return;
-	first_timestamp = events[0].timestamp;
-	for (u64 i = 0; i < event_count; ++i) {
-		const Snapshot& event = events[i];
-		if (event.kind == static_cast<u32>(StallKind::MixEnd)) {
-			if (previous_mix_end != 0 && event.timestamp >= previous_mix_end)
-				largest_mix_end_gap = std::max(largest_mix_end_gap, event.timestamp - previous_mix_end);
-			previous_mix_end = event.timestamp;
-		}
-		if (event.kind == static_cast<u32>(StallKind::Underrun) && event.frames > biggest_underrun_frames) {
-			biggest_underrun_frames = event.frames;
-			biggest_underrun_timestamp = event.timestamp;
-		}
-	}
-	static constexpr const char* names[] = {"mix_start", "mix_end", "pull", "occupancy", "underrun"};
-	for (u64 i = 0; i < event_count; ++i) {
-		const Snapshot& event = events[i];
-		const char* name = event.kind < std::size(names) ? names[event.kind] : "unknown";
-		std::fprintf(stderr, "[spu2-stall] t=%llu kind=%s frames=%llu occ=%llu\n",
-			static_cast<unsigned long long>(event.timestamp - first_timestamp), name,
-			static_cast<unsigned long long>(event.frames),
-			static_cast<unsigned long long>(event.occupancy));
-	}
-	std::fprintf(stderr, "[spu2-stall] summary largest_mix_end_gap_ns=%llu biggest_underrun_frames=%llu biggest_underrun_t=%llu\n",
-		static_cast<unsigned long long>(largest_mix_end_gap),
-		static_cast<unsigned long long>(biggest_underrun_frames),
-		static_cast<unsigned long long>(biggest_underrun_timestamp ? biggest_underrun_timestamp - first_timestamp : 0));
-}
-
-void record_stall_event(StallKind kind, u64 frames = 0, u64 occupancy = 0)
-{
-	if (!stall_trace_enabled())
-		return;
-	static const bool registered = (std::atexit(dump_stall_trace), true);
-	(void)registered;
-	static const bool dump_worker_started = [] {
-		std::thread([] {
-			while (!g_stallTraceDumpRequested.load(std::memory_order_acquire))
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
-			dump_stall_trace();
-		}).detach();
-		return true;
-	}();
-	(void)dump_worker_started;
-	const u64 sequence = g_stallEventCount.fetch_add(1, std::memory_order_relaxed);
-	StallEvent& slot = g_stallEvents[sequence % kStallEventCapacity];
-	slot.sequence.store(0, std::memory_order_relaxed);
-	slot.timestamp_ns.store(stall_now_ns(), std::memory_order_relaxed);
-	slot.frames.store(frames, std::memory_order_relaxed);
-	slot.occupancy.store(occupancy, std::memory_order_relaxed);
-	slot.kind.store(static_cast<u32>(kind), std::memory_order_relaxed);
-	slot.sequence.store(sequence + 1, std::memory_order_release);
-}
-
 // Core-thread-only state (touched by whichever thread runs the core).
 struct rrv_core_state
 {
@@ -190,7 +66,6 @@ struct rrv_core_state
 	u32 irq_bits_seen = 0;
 	float dc_in[2] = {0, 0};
 	float dc_out[2] = {0, 0};
-	u64 out_hash = 0xcbf29ce484222325ull;
 };
 
 void push_event(u64 cycle, u32 kind, u32 data)
@@ -202,22 +77,9 @@ void push_event(u64 cycle, u32 kind, u32 data)
 
 void rrv_mix()
 {
-    static const bool perfEnabled = [] {
-        const char* value = std::getenv("PS2X_PERF_BREAKDOWN");
-        return value && value[0] == '1' && value[1] == '\0';
-    }();
-    static thread_local u32 perfMixes = 0;
-    constexpr u32 sampleWeight = 1024;
-    const bool perfSample = perfEnabled && (++perfMixes % sampleWeight == 0u);
-    const auto perfStart = perfSample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-	record_stall_event(StallKind::MixStart);
     g_state->in_mix = true;
     isa_native::spu2Mix();
     g_state->in_mix = false;
-	record_stall_event(StallKind::MixEnd);
-    if (perfSample)
-        g_perfMixNs.fetch_add(static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - perfStart).count()) * sampleWeight, std::memory_order_relaxed);
 }
 } // namespace
 
@@ -371,7 +233,7 @@ void SPU2write(u32 rmem, u16 value)
 // AudioStream::WriteChunk. Declared in SPU2/defs.h; called once per frame.
 namespace rrv_out
 {
-void push_frame(float l, float r, s16 raw_l, s16 raw_r);
+void push_frame(float l, float r);
 }
 
 void spu2Output(StereoOut32 out)
@@ -392,261 +254,41 @@ void spu2Output(StereoOut32 out)
 	st.dc_out[0] = o0;
 	st.dc_out[1] = o1;
 
-	rrv_out::push_frame(o0, o1, static_cast<s16>(cl), static_cast<s16>(cr));
+	rrv_out::push_frame(o0, o1);
 }
 
 // ---------------------------------------------------------------------------
 // Instance
 // ---------------------------------------------------------------------------
 
-namespace
-{
-enum class Op : u8
-{
-	Write16,
-	Read16,
-	DmaWrite,
-	DmaRead,
-	Advance,
-	Sync,
-	Hash,
-};
-
-struct Barrier
-{
-	bool done = false;
-	u16 r16 = 0;
-	u64 r64 = 0;
-	u16* out = nullptr;
-};
-
-struct Cmd
-{
-	Op op;
-	int core;
-	u64 t;
-	u32 a;
-	u32 b;
-	std::vector<u16> payload;
-	Barrier* barrier;
-};
-
-u64 hash_bytes(u64 h, const void* p, size_t n)
-{
-	const u8* b = static_cast<const u8*>(p);
-	size_t i = 0;
-	for (; i + 8 <= n; i += 8)
-	{
-		u64 w;
-		std::memcpy(&w, b + i, 8);
-		h ^= w;
-		h *= 0x100000001b3ull;
-		h ^= h >> 29;
-	}
-	for (; i < n; i++)
-	{
-		h ^= b[i];
-		h *= 0x100000001b3ull;
-	}
-	return h;
-}
-
-template <typename T>
-u64 hv(u64 h, const T& v)
-{
-	return hash_bytes(h, &v, sizeof(v));
-}
-
-u64 hash_volume(u64 h, const V_VolumeSlide& v)
-{
-	h = hv(h, v.Reg_VOL);
-	h = hv(h, v.Counter);
-	return hv(h, v.Value);
-}
-
-u64 guest_state_hash()
-{
-	u64 h = 0xcbf29ce484222325ull;
-	h = hash_bytes(h, spu2regs, sizeof(spu2regs));
-	h = hash_bytes(h, _spu2mem, sizeof(_spu2mem));
-	h = hv(h, psxRegs.cycle);
-	h = hv(h, lClocks);
-	h = hv(h, Cycles);
-	h = hv(h, OutPos);
-	h = hv(h, InputPos);
-	h = hv(h, PlayMode);
-	h = hash_bytes(h, &Spdif, sizeof(Spdif));
-	for (int c = 0; c < 2; c++)
-	{
-		const V_Core& k = Cores[c];
-		h = hash_bytes(h, k.VoiceGates, sizeof(k.VoiceGates));
-		h = hash_bytes(h, &k.DryGate, sizeof(k.DryGate));
-		h = hash_bytes(h, &k.WetGate, sizeof(k.WetGate));
-		h = hash_volume(h, k.MasterVol.Left);
-		h = hash_volume(h, k.MasterVol.Right);
-		h = hv(h, k.ExtVol.Left); h = hv(h, k.ExtVol.Right);
-		h = hv(h, k.InpVol.Left); h = hv(h, k.InpVol.Right);
-		h = hv(h, k.FxVol.Left); h = hv(h, k.FxVol.Right);
-		for (const V_Voice& v : k.Voices)
-		{
-			h = hash_volume(h, v.Volume.Left);
-			h = hash_volume(h, v.Volume.Right);
-			h = hv(h, v.ADSR.reg32);
-			h = hv(h, v.ADSR.Counter);
-			h = hv(h, v.ADSR.Value);
-			h = hv(h, v.ADSR.Phase);
-			h = hv(h, v.Pitch);
-			h = hv(h, v.LoopStartA);
-			h = hv(h, v.StartA);
-			h = hv(h, v.NextA);
-			h = hv(h, v.Prev1);
-			h = hv(h, v.Prev2);
-			h = hv(h, v.Modulated);
-			h = hv(h, v.Noise);
-			h = hv(h, v.LoopMode);
-			h = hv(h, v.LoopFlags);
-			h = hv(h, v.SP);
-			h = hv(h, v.OutX);
-			h = hash_bytes(h, v.DecodeFifo, sizeof(v.DecodeFifo));
-			h = hv(h, v.DecPosWrite);
-			h = hv(h, v.DecPosRead);
-		}
-		h = hv(h, k.IRQA); h = hv(h, k.TSA); h = hv(h, k.ActiveTSA);
-		h = hv(h, k.IRQEnable); h = hv(h, k.FxEnable); h = hv(h, k.Mute); h = hv(h, k.AdmaInProgress);
-		h = hv(h, k.DMABits); h = hv(h, k.NoiseClk); h = hv(h, k.NoiseCnt); h = hv(h, k.NoiseOut);
-		h = hv(h, k.AutoDMACtrl); h = hv(h, k.DMAICounter); h = hv(h, k.LastClock);
-		h = hv(h, k.InputDataLeft); h = hv(h, k.InputDataTransferred);
-		h = hv(h, k.InputPosWrite); h = hv(h, k.InputDataProgress);
-		h = hash_bytes(h, &k.Revb, sizeof(k.Revb));
-		h = hash_bytes(h, k.RevbDownBuf, sizeof(k.RevbDownBuf));
-		h = hash_bytes(h, k.RevbUpBuf, sizeof(k.RevbUpBuf));
-		h = hv(h, k.RevbSampleBufPos); h = hv(h, k.EffectsStartA); h = hv(h, k.EffectsEndA);
-		h = hash_bytes(h, &k.Regs, sizeof(k.Regs));
-		h = hv(h, k.LastEffect.Left); h = hv(h, k.LastEffect.Right);
-		h = hv(h, k.CoreEnabled); h = hv(h, k.AttrBit0); h = hv(h, k.DmaMode);
-		h = hv(h, k.ReadSize); h = hv(h, k.IsDMARead);
-		h = hv(h, k.KeyOn); h = hv(h, k.KeyOff);
-	}
-	h = hv(h, HW_DMA4_CHCR);
-	h = hv(h, HW_DMA7_CHCR);
-	return h;
-}
-
-u32 next_pow2(u32 v)
-{
-	u32 p = 1;
-	while (p < v && p < 0x80000000u)
-		p <<= 1;
-	return p;
-}
-
-u64 thread_cpu_ns()
-{
-	timespec ts;
-	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
-	return u64(ts.tv_sec) * 1000000000ull + u64(ts.tv_nsec);
-}
-} // namespace
-
 struct rrv_spu2
 {
-	rrv_spu2_config cfg{};
-
-	// ---- caller side
-	u64 last_t = 0;
-
-	// ---- core side (worker thread in threaded mode, caller in inline mode)
-	rrv_core_state core;
-
-	// ---- queue (threaded mode)
-	std::mutex m;
-	std::condition_variable cv_work;
-	std::condition_variable cv_done;
-	std::deque<Cmd> q;
-	bool stop = false;
-	bool worker_sleeping = false;
-	std::vector<rrv_spu2_event> ready_events; // guarded by m in threaded mode
-	std::thread worker;
-
-	// ---- output ring (SPSC: core produces, audio thread consumes)
-	std::vector<float> ring;
-	u64 ring_mask = 0;
-	alignas(64) std::atomic<u64> ring_head{0}; // frames written
-	alignas(64) std::atomic<u64> ring_tail{0}; // frames read
-	// Consumer-thread only. The device starts pulling before the core has mixed
-	// anything; until the ring first holds prime_frames the pull returns silence
-	// without consuming or counting underruns, so playback begins with a cushion
-	// against the producer's per-frame burstiness instead of a permanently empty ring.
-	bool output_primed{false};
-	u64 prime_frames{4608};
-	std::unique_ptr<rrv_audio_capture> capture;
-	rrv_audio_stretcher audio_stretcher;
-	std::array<float, 64 * 2> stretch_input{};
-	size_t stretch_input_frames{};
-	bool stretch_enabled{true};
-
-	// ---- stats
-	std::atomic<u64> frames_mixed{0};
-	std::atomic<u64> underruns{0};
-	std::atomic<u64> overruns{0};
-	std::atomic<u64> clamp_violations{0};
-	std::atomic<u64> queue_high_water{0};
-	std::atomic<u64> commands{0};
-	std::atomic<u64> dma_overlaps{0};
-	std::atomic<u64> dma_truncated{0};
-	std::atomic<u64> output_hash{0};
-	std::atomic<u64> worker_cpu_ns{0};
-	std::atomic<u64> frames_enqueued{0};
+    u64 last_t = 0;
+    rrv_core_state core;
+    std::array<float, 16384 * 2> ring{};
+    alignas(64) std::atomic<u64> ring_head{0};
+    alignas(64) std::atomic<u64> ring_tail{0};
+    bool output_primed = false;
 };
 
 namespace
 {
 rrv_spu2* g_inst = nullptr;
+constexpr u64 kRingMask = 16384 - 1;
+constexpr u64 kPrimeFrames = 4608;
 }
 
-void rrv_out::push_frame(float l, float r, s16 raw_l, s16 raw_r)
+void rrv_out::push_frame(float l, float r)
 {
-	rrv_spu2* s = g_inst;
-	rrv_core_state& st = s->core;
-	u32 raw = (u32(u16(raw_l)) << 16) | u16(raw_r);
-	st.out_hash = (st.out_hash ^ raw) * 0x100000001b3ull;
-	s->output_hash.store(st.out_hash, std::memory_order_relaxed);
-	const u64 mixed_frame = s->frames_mixed.fetch_add(1, std::memory_order_relaxed);
-	if (s->capture)
-		s->capture->mixed(l, r, mixed_frame, s->ring_head.load(std::memory_order_relaxed),
-			s->ring_tail.load(std::memory_order_relaxed));
-	auto push_output = [](void* context, float left, float right) -> bool {
-		auto* instance = static_cast<rrv_spu2*>(context);
-		const u64 out_head = instance->ring_head.load(std::memory_order_relaxed);
-		const u64 out_tail = instance->ring_tail.load(std::memory_order_acquire);
-		if (out_head - out_tail > instance->ring_mask) {
-			instance->overruns.fetch_add(1, std::memory_order_relaxed);
-			return false;
-		}
-		const u64 index = (out_head & instance->ring_mask) * 2u;
-		instance->ring[index] = left;
-		instance->ring[index + 1u] = right;
-		instance->ring_head.store(out_head + 1u, std::memory_order_release);
-		instance->frames_enqueued.fetch_add(1, std::memory_order_relaxed);
-		return true;
-	};
-	if (!s->stretch_enabled) {
-		push_output(s, l, r);
-		return;
-	}
-
-	s->stretch_input[2u * s->stretch_input_frames] = l;
-	s->stretch_input[2u * s->stretch_input_frames + 1u] = r;
-	if (++s->stretch_input_frames < s->stretch_input.size() / 2u)
-		return;
-
-	const u64 head = s->ring_head.load(std::memory_order_relaxed);
-	const u64 tail = s->ring_tail.load(std::memory_order_acquire);
-	const u64 underruns = s->underruns.load(std::memory_order_relaxed);
-	s->audio_stretcher.process(s->stretch_input.data(), s->stretch_input_frames,
-		head - tail, underruns,
-		push_output, s);
-	s->stretch_input_frames = 0;
+    rrv_spu2* s = g_inst;
+    const u64 head = s->ring_head.load(std::memory_order_relaxed);
+    const u64 tail = s->ring_tail.load(std::memory_order_acquire);
+    if (head - tail > kRingMask)
+        return;
+    const u64 index = (head & kRingMask) * 2u;
+    s->ring[index] = l;
+    s->ring[index + 1u] = r;
+    s->ring_head.store(head + 1u, std::memory_order_release);
 }
 
 namespace
@@ -703,7 +345,6 @@ void core_power_on(rrv_core_state& st)
 
 	st.events.clear();
 	st.irq_bits_seen = 0;
-	st.out_hash = 0xcbf29ce484222325ull;
 }
 
 // Run the core to guest cycle t. Steps stop at each pending DMA countdown
@@ -741,345 +382,119 @@ u32 norm_reg(u32 a)
 	return (a < 0x10000u) ? (a | 0x1F900000u) : a;
 }
 
-void execute(rrv_spu2* s, Cmd& c)
-{
-	s->commands.fetch_add(1, std::memory_order_relaxed);
-	run_to(c.t);
-	switch (c.op)
-	{
-		case Op::Write16:
-			SPU2write(c.a, static_cast<u16>(c.b));
-			break;
-		case Op::Read16:
-			c.barrier->r16 = SPU2read(c.a);
-			break;
-		case Op::DmaWrite:
-		case Op::DmaRead:
-		{
-			const int core = c.core ? 1 : 0;
-			u32& chcr = core ? HW_DMA7_CHCR : HW_DMA4_CHCR;
-			if (chcr & kChcrBusy)
-				s->dma_overlaps.fetch_add(1, std::memory_order_relaxed);
-			if (c.a != RRV_SPU2_KEEP_TSA)
-				write_tsa(core, c.a);
-			const u32 staging = core ? kStagingBytesPerCore : 0;
-			u16* mem = reinterpret_cast<u16*>(iopPhysMem(staging));
-			(core ? HW_DMA7_MADR : HW_DMA4_MADR) = staging;
-			(core ? HW_DMA7_BCR : HW_DMA4_BCR) = (c.b + 1) / 2 | (1u << 16);
-			if (c.op == Op::DmaWrite)
-			{
-				std::memcpy(mem, c.payload.data(), c.payload.size() * 2);
-				chcr = kChcrToSpu;
-				if (core)
-					SPU2writeDMA7Mem(mem, c.b);
-				else
-					SPU2writeDMA4Mem(mem, c.b);
-			}
-			else
-			{
-				u32 a = Cores[core].TSA & 0xFFFFF;
-				for (u32 i = 0; i < c.b; i++)
-					c.barrier->out[i] = static_cast<u16>(_spu2mem[(a + i) & 0xFFFFF]);
-				chcr = kChcrFromSpu;
-				if (core)
-					SPU2readDMA7Mem(mem, c.b);
-				else
-					SPU2readDMA4Mem(mem, c.b);
-			}
-			break;
-		}
-		case Op::Advance:
-		case Op::Sync:
-			break;
-		case Op::Hash:
-			c.barrier->r64 = guest_state_hash();
-			break;
-	}
-	// Refresh the "already reported" IRQ bits after any guest-visible change
-	// (a register write may have cleared them).
-	s->core.irq_bits_seen = (Spdif.Info >> 2) & 3;
-}
-
-void worker_main(rrv_spu2* s)
-{
-	std::deque<Cmd> batch;
-	std::unique_lock<std::mutex> lk(s->m);
-	for (;;)
-	{
-		while (s->q.empty() && !s->stop)
-		{
-			s->worker_sleeping = true;
-			s->cv_work.wait(lk);
-			s->worker_sleeping = false;
-		}
-		if (s->q.empty() && s->stop)
-			break;
-		batch.swap(s->q);
-		lk.unlock();
-
-		bool any_barrier = false;
-		for (Cmd& c : batch)
-		{
-			execute(s, c);
-			if (c.barrier)
-			{
-				lk.lock();
-				for (const rrv_spu2_event& e : s->core.events)
-					s->ready_events.push_back(e);
-				s->core.events.clear();
-				c.barrier->done = true;
-				lk.unlock();
-				any_barrier = true;
-			}
-		}
-		batch.clear();
-		s->worker_cpu_ns.store(thread_cpu_ns(), std::memory_order_relaxed);
-		if (any_barrier)
-			s->cv_done.notify_all();
-		lk.lock();
-	}
-}
-
 u64 stamp(rrv_spu2* s, u64 t)
 {
-	if (t < s->last_t)
-	{
-		s->clamp_violations.fetch_add(1, std::memory_order_relaxed);
-		return s->last_t;
-	}
-	s->last_t = t;
-	return t;
+    s->last_t = std::max(t, s->last_t);
+    return s->last_t;
 }
 
-// Submit a command; in inline mode run it now. Waits for barriers.
-void submit(rrv_spu2* s, Cmd&& c)
+void start_dma(rrv_spu2* s, u64 t, int core, u32 spu_addr16, const u16* input, u16* output, u32 count16)
 {
-	if (!s->cfg.threaded)
-	{
-		execute(s, c);
-		if (c.barrier)
-		{
-			for (const rrv_spu2_event& e : s->core.events)
-				s->ready_events.push_back(e);
-			s->core.events.clear();
-			c.barrier->done = true;
-		}
-		return;
-	}
-	Barrier* b = c.barrier;
-	std::unique_lock<std::mutex> lk(s->m);
-	s->q.push_back(std::move(c));
-	const u64 depth = s->q.size();
-	if (depth > s->queue_high_water.load(std::memory_order_relaxed))
-		s->queue_high_water.store(depth, std::memory_order_relaxed);
-	const bool wake = s->worker_sleeping;
-	if (!b)
-	{
-		lk.unlock();
-		if (wake)
-			s->cv_work.notify_one();
-		return;
-	}
-	if (wake)
-		s->cv_work.notify_one();
-	s->cv_done.wait(lk, [b] { return b->done; });
+    run_to(stamp(s, t));
+    core = core ? 1 : 0;
+    count16 = std::min(count16, kMaxDmaHalfwords);
+    if (spu_addr16 != RRV_SPU2_KEEP_TSA)
+        write_tsa(core, spu_addr16);
+    const u32 staging = core ? kStagingBytesPerCore : 0;
+    u16* mem = reinterpret_cast<u16*>(iopPhysMem(staging));
+    (core ? HW_DMA7_MADR : HW_DMA4_MADR) = staging;
+    (core ? HW_DMA7_BCR : HW_DMA4_BCR) = (count16 + 1) / 2 | (1u << 16);
+    u32& chcr = core ? HW_DMA7_CHCR : HW_DMA4_CHCR;
+    if (input) {
+        std::memcpy(mem, input, count16 * sizeof(u16));
+        chcr = kChcrToSpu;
+        if (core) SPU2writeDMA7Mem(mem, count16);
+        else SPU2writeDMA4Mem(mem, count16);
+    } else {
+        const u32 address = Cores[core].TSA & 0xFFFFF;
+        for (u32 i = 0; i < count16; ++i)
+            output[i] = static_cast<u16>(_spu2mem[(address + i) & 0xFFFFF]);
+        chcr = kChcrFromSpu;
+        if (core) SPU2readDMA7Mem(mem, count16);
+        else SPU2readDMA4Mem(mem, count16);
+    }
+    s->core.irq_bits_seen = (Spdif.Info >> 2) & 3;
 }
 } // namespace
 
-// ---------------------------------------------------------------------------
-// C ABI
-// ---------------------------------------------------------------------------
-
 extern "C" {
-
-rrv_spu2* rrv_spu2_create(const rrv_spu2_config* cfg)
+rrv_spu2* rrv_spu2_create(void)
 {
-	bool expected = false;
-	if (!g_instance_live.compare_exchange_strong(expected, true))
-		return nullptr;
-
-	rrv_spu2* s = new rrv_spu2();
-	if (cfg)
-		s->cfg = *cfg;
-		const char* stretch = std::getenv("PS2X_AUDIO_STRETCH");
-		// Off by default: the guest clocks follow the host clock, and the adaptive stretcher reacts to the
-		// underrun counter of a bursty producer by dropping frames (measured: ~20% of output frames in a match).
-		s->stretch_enabled = stretch && stretch[0] == '1' && stretch[1] == '\0';
-	const u32 frames = next_pow2(s->cfg.output_ring_frames ? s->cfg.output_ring_frames : 8192);
-	s->ring.assign(size_t(frames) * 2, 0.0f);
-	s->ring_mask = frames - 1;
-	if (const char* target = std::getenv("PS2X_SPU2_TARGET_MS")) {
-		char* end = nullptr;
-		const unsigned long ms = std::strtoul(target, &end, 10);
-		if (end != target && *end == '\0' && ms >= 1 && ms <= 250)
-			s->prime_frames = std::min<u64>(ms * 48u, frames);
-	}
-	// Priming needs the ring to actually reach the threshold; never require it to
-	// be more than half full or a running consumer can keep it just below.
-	s->prime_frames = std::min<u64>(s->prime_frames, frames / 2u);
-
-	g_inst = s;
-	g_state = &s->core;
-	core_power_on(s->core);
-
-	if (s->cfg.threaded)
-		s->worker = std::thread(worker_main, s);
-	return s;
+    bool expected = false;
+    if (!g_instance_live.compare_exchange_strong(expected, true))
+        return nullptr;
+    rrv_spu2* s = new rrv_spu2();
+    g_inst = s;
+    g_state = &s->core;
+    core_power_on(s->core);
+    return s;
 }
 
 void rrv_spu2_destroy(rrv_spu2* s)
 {
-	if (!s)
-		return;
-	if (s->worker.joinable())
-	{
-		{
-			std::lock_guard<std::mutex> lk(s->m);
-			s->stop = true;
-		}
-		s->cv_work.notify_one();
-		s->worker.join();
-	}
-	g_state = nullptr;
-	g_inst = nullptr;
-	delete s;
-	g_instance_live.store(false);
+    if (!s) return;
+    g_state = nullptr;
+    g_inst = nullptr;
+    delete s;
+    g_instance_live.store(false);
 }
 
-void rrv_spu2_write16(rrv_spu2* s, uint64_t t, uint32_t reg_addr, uint16_t v)
+void rrv_spu2_write16(rrv_spu2* s, uint64_t t, uint32_t reg_addr, uint16_t value)
 {
-	submit(s, Cmd{Op::Write16, 0, stamp(s, t), norm_reg(reg_addr), v, {}, nullptr});
+    run_to(stamp(s, t));
+    SPU2write(norm_reg(reg_addr), value);
+    s->core.irq_bits_seen = (Spdif.Info >> 2) & 3;
 }
 
 uint16_t rrv_spu2_read16(rrv_spu2* s, uint64_t t, uint32_t reg_addr)
 {
-	Barrier b;
-	submit(s, Cmd{Op::Read16, 0, stamp(s, t), norm_reg(reg_addr), 0, {}, &b});
-	return b.r16;
+    run_to(stamp(s, t));
+    const u16 result = SPU2read(norm_reg(reg_addr));
+    s->core.irq_bits_seen = (Spdif.Info >> 2) & 3;
+    return result;
 }
 
 void rrv_spu2_dma_write(rrv_spu2* s, uint64_t t, int core, uint32_t spu_addr16, const uint16_t* data, uint32_t count16)
 {
-	if (count16 > kMaxDmaHalfwords)
-	{
-		s->dma_truncated.fetch_add(1, std::memory_order_relaxed);
-		count16 = kMaxDmaHalfwords;
-	}
-	Cmd c{Op::DmaWrite, core, stamp(s, t), spu_addr16, count16, {}, nullptr};
-	c.payload.assign(data, data + count16);
-	submit(s, std::move(c));
+    start_dma(s, t, core, spu_addr16, data, nullptr, count16);
 }
 
-void rrv_spu2_dma_read(rrv_spu2* s, uint64_t t, int core, uint32_t spu_addr16, uint16_t* out, uint32_t count16)
+void rrv_spu2_dma_read(rrv_spu2* s, uint64_t t, int core, uint32_t spu_addr16, uint16_t* output, uint32_t count16)
 {
-	if (count16 > kMaxDmaHalfwords)
-	{
-		s->dma_truncated.fetch_add(1, std::memory_order_relaxed);
-		count16 = kMaxDmaHalfwords;
-	}
-	Barrier b;
-	b.out = out;
-	submit(s, Cmd{Op::DmaRead, core, stamp(s, t), spu_addr16, count16, {}, &b});
+    start_dma(s, t, core, spu_addr16, nullptr, output, count16);
 }
 
-void rrv_spu2_advance(rrv_spu2* s, uint64_t t)
+size_t rrv_spu2_sync(rrv_spu2* s, uint64_t t, rrv_spu2_event* output, size_t max)
 {
-	submit(s, Cmd{Op::Advance, 0, stamp(s, t), 0, 0, {}, nullptr});
+    run_to(stamp(s, t));
+    s->core.irq_bits_seen = (Spdif.Info >> 2) & 3;
+    auto& events = s->core.events;
+    const size_t count = std::min(max, events.size());
+    std::copy_n(events.begin(), count, output);
+    events.erase(events.begin(), events.begin() + static_cast<std::ptrdiff_t>(count));
+    return count;
 }
 
-size_t rrv_spu2_sync(rrv_spu2* s, uint64_t t, rrv_spu2_event* out, size_t max)
+size_t rrv_spu2_pull_output(rrv_spu2* s, float* output, size_t frames)
 {
-	Barrier b;
-	submit(s, Cmd{Op::Sync, 0, stamp(s, t), 0, 0, {}, &b});
-	std::unique_lock<std::mutex> lk(s->m, std::defer_lock);
-	if (s->cfg.threaded)
-		lk.lock();
-	const size_t n = std::min(max, s->ready_events.size());
-	for (size_t i = 0; i < n; i++)
-		out[i] = s->ready_events[i];
-	s->ready_events.erase(s->ready_events.begin(), s->ready_events.begin() + static_cast<std::ptrdiff_t>(n));
-	return n;
-}
-
-size_t rrv_spu2_pull_output(rrv_spu2* s, float* dst, size_t frames)
-{
-	const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
-	const u64 head = s->ring_head.load(std::memory_order_acquire);
-	const u64 queued = head - tail;
-	record_stall_event(StallKind::Pull, frames, queued);
-	record_stall_event(StallKind::Occupancy, queued, queued);
-	if (!s->output_primed)
-	{
-		if (queued < s->prime_frames)
-		{
-			std::memset(dst, 0, frames * 2 * sizeof(float));
-			return 0;
-		}
-		s->output_primed = true;
-	}
-	const size_t avail = static_cast<size_t>(std::min<u64>(head - tail, frames));
-	for (size_t i = 0; i < avail; i++)
-	{
-		const u64 j = ((tail + i) & s->ring_mask) * 2;
-		dst[2 * i] = s->ring[j];
-		dst[2 * i + 1] = s->ring[j + 1];
-	}
-	s->ring_tail.store(tail + avail, std::memory_order_release);
-	if (avail < frames)
-	{
-		std::memset(dst + 2 * avail, 0, (frames - avail) * 2 * sizeof(float));
-		s->underruns.fetch_add(frames - avail, std::memory_order_relaxed);
-		record_stall_event(StallKind::Underrun, frames - avail, queued);
-		g_stallTraceDumpRequested.store(true, std::memory_order_release);
-		std::fprintf(stderr, "[spu2-underrun] frames=%zu ring_occupancy_frames=%llu\n",
-			frames - avail, static_cast<unsigned long long>(head - tail));
-	}
-	return avail;
-}
-
-bool rrv_spu2_capture_start(rrv_spu2* s, const char* prefix, unsigned delay_seconds, unsigned seconds)
-{
-    if (!s || s->capture || !prefix || !*prefix || seconds < 1 || seconds > 300 || delay_seconds > 600)
-        return false;
-    try {
-        s->capture = std::make_unique<rrv_audio_capture>(prefix, delay_seconds, seconds);
-        return true;
-    } catch (const std::exception&) {
-        return false;
+    const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
+    const u64 head = s->ring_head.load(std::memory_order_acquire);
+    if (!s->output_primed) {
+        if (head - tail < kPrimeFrames) {
+            std::memset(output, 0, frames * 2 * sizeof(float));
+            return 0;
+        }
+        s->output_primed = true;
     }
-}
-
-void rrv_spu2_capture_output(rrv_spu2* s, const float* samples, size_t frames, size_t real_frames)
-{
-    if (s && s->capture) {
-        const u64 tail = s->ring_tail.load(std::memory_order_relaxed);
-        s->capture->output(samples, frames, real_frames,
-            s->frames_mixed.load(std::memory_order_relaxed),
-            s->ring_head.load(std::memory_order_relaxed), tail - real_frames);
+    const size_t count = static_cast<size_t>(std::min<u64>(head - tail, frames));
+    for (size_t i = 0; i < count; ++i) {
+        const u64 index = ((tail + i) & kRingMask) * 2;
+        output[i * 2] = s->ring[index];
+        output[i * 2 + 1] = s->ring[index + 1];
     }
+    s->ring_tail.store(tail + count, std::memory_order_release);
+    if (count < frames)
+        std::memset(output + count * 2, 0, (frames - count) * 2 * sizeof(float));
+    return count;
 }
-
-void rrv_spu2_get_stats(rrv_spu2* s, rrv_spu2_stats* o)
-{
-	o->frames_mixed = s->frames_mixed.load(std::memory_order_relaxed);
-	o->underrun_frames = s->underruns.load(std::memory_order_relaxed);
-	o->overrun_frames = s->overruns.load(std::memory_order_relaxed);
-	o->clamp_violations = s->clamp_violations.load(std::memory_order_relaxed);
-	o->queue_high_water = s->queue_high_water.load(std::memory_order_relaxed);
-	o->commands = s->commands.load(std::memory_order_relaxed);
-	o->dma_overlaps = s->dma_overlaps.load(std::memory_order_relaxed);
-	o->dma_truncated = s->dma_truncated.load(std::memory_order_relaxed);
-	o->output_hash = s->output_hash.load(std::memory_order_relaxed);
-	o->worker_cpu_ns = s->worker_cpu_ns.load(std::memory_order_relaxed);
-	o->frames_enqueued = s->frames_enqueued.load(std::memory_order_relaxed);
-	o->mix_wall_ns = g_perfMixNs.load(std::memory_order_relaxed);
-}
-
-uint64_t rrv_spu2_state_hash(rrv_spu2* s, uint64_t t)
-{
-	Barrier b;
-	submit(s, Cmd{Op::Hash, 0, stamp(s, t), 0, 0, {}, &b});
-	return b.r64;
-}
-
 } // extern "C"

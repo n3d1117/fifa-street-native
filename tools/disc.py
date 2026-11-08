@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify and extract your own disc (identity: config/game.json).
 
-  tools/disc.py <iso>               verify SHA-1s, extract to extracted/disc, write reports/disc-inventory.json
+  tools/disc.py <iso>               verify SHA-1s, extract to extracted/disc
   tools/disc.py <iso> --dest DIR    same, into DIR
 
 Exit codes: 0 ok, 1 verification failed, 2 missing prerequisite.
@@ -12,15 +12,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
-import json
 import re
-import struct
 import sys
 from pathlib import Path, PurePosixPath
 
 from game import DISC, ELF, GAME, ROOT
 
-DEFAULT_REPORT = ROOT / "reports" / "disc-inventory.json"
 STAMP = ROOT / "build/disc.stamp"
 
 
@@ -55,35 +52,6 @@ def safe_relative(iso_path: str) -> Path:
     if not parts:
         raise ValueError(f"not a file path: {iso_path!r}")
     return Path(*parts)
-
-
-def elf_report(path: Path) -> dict:
-    data = path.read_bytes()
-    info = {"size_bytes": len(data), "sha1": hashlib.sha1(data).hexdigest()}
-    if len(data) < 52 or data[:6] != b"\x7fELF\x01\x01":
-        info["error"] = "boot file is not a little-endian ELF32"
-        return info
-    header = struct.unpack_from("<HHIIIIIHHHHHH", data, 16)
-    entry, phoff, shoff = header[3], header[4], header[5]
-    phentsize, phnum, shentsize, shnum, shstrndx = header[8], header[9], header[10], header[11], header[12]
-    info.update({"machine_id": header[1], "entry_point": f"0x{entry:08x}"})
-    info["segments"] = [
-        dict(zip(("type", "offset", "vaddr", "paddr", "file_size", "memory_size", "flags", "alignment"),
-                 struct.unpack_from("<IIIIIIII", data, phoff + i * phentsize)))
-        for i in range(phnum) if phentsize >= 32 and phoff + (i + 1) * phentsize <= len(data)]
-    sections = []
-    if shentsize >= 40 and shoff + shnum * shentsize <= len(data):
-        raw = [struct.unpack_from("<IIIIIIIIII", data, shoff + i * shentsize) for i in range(shnum)]
-        names = b""
-        if shstrndx < len(raw) and raw[shstrndx][4] + raw[shstrndx][5] <= len(data):
-            names = data[raw[shstrndx][4]:raw[shstrndx][4] + raw[shstrndx][5]]
-        for name_off, kind, flags, addr, offset, size, *_ in raw:
-            end = names.find(b"\0", name_off)
-            name = names[name_off:end].decode("ascii", "replace") if end >= 0 else ""
-            sections.append({"name": name, "type": kind, "flags": f"0x{flags:x}", "address": f"0x{addr:08x}", "size": size})
-    info["sections"] = sections
-    info["has_symbol_table"] = any(sec["type"] == 2 for sec in sections)
-    return info
 
 
 def read_boot_elf(iso) -> bytes:
@@ -130,7 +98,7 @@ def write_lbn_map(iso_path: Path, dest: Path, records, volume_sectors: int) -> N
     print(f"lbn map: {len(extents)} files, {len(blob) // SECTOR} non-file sectors")
 
 
-def extract(iso_path: Path, dest: Path, report_path: Path) -> None:
+def extract(iso_path: Path, dest: Path) -> None:
     import pycdlib
     iso = pycdlib.PyCdlib()
     iso.open(str(iso_path))
@@ -163,22 +131,7 @@ def extract(iso_path: Path, dest: Path, report_path: Path) -> None:
                 continue
             iso.get_file_from_iso(local_path=str(target), iso_path=record["iso_path"])
         write_lbn_map(iso_path, dest, records, iso.pvd.space_size)
-        extensions = {}
-        for record in records:
-            suffix = Path(record["relative_path"]).suffix.lower() or "[no extension]"
-            extensions[suffix] = extensions.get(suffix, 0) + 1
-        report = {
-            "game": GAME["id"], "source_iso": str(iso_path), "iso_size_bytes": iso_path.stat().st_size,
-            "volume_space_size_sectors": iso.pvd.space_size, "extraction_root": str(dest),
-            "file_count": len(records), "total_file_bytes": sum(r["size_bytes"] for r in records),
-            "extension_counts": dict(sorted(extensions.items())),
-            "system_cnf": (dest / "SYSTEM.CNF").read_text("ascii", errors="replace") if (dest / "SYSTEM.CNF").is_file() else None,
-            "boot_elf": elf_report(dest / GAME["elf"]),
-            "files": records,
-        }
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(f"extracted {report['file_count']} files, {report['total_file_bytes']:,} bytes to {dest}")
+        print(f"extracted {len(records)} files to {dest}")
     finally:
         iso.close()
 
@@ -193,7 +146,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("iso", type=Path, help="path to your own disc image")
     parser.add_argument("--dest", type=Path, default=DISC)
-    parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()
     try:
         iso_path = args.iso.expanduser().resolve()
@@ -210,7 +162,7 @@ def main() -> int:
             return 0
         if file_digest(iso_path, "sha1") != GAME["iso_sha1"]:
             raise Fail(f"ISO SHA-1 mismatch for {iso_path.name}; expected {GAME['title']} ({GAME['id']}), {GAME['iso_sha1']}")
-        extract(iso_path, dest, args.report.expanduser().resolve())
+        extract(iso_path, dest)
         if default_dest:
             STAMP.parent.mkdir(parents=True, exist_ok=True)
             STAMP.write_text(stamp_key(iso_path) + "\n")

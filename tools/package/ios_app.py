@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """Assemble a runnable iOS/tvOS app from an embedded build and extracted disc."""
 import argparse
-import json
-import os
 from pathlib import Path
 import plistlib
-import re
 import shutil
 import subprocess
 import sys

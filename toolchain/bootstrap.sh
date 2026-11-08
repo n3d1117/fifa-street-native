@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Install the pinned build toolchain under tools/build: CMake, Ninja, ccache and LLVM 19.
+# Install the pinned build toolchain under tools/build: CMake, Ninja and LLVM 19.
 # Idempotent. If RX_LLVM points at an existing LLVM 19 install (with
 # bin/clang++), the LLVM build is skipped; the other tools are still fetched.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 B="$ROOT/tools/build"
-LOGS="$ROOT/logs"
+LOGS="$ROOT/build/logs"
 JOBS="${RX_JOBS:-$(python3 "$ROOT/tools/jobs.py")}"
 CMAKE_VER=3.31.12
 CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v$CMAKE_VER/cmake-$CMAKE_VER-macos-universal.tar.gz"
@@ -13,9 +13,6 @@ CMAKE_SHA=799af7fd545db9bf1b9cfe72f8095880e727a2d4e0df0e3dffc3bc7b95c2d3b0
 NINJA_VER=1.13.1
 NINJA_URL="https://github.com/ninja-build/ninja/releases/download/v$NINJA_VER/ninja-mac.zip"
 NINJA_SHA=da7797794153629aca5570ef7c813342d0be214ba84632af886856e8f0063dd9
-CCACHE_VER=4.14.2
-CCACHE_URL="https://github.com/ccache/ccache/releases/download/v$CCACHE_VER/ccache-$CCACHE_VER-darwin.tar.gz"
-CCACHE_SHA=cf240009630b605b775c7c5c7b7105a3b196c79f31af322c1557969aa28003fc
 LLVM_TAG=llvmorg-19.1.7
 LLVM_COMMIT=cd708029e0b2869e80abe31ddb175f7c35361f90
 CMAKE="$B/cmake-$CMAKE_VER/CMake.app/Contents/bin/cmake"
@@ -45,17 +42,6 @@ if [[ ! -x "$NINJA" ]]; then
   mkdir -p "$B/ninja-$NINJA_VER"
   unzip -oq "$B/ninja-$NINJA_VER.zip" -d "$B/ninja-$NINJA_VER"
   chmod +x "$NINJA"
-fi
-
-if [[ ! -x "$B/ccache/ccache" ]] || ! "$B/ccache/ccache" --version | grep -qx "ccache version $CCACHE_VER"; then
-  echo "== ccache $CCACHE_VER"
-  fetch "$CCACHE_URL" "$CCACHE_SHA" "$B/ccache-$CCACHE_VER.tar.gz"
-  tmp="$(mktemp -d "$B/ccache-extract.XXXX")"
-  tar -xzf "$B/ccache-$CCACHE_VER.tar.gz" -C "$tmp"
-  "$tmp/ccache-$CCACHE_VER-darwin/ccache" --version
-  rm -rf "$B/ccache"
-  mv "$tmp/ccache-$CCACHE_VER-darwin" "$B/ccache"
-  rmdir "$tmp"
 fi
 
 if [[ -n "${RX_LLVM:-}" && -x "$RX_LLVM/bin/clang++" ]]; then

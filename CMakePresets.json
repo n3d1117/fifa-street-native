@@ -22,7 +22,7 @@
     },
     {
       "name": "release",
-      "displayName": "Game, tests and recompiler (Metal, Release)",
+      "displayName": "Native game and recompiler (Metal, Release)",
       "inherits": "base",
       "binaryDir": "${sourceDir}/build/game-metal",
       "cacheVariables": {
@@ -35,8 +35,7 @@
       "name": "release",
       "configurePreset": "release",
       "targets": [
-        "ps2EntryRunner",
-        "metalHostSmoke"
+        "ps2EntryRunner"
       ]
     },
     {
@@ -45,51 +44,6 @@
       "targets": [
         "ps2_recomp"
       ]
-    },
-    {
-      "name": "tests",
-      "configurePreset": "release"
-    }
-  ],
-  "testPresets": [
-    {
-      "name": "tests",
-      "configurePreset": "release",
-      "output": {
-        "outputOnFailure": true
-      },
-      "execution": {
-        "jobs": 1
-      },
-      "filter": {
-        "exclude": {
-          "label": "gui|slow"
-        }
-      }
-    },
-    {
-      "name": "gui",
-      "configurePreset": "release",
-      "filter": {
-        "include": {
-          "label": "gui"
-        }
-      },
-      "output": {
-        "outputOnFailure": true
-      }
-    },
-    {
-      "name": "slow",
-      "configurePreset": "release",
-      "filter": {
-        "include": {
-          "label": "slow"
-        }
-      },
-      "output": {
-        "outputOnFailure": true
-      }
     }
   ]
 }

@@ -1,8 +1,4 @@
-# fifa-metal-pipelines v1
-# pcsx2-pin=5b6e6e23eba403b589495c1abf8266eb1309a5b1
-# family=Apple GPU (informational)
 # features=shader=3;fbf=1;primid=1;rov=1;rrt=0;rr32=0;depth=0;broken=1
-# selectors recorded from FIFA Street NTSC/PAL runs and a simulator feature profile
 vs=00 ps_hi=0000000000000808 ps_lo=0000000004000000 extras=080000f1
 vs=00 ps_hi=0000000000000808 ps_lo=4815000004000000 extras=0cfedee1
 vs=00 ps_hi=0000000000000808 ps_lo=4815000004000000 extras=0cfedef1
@@ -261,7 +257,6 @@ vs=02 ps_hi=0000000000080808 ps_lo=000000040801010c extras=080000f1
 vs=02 ps_hi=0000000000080808 ps_lo=000400040900010c extras=0cef8cf1
 vs=06 ps_hi=0000000000010808 ps_lo=0004000008000800 extras=0cef8cf1
 vs=06 ps_hi=0000000000010808 ps_lo=0015000008000800 extras=0cfeeef1
-
 vs=20 ps_hi=0000000000000808 ps_lo=4815000004000000 extras=0cfedee1
 vs=20 ps_hi=0000000000000808 ps_lo=0800000004000000 extras=080000e1
 vs=02 ps_hi=0000000008010008 ps_lo=0800000009000000 extras=000000e1
@@ -688,7 +683,6 @@ vs=33 ps_hi=0000000000000000 ps_lo=0800000008800000 extras=04fe5fe1
 vs=02 ps_hi=0000000000010808 ps_lo=000000000b000200 extras=080000f1
 vs=02 ps_hi=0000000000010008 ps_lo=0811000008000000 extras=04feeee1
 vs=02 ps_hi=0000000000010800 ps_lo=4811000208010000 extras=0cfe5ee1
-# recorded from FIFA Street on the simulator; family is not part of the selector tag
 # features=shader=3;fbf=1;primid=1;rov=0;rrt=0;rr32=1;depth=0;broken=1
 vs=33 ps_hi=0000000000000008 ps_lo=0000000009800010 extras=000000e1
 vs=02 ps_hi=0000000000010008 ps_lo=0800000009000000 extras=000000e1

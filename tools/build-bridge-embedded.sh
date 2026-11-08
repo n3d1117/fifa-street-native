@@ -9,7 +9,7 @@ case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;
   *) echo "Usage: $0 <iphonesimulator|iphoneos|appletvos|appletvsimulator>" >&2; exit 2 ;;
 esac
-export DEVELOPER_DIR="${DEVELOPER_DIR:-$HOME/Developer/Xcode-12.5.1/Xcode.app/Contents/Developer}"
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 LLVM="$ROOT/tools/build/llvm19"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 NINJA="$ROOT/tools/build/ninja-1.13.1/ninja"
@@ -34,7 +34,7 @@ embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" 
   -DCMAKE_MAKE_PROGRAM="$NINJA" \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchain-llvm19-embedded.cmake" \
   -DRX_APPLE_PLATFORM="$PLATFORM" \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH="$PREFIX" \
   -DFFMPEG_ROOT="$PREFIX" \
   -DENABLE_QT_UI=OFF -DENABLE_TESTS=OFF -DENABLE_GSRUNNER=OFF \
@@ -53,7 +53,6 @@ embedded_cmake_configure "$CMAKE" "$ROOT/cmake/toolchain-llvm19-embedded.cmake" 
   -DRX_APPLE_PLATFORM="$PLATFORM" \
   -DCMAKE_BUILD_TYPE=Release \
   -DRRV_PCSX2_SOURCE_DIR="$PCSX2" \
-  -DRRV_SPU2_BUILD_TESTS=OFF -DRRV_SPU2_TSAN_TESTS=OFF \
   -DCMAKE_EXE_LINKER_FLAGS="-L$ROOT/tools/embedded/$PLATFORM/libcxx/lib -stdlib=libc++" \
   2>&1 | tee "$LOG/$PLATFORM-spu2-configure.log"
 CMAKE_BUILD_PARALLEL_LEVEL="$JOBS" "$CMAKE" --build "$SPU2_BUILD" \

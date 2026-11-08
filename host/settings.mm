@@ -67,17 +67,6 @@ NSDictionary* read_dictionary(const std::string& dir) {
     NSDictionary* plist = [NSDictionary dictionaryWithContentsOfFile:plist_path(dir)];
     return [plist isKindOfClass:[NSDictionary class]] ? plist : nil;
 }
-// Launch-time quality defaults. Only two classes of machine have been measured:
-//   Apple A13 (iPhone 11, 1125x2436): 2x holds 60 Hz (58.9-59.2 fps, GPU 6.3 ms
-//     p50 / 8.0 ms p95); 3x is measurably worse (late frames +5.8 pp), so A12/A13
-//     class parts start at 2x.
-//   Apple A15 (Apple TV 4K): 3x fits the 60 Hz budget at 10.9 ms GPU p50 and 5x
-//     dropped frames, so A14 and newer start at 3x.
-// Anisotropy 16 is smoothness-neutral at 2x on the A13 (GPU +1.4 ms, fps and
-// late frames within noise) and is the sharper setting, so mobile starts at 16.
-// macOS picks the scale whose render height covers the display's pixel height,
-// clamped to 2..6: every scale from 1x to 6x measured 60.0 fps on this M1 (4x
-// 4.9 ms, 5x 7.2 ms, 6x 8.5 ms GPU p50), so the display decides.
 int apple_gpu_tier(NSString* name) {
     // "Apple A13 GPU", "Apple A15 GPU", "Apple M1", "Apple M2 Pro", "Apple GPU".
     const char* text = name.UTF8String;
@@ -115,8 +104,6 @@ HardwareQuality detect_hardware_quality() {
             const int height = static_cast<int>(pixels.size.height);
             if (height > 0) {
                 const int scale = (height + 447) / 448;
-                // Measured on this M1: 4x 4.9 ms, 5x 7.2 ms and 6x 8.5 ms GPU
-                // p50, all at 60.0 fps, so the cap is the renderer's own maximum.
                 quality.renderScale = scale < 2 ? 2 : (scale > 6 ? 6 : scale);
             }
         }
@@ -132,21 +119,11 @@ Settings load_settings_file(const std::string& user_dir) {
         const HardwareQuality quality = detect_hardware_quality();
         s.renderScale = quality.renderScale;
         s.anisotropy = quality.anisotropy;
-        // Installs that predate the detected defaults keep whatever they saved;
-        // older settings.plist files are migrated once, so a phone that saved the
-        // old 1x default picks up 2x instead of staying soft forever.
-        const NSInteger version = is_integer_number(plist[@"defaultsVersion"])
-            ? [plist[@"defaultsVersion"] integerValue] : 0;
-        const bool adoptStoredQuality = plist != nil && version >= kDefaultsVersion;
-        s.sharperImage = flag(plist, @"sharperImage");
         s.rumble = flag(plist, @"rumble");
-        s.fxaa = flag(plist, @"fxaa");
-        s.smoothUiTextures = flag(plist, @"smoothUiTextures");
-        s.unlockAllVenues = flag(plist, @"unlockAllVenues");
         s.videoMode = [plist[@"videoMode"] isKindOfClass:[NSString class]] &&
             [plist[@"videoMode"] isEqualToString:@"pal"] ? VideoMode::PAL : VideoMode::NTSC;
         s.displayAspect = display_aspect(plist[@"displayAspect"]);
-        if (adoptStoredQuality) {
+        if (plist) {
             if (const int scale = valid_render_scale(plist[@"renderScale"])) s.renderScale = scale;
             if (const int aniso = valid_anisotropy(plist[@"anisotropy"]); aniso >= 0) s.anisotropy = aniso;
         }
@@ -155,62 +132,14 @@ Settings load_settings_file(const std::string& user_dir) {
     }
 }
 
-void apply_env_overrides(Settings& s, EnvLookup lookup) {
-    auto get = [&](const char* name) -> const char* {
-        const char* v = lookup(name);
-        return v && v[0] ? v : nullptr;
-    };
-    if (const char* scale = get("PS2X_SCALE"); scale && scale[0] >= '1' && scale[0] <= '6' && !scale[1])
-        s.renderScale = scale[0] - '0';
-    if (const char* aniso = get("PS2X_ANISO")) {
-        const std::string value(aniso);
-        if (value == "0" || value == "2" || value == "4" || value == "8" || value == "16")
-            s.anisotropy = std::stoi(value);
-    }
-    if (const char* sharp = get("PS2X_SHARP"); sharp && std::string(sharp) == "1") s.sharperImage = true;
-    if (const char* fxaa = get("PS2X_FXAA"); fxaa && std::string(fxaa) == "1") s.fxaa = true;
-    if (const char* ui = get("PS2X_UI_UPSCALE")) {
-        if (std::string(ui) == "0") s.smoothUiTextures = false;
-        else if (std::string(ui) == "1") s.smoothUiTextures = true;
-    }
-    if (const char* rumble = get("PS2X_RUMBLE")) {
-        if (std::string(rumble) == "0") s.rumble = false;
-        else if (std::string(rumble) == "1") s.rumble = true;
-    }
-    if (const char* intensity = get("PS2X_RUMBLE_INTENSITY")) {
-        const std::string value(intensity);
-        try {
-            const int level = std::stoi(value);
-            if (level >= 25 && level <= 100 && std::to_string(level) == value) s.rumbleIntensity = level;
-        } catch (...) {}
-    }
-    if (const char* wall = get("PS2X_WALLCLOCK"); wall && std::string(wall) != "1") s.wallClock = false;
-    if (const char* venues = get("PS2X_CHEAT_UNLOCK_VENUES"); venues && std::string(venues) == "1") s.unlockAllVenues = true;
-    if (const char* mode = get("PS2X_VIDEO_MODE")) {
-        if (std::string(mode) == "pal") s.videoMode = VideoMode::PAL;
-        else if (std::string(mode) == "ntsc") s.videoMode = VideoMode::NTSC;
-    }
-    if (const char* aspect = get("PS2X_ASPECT")) {
-        const std::string value(aspect);
-        if (value == "auto") s.displayAspect = DisplayAspect::Auto;
-        else if (value == "4:3") s.displayAspect = DisplayAspect::FourThree;
-        else if (value == "16:9") s.displayAspect = DisplayAspect::SixteenNine;
-    }
-}
-
 bool save_settings_file(const std::string& user_dir, const Settings& s) {
     @autoreleasepool {
         if (user_dir.empty()) return false;
-        NSMutableDictionary* plist = [NSMutableDictionary dictionaryWithDictionary:(read_dictionary(user_dir) ?: @{})];
+        NSMutableDictionary* plist = [NSMutableDictionary dictionary];
         plist[@"renderScale"] = @(s.renderScale);
         plist[@"anisotropy"] = @(s.anisotropy);
-        plist[@"defaultsVersion"] = @(kDefaultsVersion);
-        plist[@"sharperImage"] = @(s.sharperImage);
         plist[@"rumble"] = @(s.rumble);
         plist[@"rumbleIntensity"] = @(s.rumbleIntensity);
-        plist[@"fxaa"] = @(s.fxaa);
-        plist[@"smoothUiTextures"] = @(s.smoothUiTextures);
-        plist[@"unlockAllVenues"] = @(s.unlockAllVenues);
         plist[@"videoMode"] = s.videoMode == VideoMode::NTSC ? @"ntsc" : @"pal";
         plist[@"displayAspect"] = display_aspect_name(s.displayAspect);
         NSError* error = nil;

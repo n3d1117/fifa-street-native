@@ -8,7 +8,7 @@ case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;
   *) echo "Usage: $0 <iphonesimulator|iphoneos|appletvos|appletvsimulator>" >&2; exit 2 ;;
 esac
-export DEVELOPER_DIR="${DEVELOPER_DIR:-$HOME/Developer/Xcode-12.5.1/Xcode.app/Contents/Developer}"
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 LLVM="$ROOT/tools/build/llvm19"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 NINJA="$ROOT/tools/build/ninja-1.13.1/ninja"

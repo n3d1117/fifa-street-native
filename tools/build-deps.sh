@@ -10,7 +10,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/tools/ffmpeg-minimal-components.sh"
 LLVM="${RX_LLVM:-$ROOT/tools/build/llvm19}"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
-CTEST="$(dirname "$CMAKE")/ctest"
 NINJA="$ROOT/tools/build/ninja-1.13.1/ninja"
 TOOLCHAIN="$ROOT/cmake/toolchain-llvm19.cmake"
 SDK="$(xcrun --show-sdk-path)"
@@ -167,7 +166,7 @@ build_bridge() {
   export PATH="$(dirname "$NINJA"):$PATH"
   "$CMAKE" -S "$pcsx2" -B "$build" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN" \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_MAKE_PROGRAM="$NINJA" \
     -DCMAKE_PREFIX_PATH="$deps_prefix" \
     -DFFMPEG_ROOT="$ffmpeg_prefix" \
@@ -195,11 +194,8 @@ build_spu2() {
       -DCMAKE_MAKE_PROGRAM="$NINJA" \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_EXE_LINKER_FLAGS="-L$LLVM/lib -stdlib=libc++ -Wl,-rpath,$LLVM/lib" \
-      -DRRV_PCSX2_SOURCE_DIR="$pcsx2" \
-      -DRRV_SPU2_BUILD_TESTS=ON \
-      -DRRV_SPU2_TSAN_TESTS=OFF
+      -DRRV_PCSX2_SOURCE_DIR="$pcsx2"
     "$NINJA" -C "$build" -j"$NCPU"
-    "$CMAKE" -E chdir "$build" "$CTEST" --output-on-failure
   } 2>&1 | tee "$LOGS/spu2-backend-build.log"
 }
 

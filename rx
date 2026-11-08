@@ -1,41 +1,12 @@
 #!/usr/bin/env python3
-"""rx: thin sequencer over the repo's real commands. Run from anywhere in the repo.
-
-  rx setup                 deps sync, venv, toolchain bootstrap, tools/build-deps.sh
-  rx deps [sync|export|status]
-  rx disc <iso> [--dest D] verify SHA-1s and extract the disc (tools/disc.py)
-  rx build [--reconfigure] rebuild stale deps and the recompiler, generate if inputs changed, release build
-                           (refuses, exit 2, if a build tree was configured from another path/case)
-  rx test [--full]         quick tier: ctest (no GUI/slow tests); --full adds the slow-labelled tests
-  rx check [--tracked]     repo hygiene, header-rebuild warning, unexported deps
-  rx run [--seconds N] [--save DIR] [--user-dir D] [--profile] [--app PATH [--quit-cycles N]]
-                           bounded boot run, isolated saves, summary block (tools/probe/probe.py)
-  rx ab --control ENV=VAL [--candidate ENV=VAL] [--pairs N] [--match|--seconds N] [--profile]
-                           alternating control/candidate runs with a median and noise table
-  rx package [--install]   icon, bundle, bundle audit, optional /Applications install (tools/package/)
-  rx device <sub>          sign/install/run USB iOS/tvOS devices (tools/device/device.py)
-  rx xcode                 generate the Xcode project from project.yml (XcodeGen 2.43.0)
-  rx ipa --platform ios|tvos|ios-sim|tvos-sim
-                           build embedded app, optionally boot its simulator, and produce an audited IPA
-  rx where <0xADDR|name>   generated file, config entry, HLE handler (tools/where.py)
-  rx where --unimplemented audit configured direct TODO handlers
-
-Full output goes to build/logs/<cmd>-<UTC>.log; -v streams it. Exit codes:
-0 pass, 1 check failed, 2 missing prerequisite (the message names the fix).
-"""
+"""Build and run the native FIFA Street port."""
 import argparse
 import hashlib
-import json
 import os
-import re
+from pathlib import Path
 import shutil
-import statistics
 import subprocess
 import sys
-import time
-from datetime import datetime, timezone
-from pathlib import Path
-
 
 def resolve_root():
     """Repo root with the on-disk case of every path component.
@@ -55,164 +26,37 @@ def resolve_root():
     except (OSError, AttributeError):
         return root
 
-
 ROOT = resolve_root()
 os.chdir(ROOT)
-os.environ["PWD"] = str(ROOT)  # cmake and ninja take the source dir from $PWD, not getcwd()
+os.environ["PWD"] = str(ROOT)
 os.environ["RX_ROOT"] = str(ROOT)
+os.environ.pop("__PYVENV_LAUNCHER__", None)
 sys.path.insert(0, str(ROOT / "tools"))
-import game  # noqa: E402
+import game
+import jobs
+
 CMAKE = ROOT / "tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
-CTEST = CMAKE.with_name("ctest")
 ELF, TEMPLATE, CONFIG, GENERATED = game.ELF, game.TEMPLATE, game.CONFIG, game.GENERATED
 RECOMP_BIN = ROOT / "build/game-metal/ps2recomp/ps2xRecomp/ps2_recomp"
 STAMP = ROOT / "build/generate.stamp"
-ERROR_RE = re.compile(r"error:|\bFAILED\b|\*\*\*Failed|Traceback|fatal error|^FAIL|failed:|Errors? while running", re.I)
 
 
-class Missing(Exception):
-    """Missing prerequisite -> exit 2."""
+class Commands:
+    def must(self, command, label=None, **kwargs):
+        subprocess.run([str(value) for value in command], check=True, **kwargs)
 
-
-class Failed(Exception):
-    """Check failed -> exit 1."""
-
-
-class Run:
-    """One rx command: owns the log, the summary and build/last-run.json."""
-
-    def __init__(self, name, verbose):
-        self.name, self.verbose = name, verbose
-        self.start = time.monotonic()
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        self.log_path = ROOT / "build/logs" / f"{name}-{stamp}.log"
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        self.log = self.log_path.open("w")
-        self.failed = []
-        self.notes = []
-        self.shown_log = None   # log path to print instead of the command log
-        self.context = True
-
-    def say(self, text):
-        self.log.write(text + "\n")
-        self.log.flush()
-        if self.verbose:
-            print(text, flush=True)
-
-    def sh(self, cmd, **kw):
-        """Run cmd, teeing output to the log; returns exit code."""
-        self.say("$ " + " ".join(str(c) for c in cmd))
-        proc = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, errors="replace", **kw)
-        for line in proc.stdout:
-            self.log.write(line)
-            if self.verbose:
-                sys.stdout.write(line)
-        proc.wait()
-        self.log.flush()
-        return proc.returncode
-
-    def must(self, cmd, label=None, **kw):
-        rc = self.sh(cmd, **kw)
-        if rc == 2 and "tools/disc.py" in " ".join(str(c) for c in cmd):
-            raise Missing(self.last_message() or "missing prerequisite")
-        if rc != 0:
-            self.failed.append(label or str(cmd[0]).split("/")[-1])
-            raise Failed(f"{label or cmd[0]} exited {rc}")
-
-    def last_message(self):
-        lines = self.log_path.read_text(errors="replace").strip().splitlines()
-        return lines[-1] if lines else ""
-
-    def finish(self, code, message=None):
-        elapsed = time.monotonic() - self.start
-        self.log.close()
-        sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
-        record = {"cmd": self.name, "exit": code, "duration_s": round(elapsed, 1), "failed": self.failed,
-                  "log": str(self.log_path.relative_to(ROOT)), "git_sha": sha}
-        tmp = ROOT / "build/last-run.json.tmp"
-        tmp.write_text(json.dumps(record, indent=2) + "\n")
-        os.replace(tmp, ROOT / "build/last-run.json")
-        word = "PASS" if code == 0 else "FAIL" if code == 1 else "MISSING"
-        print(f"{word} {self.name} {elapsed:.1f}s" + (f" - {message}" if message else ""))
-        for note in self.notes:
-            print(note)
-        if code == 1 and not self.verbose and self.context:
-            self.print_context()
-        print(f"log: {(self.shown_log or self.log_path).relative_to(ROOT)}")
-        return code
-
-    def print_context(self):
-        lines = self.log_path.read_text(errors="replace").splitlines()
-        for i, line in enumerate(lines):
-            if ERROR_RE.search(line):
-                for out in lines[max(0, i - 3):i + 17]:
-                    print("  " + out[:200])
-                return
-        for out in lines[-20:]:
-            print("  " + out[:200])
+    def say(self, message):
+        print(message, flush=True)
 
 
 def require(path, fix):
     if not Path(path).exists():
-        raise Missing(f"{Path(path).relative_to(ROOT)} missing -> {fix}")
+        raise RuntimeError(f"{path} missing; {fix}")
 
 
 def tool_python():
-    venv = ROOT / "tools/python/bin/python"
-    return str(venv) if venv.exists() else sys.executable
-
-
-def cmake():
-    require(CMAKE, "./rx setup")
-    return str(CMAKE)
-
-
-def configured(preset, build_dir):
-    return (ROOT / build_dir / "CMakeCache.txt").is_file()
-
-
-BUILD_TREES = ["build/game-metal"]
-
-
-def stale_trees():
-    """Build trees whose cached source dir is not exactly ROOT (case-sensitive)."""
-    stale = []
-    for tree in BUILD_TREES:
-        cache = ROOT / tree / "CMakeCache.txt"
-        if not cache.is_file():
-            continue
-        for line in cache.read_text(errors="replace").splitlines():
-            if line.startswith("CMAKE_HOME_DIRECTORY"):
-                if line.split("=", 1)[1] != str(ROOT):
-                    stale.append(tree)
-                break
-    return stale
-
-
-def check_trees(run, reconfigure):
-    stale = stale_trees()
-    if not stale:
-        return
-    if not reconfigure:
-        raise Missing(f"{', '.join(stale)} configured from a different path than {ROOT} "
-                      "(case-sensitive) -> ./rx build --reconfigure")
-    for tree in stale:
-        run.say(f"reconfigure: wiping {tree}")
-        shutil.rmtree(ROOT / tree)
-
-
-def game_configured():
-    """True when the cached configure saw the generated game sources."""
-    cache = ROOT / "build/game-metal/CMakeCache.txt"
-    return cache.is_file() and "RX_GAME_CONFIGURED:INTERNAL=ON" in cache.read_text(errors="replace")
-
-
-def cmake_build(run, preset, build_dir="build/game-metal", reconfigure=False):
-    if reconfigure or not configured(preset, build_dir):
-        run.must([cmake(), "--preset", "release"], "configure")
-    import jobs
-    run.must([cmake(), "--build", "--preset", preset, "--parallel", jobs.jobs()], f"build {preset}")
+    path = ROOT / "tools/python/bin/python"
+    return str(path) if path.exists() else sys.executable
 
 
 def sha256(path, h=None):
@@ -221,7 +65,6 @@ def sha256(path, h=None):
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return h
-
 
 def generate_inputs_hash():
     h = hashlib.sha256()
@@ -248,72 +91,11 @@ def generate_inputs_hash():
     h.update(diff)
     return h.hexdigest()
 
-
-def run_command(name, args, body):
-    run = Run(name, args.verbose)
-    try:
-        message = body(run)
-        return run.finish(0, message)
-    except Missing as e:
-        print(f"MISSING {name}: {e}")
-        run.log.close()
-        return 2
-    except Failed as e:
-        return run.finish(1, str(e))
-
-
-# ---- commands ---------------------------------------------------------------
-
-def cmd_deps(args):
-    sub = args.sub or "status"
-    py = sys.executable
-    run = Run("deps", args.verbose)
-    rc = run.sh([py, "tools/deps.py", sub])
-    out = run.log_path.read_text()
-    run.log.close()
-    print(out.split("\n", 1)[1].rstrip() if "\n" in out else out.rstrip())
-    return rc if rc in (0, 2) else 1
-
-
-def cmd_setup(args):
-    def body(run):
-        run.must([sys.executable, "tools/deps.py", "sync"], "deps sync")
-        # Bootstrap first: it fetches the pinned CMake/Ninja that building capstone from sdist needs.
-        run.must(["bash", "toolchain/bootstrap.sh"], "toolchain bootstrap")
-        py = tool_python()
-        probe = subprocess.run([py, "-c", "import pycdlib, capstone, elftools"], capture_output=True)
-        if probe.returncode != 0:
-            if not (ROOT / "tools/python/bin/python").exists():
-                run.must([sys.executable, "-m", "venv", "tools/python"], "venv")
-            env = dict(os.environ, PATH=f"{CMAKE.parent}{os.pathsep}{os.environ.get('PATH', '')}")
-            run.must(["tools/python/bin/pip", "install", "-r", "requirements.txt"], "pip install", env=env)
-        run.must(["bash", "tools/build-deps.sh"], "build-deps")
-        run.must(["git", "config", "core.hooksPath", ".githooks"], "enable pre-commit hook")
-        return "toolchain and dependencies ready; next: ./rx disc <iso>"
-    return run_command("setup", args, body)
-
-
-def cmd_disc(args):
-    def body(run):
-        if not args.iso:
-            raise Missing("usage: ./rx disc <path-to-your-iso> (bring your own disc)")
-        cmd = [tool_python(), "tools/disc.py", args.iso]
-        if args.dest:
-            cmd += ["--dest", args.dest, "--report", str(Path(args.dest) / "disc-inventory.json")]
-        run.must(cmd, "disc")
-        last = run.last_message()
-        return last or "disc verified and extracted"
-    return run_command("disc", args, body)
-
-
-# Out-of-tree dependency products: stamp inputs are git tree hashes of the relevant subpaths
-# (plus the HEAD diff and tracked input timestamps), so unrelated commits do not trigger rebuilds
-# while timestamp changes still reach the build system's dependency checks.
 DEP_PRODUCTS = {
     "bridge": (["build/metal-bridge/pcsx2/pcsx2-gs-bridge/librrv-pcsx2-gs-bridge.dylib"],
-               [("pcsx2", None), (None, "bridge/gs")]),
+               [("pcsx2", None), (None, "bridge/gs"), (None, "tools/build-deps.sh"), (None, "cmake/toolchain-llvm19.cmake")]),
     "spu2": (["build/spu2-backend/librrv_pcsx2_spu2.a"],
-             [(None, "bridge/spu2"), ("pcsx2", "pcsx2/SPU2"), ("pcsx2", "3rdparty/soundtouch")]),
+             [(None, "bridge/spu2"), ("pcsx2", "pcsx2/SPU2"), (None, "tools/build-deps.sh"), (None, "cmake/toolchain-llvm19.cmake")]),
 }
 
 
@@ -339,7 +121,6 @@ def dep_inputs_hash(sources):
             h.update(f"{stat.st_mtime_ns}:{stat.st_size}".encode())
     return h.hexdigest()
 
-
 def rebuild_stale_deps(run):
     stale = []
     for name, (outputs, sources) in DEP_PRODUCTS.items():
@@ -355,548 +136,84 @@ def rebuild_stale_deps(run):
     return [n for n, _, _ in stale]
 
 
-# Every generated unit includes these: touching one recompiles all of generated/.
-GENERATED_INCLUDED_HEADERS = {"ps2_guest_abi.h", "ps2_guest_macros.h", "ps2_recompiled_functions.h", "ps2_recompiled_stubs.h", "ps2_log.h"}
+def build(args):
+    require(CMAKE, "run ./rx setup")
+    require(ELF, "run ./rx disc <iso>")
+    cache = ROOT / "build/game-metal/CMakeCache.txt"
+    if cache.exists():
+        source = next((line.split("=", 1)[1] for line in cache.read_text().splitlines()
+                       if line.startswith("CMAKE_HOME_DIRECTORY:")), str(ROOT))
+        if source != str(ROOT):
+            if not args.reconfigure:
+                raise RuntimeError("Build directory belongs to another checkout; use ./rx build --reconfigure")
+            shutil.rmtree(cache.parent)
+    CONFIG.write_text(TEMPLATE.read_text().replace("@ROOT@", str(ROOT)))
+    commands = Commands()
+    rebuild_stale_deps(commands)
+    commands.must([CMAKE, "--preset", "release"])
+    commands.must([CMAKE, "--build", "--preset", "recompiler", "--parallel", jobs.jobs()])
+    wanted = generate_inputs_hash()
+    if not STAMP.exists() or STAMP.read_text().strip() != wanted or not GENERATED.is_dir():
+        commands.must([tool_python(), "tools/generate.py"])
+        STAMP.write_text(wanted + "\n")
+    commands.must([CMAKE, "--preset", "release"])
+    commands.must([CMAKE, "--build", "--preset", "release", "--parallel", jobs.jobs()])
 
 
-def cmd_build(args):
-    def body(run):
-        check_trees(run, args.reconfigure)
-        rebuilt = rebuild_stale_deps(run)
-        cmake_build(run, "recompiler")
-        require(ELF, "./rx disc <iso>")
-        if not TEMPLATE.is_file():
-            raise Missing(f"{TEMPLATE.relative_to(ROOT)} missing -> the recompiler config for {game.GAME['title']} "
-                          f"({game.ID}) is not written yet")
-        import where
-        todo = where.unimplemented()[1][1:]
-        if todo:
-            raise Failed("configured stubs bound to TODO handlers (unbind them so the guest code runs, or implement them):\n"
-                         + "\n".join(todo))
-        derived = TEMPLATE.read_text().replace("@ROOT@", str(ROOT))
-        if not CONFIG.is_file() or CONFIG.read_text() != derived:
-            CONFIG.write_text(derived)
-            run.say("config derived from the template")
-        changed = subprocess.run(["git", "-C", str(ROOT / "deps/ps2recomp"), "diff", "--name-only", "HEAD"],
-                                 capture_output=True, text=True).stdout.split()
-        wide = [Path(c).name for c in changed if Path(c).name in GENERATED_INCLUDED_HEADERS]
-        if wide:
-            run.say(f"WARNING: uncommitted change to {', '.join(wide)} -> full generated-code rebuild (minutes)")
-        want = generate_inputs_hash()
-        have = STAMP.read_text().strip() if STAMP.is_file() else ""
-        note = "generated code current"
-        if want != have or not GENERATED.is_dir():
-            run.must([tool_python(), "tools/generate.py"], "generate")
-            tmp = STAMP.with_suffix(".tmp")
-            tmp.write_text(want + "\n")
-            os.replace(tmp, STAMP)
-            note = "regenerated; " + run.last_message()
-        cmake_build(run, "release", reconfigure=not game_configured())
-        return note + (f"; rebuilt deps: {', '.join(rebuilt)}" if rebuilt else "")
-    return run_command("build", args, body)
+def setup(args):
+    commands = Commands()
+    commands.must([sys.executable, "tools/deps.py"])
+    commands.must(["bash", "toolchain/bootstrap.sh"])
+    if not (ROOT / "tools/python/bin/python").exists():
+        commands.must([sys.executable, "-m", "venv", "tools/python"])
+    env = dict(os.environ, PATH=str(CMAKE.parent) + os.pathsep + os.environ.get("PATH", ""))
+    commands.must(["tools/python/bin/pip", "install", "-r", "requirements.txt"], env=env)
+    commands.must(["bash", "tools/build-deps.sh"])
 
 
-def cmd_test(args):
-    def body(run):
-        check_trees(run, False)
-        cmake_build(run, "tests")
-        import jobs
-        rc = run.sh([str(CTEST), "--preset", "tests", "-j", jobs.jobs()])
-        text = run.log_path.read_text(errors="replace")
-        m = re.search(r"(\d+)% tests passed, (\d+) tests failed out of (\d+)", text)
-        failed = re.findall(r"^\s*\d+ - (.+?) \(Failed\)|^\s*\d+ - (.+?) \((?:SEGFAULT|Subprocess aborted|Timeout|Exception)", text, re.M)
-        names = [a or b for a, b in failed]
-        summary = "ctest unparsed"
-        if m:
-            total, bad = int(m[3]), int(m[2])
-            summary = f"ctest {total - bad}/{total} passed"
-        if rc != 0:
-            run.failed += names or ["ctest"]
-            run.notes += [f"  failing: {n}" for n in names[:10]]
-            raise Failed(summary)
-        if not args.full:
-            return f"{summary} (quick tier; ./rx test --full adds slow tests)"
-        if run.sh([str(CTEST), "--preset", "slow", "--no-tests=ignore", "-j", jobs.jobs()]) != 0:
-            run.failed.append("slow tests")
-            raise Failed(f"{summary}; slow-labelled tests failed")
-        return f"{summary}; slow tests passed"
-    return run_command("test", args, body)
-
-
-FULL_REBUILD = re.compile(r"ps2xRuntime/include/(ps2_guest_(?:abi|macros)\.h|ps2_runtime\w*\.h|ps2_syscalls\.h|ps2_stubs\.h|ps2_recompiled_\w*\.h)")
-
-
-def lint(run):
-    """shellcheck / ruff on tracked shell and Python files; a missing tool only warns."""
-    files = subprocess.run(["git", "ls-files", "-z"], capture_output=True, text=True).stdout.split("\0")
-    sh = [f for f in files if f.endswith(".sh") and (ROOT / f).exists()]
-    py = [f for f in files if (f.endswith(".py") or f == "rx") and (ROOT / f).exists()]
-    for tool, targets, cmd in (("shellcheck", sh, ["shellcheck"]), ("ruff", py, ["ruff", "check"])):
-        if not shutil.which(tool):
-            run.notes.append(f"  WARNING: {tool} not installed; skipped")
-        elif targets and run.sh(cmd + targets) != 0:
-            run.failed.append(tool)
-            raise Failed(f"{tool} reported problems (see log)")
-
-
-def cmd_check(args):
-    def body(run):
-        mode = "--tracked" if args.tracked else "--staged"
-        run.must([sys.executable, "tools/check-repo-hygiene.py", mode], "hygiene")
-        run.must([sys.executable, "tools/check-generated-includes.py"], "generated include boundary")
-        manifest = ROOT / "bridge/gs/pipelines-fifa.txt"
-        manifest_lines = manifest.read_text().splitlines()
-        manifest_pin = next((line.split("=", 1)[1] for line in manifest_lines if line.startswith("# pcsx2-pin=")), None)
-        pcsx2_pin = next((line.split()[2] for line in (ROOT / "deps.lock").read_text().splitlines()
-                          if line.split() and line.split()[0] == "pcsx2"), None)
-        if manifest_pin != pcsx2_pin:
-            raise Failed(f"FIFA Metal pipeline manifest pin {manifest_pin} differs from deps.lock PCSX2 pin {pcsx2_pin}; refresh the manifest")
-        feature_sections = [line for line in manifest_lines if line.startswith("# features=")]
-        if not feature_sections or any("family=" in line for line in feature_sections) or not any(
-                line.startswith("# family=") for line in manifest_lines):
-            raise Failed("FIFA Metal pipeline manifest must have feature-only sections and an informational family comment")
-        selectors_by_section = set()
-        for line in manifest_lines:
-            if line.startswith("# features="):
-                selectors_by_section = set()
-            elif line.startswith("vs="):
-                if line in selectors_by_section:
-                    raise Failed("FIFA Metal pipeline manifest contains duplicate selectors in a feature section")
-                selectors_by_section.add(line)
-        if not args.tracked:
-            staged = subprocess.run(["git", "diff", "--cached", "--name-only", "--", "patches"],
-                                    capture_output=True, text=True).stdout.split()
-            hits = set()
-            for f in staged:
-                diff = subprocess.run(["git", "diff", "--cached", "-U0", "--", f], capture_output=True, text=True).stdout
-                hits.update(FULL_REBUILD.search(l).group(1) for l in diff.splitlines()
-                            if l.startswith("+diff --git") and FULL_REBUILD.search(l))
-            if hits:
-                run.notes.append("  WARNING: staged patches touch " + ", ".join(sorted(hits)) +
-                                 " -> full generated-code rebuild (long)")
-        lint(run)
-        rc = run.sh([sys.executable, "tools/deps.py", "status"])
-        status = run.log_path.read_text()
-        bad = [l for l in status.splitlines() if re.search(r"UNEXPORTED|no rx branch|not synced|\bdirty\b", l)]
-        if rc != 0 or bad:
-            run.failed.append("deps status")
-            run.notes += ["  " + l for l in bad]
-            raise Failed("deps dirty or unexported -> commit in deps/<x> and `./rx deps export`")
-        return f"hygiene ({mode[2:]}) and deps clean"
-    return run_command("check", args, body)
-
-
-def fmt(value):
-    return "unknown" if value is None else value
-
-
-def wait_for_quiet_machine(run, limit=60):
-    """Measurements taken while builds run are not trustworthy: wait up to `limit` s for the
-    1-minute load average to drop to the core count, then warn and continue."""
-    cores = os.cpu_count() or 1
-    deadline = time.monotonic() + limit
-    load = os.getloadavg()[0]
-    while load > cores and time.monotonic() < deadline:
-        time.sleep(5)
-        load = os.getloadavg()[0]
-    if load > cores:
-        run.notes.append(f"  WARNING: load average {load:.1f} > {cores} cores; results (fps, audio underruns) are unreliable")
-
-
-def cmd_run(args):
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = ROOT / "build/runs" / stamp
-
-    def body(run):
-        alive = subprocess.run(["pgrep", "-f", str(ROOT / "build/game-metal") + "/.*/ps2EntryRunner"],
-                               capture_output=True, text=True).stdout.split()
-        if alive:
-            raise Missing(f"a ps2EntryRunner from this checkout is already running (pid {', '.join(alive)}); "
-                          "one run at a time -> kill it")
-        wait_for_quiet_machine(run)
-        if args.app:
-            require(args.app, "./rx package --install")
-        else:
-            require(ELF, "./rx disc <iso>")
-            require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./rx build")
-        run.shown_log, run.context = out / "run.log", False
-        if args.quit_cycles:
-            if not args.app:
-                raise Failed("--quit-cycles needs --app")
-            reports = Path.home() / "Library/Logs/DiagnosticReports"
-            pattern = f"{game.GAME['executable']}*.crash"
-            known = set(reports.glob(pattern))
-            bad = 0
-            for i in range(args.quit_cycles):
-                cdir = out / f"cycle{i + 1:02d}"
-                cmd = [sys.executable, "tools/probe/probe.py", "--out", cdir, "--app", args.app, "--quit-at-end"]
-                if args.seconds:
-                    cmd += ["--seconds", args.seconds]
-                run.sh(cmd)
-                s = json.loads((cdir / "summary.json").read_text()) if (cdir / "summary.json").is_file() else {}
-                ok = s.get("reached") == s.get("target") and s.get("quit_clean") and s.get("exit_code") == 0
-                run.notes.append(f"cycle {i + 1}: reached {s.get('reached')} quit_clean {s.get('quit_clean')} exit {s.get('exit_code')}")
-                bad += not ok
-            time.sleep(3)
-            new = set(reports.glob(pattern)) - known
-            if bad or new:
-                run.failed.append("quit cycles")
-                raise Failed(f"{bad} bad cycles, {len(new)} new crash reports")
-            return f"{args.quit_cycles} clean quit cycles"
-        cmd = [sys.executable, "tools/probe/probe.py", "--out", out]
-        for flag, value in (("--seconds", args.seconds), ("--save", args.save),
-                            ("--user-dir", args.user_dir), ("--app", args.app)):
-            if value:
-                cmd += [flag, value]
-        if args.profile:
-            cmd.append("--profile")
-        if args.route:
-            cmd += ["--route", args.route]
-        if args.match:
-            cmd.append("--match")
-        if args.button_spam:
-            cmd.append("--button-spam")
-        rc = run.sh(cmd)
-        if rc == 2:
-            raise Missing(run.last_message())
-        summary_path = out / "summary.json"
-        if not summary_path.is_file():
-            run.failed.append("probe")
-            raise Failed("probe produced no summary: " + run.last_message())
-        s = json.loads(summary_path.read_text())
-        crash = s["crash"]
-        stubs = ", ".join(f"{n} x{c}" for n, c in s["stubs"]) or "none"
-        run.notes += [f"reached: {s['reached']}", f"seconds: {s['seconds']:g}", f"fps_game: {fmt(s.get('fps_game'))}",
-                      f"gpu_presents_per_sec: {fmt(s.get('gpu_presents_per_sec'))}",
-                      f"cpu_user_s: {fmt(s['cpu_user_s'])}", f"cpu_sys_s: {fmt(s['cpu_sys_s'])}",
-                      f"energy_per_s: {fmt(s.get('energy_per_s'))}", f"wakeups_per_s: {fmt(s.get('wakeups_per_s'))}",
-                      f"vu_fallbacks: {fmt(s['vu_fallbacks'])}", f"audio_underruns: {fmt(s['audio_underruns'])}",
-                      "crash: " + ("none" if not crash else f"{crash['signal']} {fmt(crash['pc'])} {fmt(crash['symbol'])}"),
-                      f"stubs: {stubs}"]
-        if s.get("scene"):
-            run.notes.append(f"scene: {s['scene']}")
-        if args.match:
-            run.notes.append(f"time_to_play_s: {fmt(s.get('time_to_play_s'))} (first HUD clock reading; confirmed at {fmt(s.get('gameplay_wall_seconds'))})")
-        vu1 = s.get("vu1") or {}
-        if vu1.get("diff_calls") or os.environ.get("PS2X_VU1_DIFF", "0") not in ("", "0"):
-            run.notes.append(f"vu1_diff: calls={vu1.get('diff_calls', 0)} "
-                             f"mismatch={vu1.get('mismatch', 0)} "
-                             f"budget_stops={vu1.get('interpreter_budget_stops', 0)}")
-        if s["black_frames"]:
-            run.notes.append(f"black_frames: {s['black_frames']}")
-        if s["save_dir_changed"]:
-            run.failed.append("save dir changed")
-            run.notes.append("FAIL: the real save dir changed during the run")
-        if s.get("scene") == "match_play":
-            video_mode = s.get("video_mode", "ntsc")
-            minimum_fps = 49.5 if video_mode == "pal" else 58.5
-            if (s.get("fps_game") or 0) < minimum_fps:
-                run.failed.append("gameplay fps")  # measured: match renders one new frame per mode VBlank
-                run.notes.append(f"FAIL: gameplay fps_game {s.get('fps_game')} (median of play windows) below {minimum_fps:g} for {video_mode.upper()}")
-        if s["audio_underruns"]:
-            run.failed.append("audio underruns")
-            run.notes.append(f"FAIL: {s['audio_underruns']} steady-state audio underruns")
-        if rc != 0:
-            run.failed.append(f"reached {s['reached']}, wanted {s['target']}")
-            raise Failed(f"reached {s['reached']} (wanted {s['target']})")
-        return f"reached {s['reached']}"
-    return run_command("run", args, body)
-
-
-def cmd_ab(args):
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    out = ROOT / "build/runs" / f"ab-{stamp}"
-
-    def parse_env(values, label):
-        result = {}
-        for value in values:
-            key, sep, val = value.partition("=")
-            if not sep or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-                raise Failed(f"invalid {label} environment assignment {value!r}; expected ENV=VAL")
-            result[key] = val
-        return result
-
-    def body(run):
-        if args.pairs < 1:
-            raise Failed("--pairs must be at least 1")
-        alive = subprocess.run(["pgrep", "-f", str(ROOT / "build/game-metal") + "/.*/ps2EntryRunner"],
-                               capture_output=True, text=True).stdout.split()
-        if alive:
-            raise Missing(f"a ps2EntryRunner from this checkout is already running (pid {', '.join(alive)}); "
-                          "one run at a time -> kill it")
-        require(ELF, "./rx disc <iso>")
-        require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./rx build")
-        control_env = parse_env(args.control, "control")
-        candidate_env = parse_env(args.candidate, "candidate")
-        run.shown_log, run.context = out / "ab.log", False
-        wait_for_quiet_machine(run)
-        out.mkdir(parents=True, exist_ok=True)
-        summaries = {"control": [], "candidate": []}
-        bad_runs = []
-        order = []
-        for pair in range(args.pairs):
-            legs = ([("control", control_env), ("candidate", candidate_env)] if pair % 2 == 0
-                    else [("candidate", candidate_env), ("control", control_env)])
-            for leg, overrides in legs:
-                index = len(order) + 1
-                order.append(leg)
-                run_dir = out / f"run-{index:02d}-{leg}"
-                cmd = [sys.executable, "tools/probe/probe.py", "--out", run_dir]
-                if args.seconds:
-                    cmd += ["--seconds", str(args.seconds)]
-                if args.profile:
-                    cmd.append("--profile")
-                cmd.append("--match")
-                if args.button_spam:
-                    cmd.append("--button-spam")
-                env = os.environ.copy()
-                env.update(overrides)
-                rc = run.sh(cmd, env=env)
-                summary_path = run_dir / "summary.json"
-                if not summary_path.is_file():
-                    bad_runs.append(f"{leg} run {index}: no summary (probe exit {rc})")
-                    continue
-                summary = json.loads(summary_path.read_text())
-                summaries[leg].append(summary)
-                ok = summary.get("reached") == summary.get("target") and not summary.get("crash")
-                if not ok:
-                    bad_runs.append(f"{leg} run {index}: reached {summary.get('reached')} / {summary.get('target')}, "
-                                    f"crash={bool(summary.get('crash'))}")
-
-        if bad_runs:
-            run.failed.extend(bad_runs)
-        def metrics(summary):
-            duration = max(float(summary.get("seconds") or 0), 0.001)
-            result = {
-                "fps_game": summary.get("fps_game"),
-                "cpu_total_per_s": (float(summary.get("cpu_user_s") or 0) + float(summary.get("cpu_sys_s") or 0)) / duration,
-                "audio_underruns": summary.get("audio_underruns"),
-                "energy_per_s": summary.get("energy_per_s"),
-                "wakeups_per_s": summary.get("wakeups_per_s"),
-                "crash": int(bool(summary.get("crash"))),
-                "reached": int(summary.get("reached") == summary.get("target")),
-            }
-            if args.profile:
-                threads = summary.get("profile_threads") or []
-                game_thread = next((t.get("cpu_per_s") for t in threads if re.search("GameThread", t.get("name", ""), re.I)), None)
-                workers = [t.get("cpu_per_s") for t in threads if re.search(r"worker", t.get("name", ""), re.I)]
-                result["GameThread cpu_per_s"] = game_thread
-                result["worker cpu_per_s"] = sum(float(v) for v in workers) if workers else None
-            return result
-
-        values = {side: [metrics(s) for s in runs] for side, runs in summaries.items()}
-        names = ["fps_game", "cpu_total_per_s"]
-        if args.profile:
-            names += ["GameThread cpu_per_s", "worker cpu_per_s"]
-        names += ["energy_per_s", "wakeups_per_s", "audio_underruns", "crash", "reached"]
-        report = {"order": order, "pairs": args.pairs, "control_env": control_env,
-                  "candidate_env": candidate_env, "options": {"seconds": args.seconds, "match": True, "profile": args.profile,
-                                                                 "button_spam": args.button_spam},
-                  "summaries": summaries, "metrics": {}}
-        rows = []
-        for name in names:
-            cvals = [m[name] for m in values["control"] if m.get(name) is not None]
-            kvals = [m[name] for m in values["candidate"] if m.get(name) is not None]
-            if not cvals or not kvals:
-                report["metrics"][name] = {"control": cvals, "candidate": kvals, "delta_pct": None, "noise_pct": None}
-                rows.append((name, "n/a", "n/a", "n/a", "n/a", "unavailable"))
-                continue
-            cmedian, kmedian = statistics.median(cvals), statistics.median(kvals)
-            cmin, cmax = min(cvals), max(cvals)
-            spread = cmax - cmin
-            numeric = name not in ("crash", "reached")
-            delta = ((kmedian - cmedian) / abs(cmedian) * 100) if numeric and cmedian else (0.0 if numeric and kmedian == cmedian else None)
-            noise = (spread / abs(cmedian) * 100) if numeric and cmedian else (0.0 if numeric and spread == 0 else None)
-            within = abs(kmedian - cmedian) <= spread
-            verdict = "within noise" if within else "changed"
-            report["metrics"][name] = {"control": cvals, "candidate": kvals, "control_median": cmedian,
-                                       "candidate_median": kmedian, "control_spread": spread,
-                                       "delta_pct": delta, "noise_pct": noise, "verdict": verdict}
-            def show(v):
-                return f"{v:.3f}" if isinstance(v, (int, float)) else str(v)
-            rng_c, rng_k = f"{show(cmedian)} ({show(cmin)}..{show(cmax)})", f"{show(kmedian)} ({show(min(kvals))}..{show(max(kvals))})"
-            rows.append((name, rng_c, rng_k, f"{delta:+.1f}%" if delta is not None else "n/a",
-                         f"{noise:.1f}%" if noise is not None else "n/a", verdict))
-        report_path = ROOT / "build/runs" / f"ab-{stamp}.json"
-        report_path.write_text(json.dumps(report, indent=2) + "\n")
-        headers = ("metric", "control median (min..max)", "candidate median (min..max)", "delta %", "noise %", "verdict")
-        widths = [max(len(headers[i]), *(len(row[i]) for row in rows)) for i in range(len(headers))]
-        run.notes.append(" | ".join(headers[i].ljust(widths[i]) for i in range(len(headers))))
-        run.notes.append("-+-".join("-" * width for width in widths))
-        run.notes.extend(" | ".join(row[i].ljust(widths[i]) for i in range(len(row))) for row in rows)
-        run.notes.append(f"combined JSON: {report_path.relative_to(ROOT)}")
-        if bad_runs:
-            raise Failed("one or more runs failed to reach target or crashed: " + "; ".join(bad_runs))
-        return f"{len(order)} runs, {args.pairs} pairs"
-    return run_command("ab", args, body)
-
-
-def cmd_package(args):
-    def body(run):
-        if not args.install:
-            require(ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner", "./rx build")
-        require(ELF, "./rx disc <iso>")
-        run.must([sys.executable, "tools/package/package.py"] + (["--install"] if args.install else []), "package")
-        lines = [l for l in run.log_path.read_text().splitlines() if l.startswith(("Installed:", "audit:", "/"))]
-        return "; ".join(lines[-2:]) or "bundle built"
-    return run_command("package", args, body)
-
-
-XCODEGEN_VERSION = "2.43.0"
-XCODEGEN_URL = "https://github.com/yonaskolb/XcodeGen/releases/download/2.43.0/xcodegen.zip"
-XCODEGEN_SHA256 = "a4847ed77d3341a4d24049bc4424a3babca4c94ff1dcaaee923eaca2b32c678f"
-
-
-def cmd_xcode(args):
-    def body(run):
-        spec = ROOT / "project.yml"
-        require(spec, "restore project.yml")
-        base = ROOT / "tools/build/xcodegen"
-        archive = base / f"xcodegen-{XCODEGEN_VERSION}.zip"
-        executable = base / "xcodegen/bin/xcodegen"
-        if not executable.is_file():
-            base.mkdir(parents=True, exist_ok=True)
-            if not archive.is_file() or sha256(archive).hexdigest() != XCODEGEN_SHA256:
-                partial = archive.with_suffix(".zip.part")
-                partial.unlink(missing_ok=True)
-                if run.sh(["curl", "-fL", "--retry", "3", XCODEGEN_URL, "-o", partial]) != 0:
-                    partial.unlink(missing_ok=True)
-                    raise Missing("could not download XcodeGen -> check the network and retry ./rx xcode")
-                if sha256(partial).hexdigest() != XCODEGEN_SHA256:
-                    partial.unlink(missing_ok=True)
-                    raise Failed(f"XcodeGen {XCODEGEN_VERSION} SHA-256 mismatch")
-                partial.replace(archive)
-            if run.sh(["unzip", "-q", "-o", archive, "-d", base]) != 0:
-                raise Failed(f"could not extract {archive.relative_to(ROOT)}")
-        version = subprocess.run([str(executable), "--version"], capture_output=True, text=True)
-        if version.returncode != 0 or version.stdout.strip() != f"Version: {XCODEGEN_VERSION}":
-            raise Failed(f"expected XcodeGen {XCODEGEN_VERSION} at {executable.relative_to(ROOT)}")
-        project = ROOT / "FIFA Street PS2.xcodeproj"
-        run.must([str(executable), "generate", "--quiet", "--spec", spec, "--project", ROOT], "XcodeGen")
-        require(project, "run ./rx xcode again")
-        return str(project.relative_to(ROOT))
-    return run_command("xcode", args, body)
-
-
-def cmd_ipa(args):
-    def body(run):
-        platforms = {"ios": "iphoneos", "tvos": "appletvos",
-                     "ios-sim": "iphonesimulator", "tvos-sim": "appletvsimulator"}
-        platform = platforms[args.platform]
-        os.environ.setdefault("DEVELOPER_DIR", str(Path.home() / "Developer/Xcode-12.5.1/Xcode.app/Contents/Developer"))
-        os.environ.setdefault("RX_JOBS", "3")
-        prefix = ROOT / f"tools/embedded/{platform}/prefix"
-        runtime_prefix = ROOT / f"tools/embedded/{platform}/libcxx/lib"
-        embedded_stamp = ROOT / f"build/embedded/{platform}/deps/embedded-deps.stamp"
-        spu2 = ROOT / f"build/embedded/{platform}/spu2-backend/librrv_pcsx2_spu2.a"
-        if not all(path.exists() for path in (prefix, spu2, embedded_stamp)):
-            run.must(["bash", "tools/build-deps-embedded.sh", platform], "embedded dependencies")
-        runtime_libraries = (runtime_prefix / "libc++.1.dylib", runtime_prefix / "libc++abi.1.dylib")
-        if not all(path.is_file() for path in runtime_libraries):
-            run.must(["bash", "tools/build-embedded-runtimes.sh", platform], "embedded C++ runtimes")
-        run.must(["bash", "tools/build-bridge-embedded.sh", platform], "embedded GS bridge and SPU2")
-        elf = ROOT / "extracted/disc" / game.GAME["elf"]
-        require(elf, "./rx disc <iso>")
-        run.must(["bash", "tools/build-game-embedded.sh", platform], "embedded game")
-        run.must([sys.executable, "tools/package/ios_app.py", platform], "assemble embedded app")
-        if args.app_only:
-            app = ROOT / f"build/embedded/{platform}" / (game.GAME["app_name"] + ".app")
-            return str(app.relative_to(ROOT))
-        if args.platform.endswith("-sim"):
-            run.must([sys.executable, "tools/package/sim_boot.py", platform], "simulator boot")
-        run.must([sys.executable, "tools/package/ipa.py", platform], "IPA audit and package")
-        flavor = "ios" if args.platform.startswith("ios") else "tvos"
-        ipa = ROOT / f"build/embedded/{platform}/FIFA-Street-PS2-{flavor}.ipa"
-        return str(ipa.relative_to(ROOT))
-    return run_command("ipa", args, body)
-
-
-def cmd_where(args):
-    import where
-    code, lines = where.unimplemented() if args.unimplemented else where.where(args.query)
-    print("\n".join(lines))
-    return 2 if code is None else code
-
-
-def cmd_device(args):
-    run = Run("device", args.verbose)
-    script = "report.py" if args.device_args[:1] == ["report"] else "device.py"
-    device_args = args.device_args[1:] if script == "report.py" else args.device_args
-    rc = run.sh([sys.executable, str(ROOT / "tools/device" / script), *device_args])
-    message = run.last_message() if rc else None
-    if rc not in (0, 1, 2):
-        rc = 1
-    return run.finish(rc, message)
+def ipa(args):
+    platform = {"ios": "iphoneos", "tvos": "appletvos",
+                "ios-sim": "iphonesimulator", "tvos-sim": "appletvsimulator"}[args.platform]
+    require(ELF, "run ./rx disc <iso>")
+    os.environ.setdefault("RX_JOBS", "3")
+    commands = Commands()
+    for script in ("build-deps-embedded.sh", "build-embedded-runtimes.sh",
+                   "build-bridge-embedded.sh", "build-game-embedded.sh"):
+        commands.must(["bash", "tools/" + script, platform])
+    commands.must([tool_python(), "tools/package/ios_app.py", platform])
+    if not args.app_only and not args.platform.endswith("-sim"):
+        commands.must([tool_python(), "tools/package/ipa.py", platform])
 
 
 def main():
-    p = argparse.ArgumentParser(prog="rx", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sp = p.add_subparsers(dest="cmd", required=True)
-    sp.add_parser("setup").set_defaults(fn=cmd_setup)
-    d = sp.add_parser("deps")
-    d.add_argument("sub", nargs="?", choices=["sync", "export", "status"])
-    d.set_defaults(fn=cmd_deps)
-    d = sp.add_parser("disc")
-    d.add_argument("iso", nargs="?")
-    d.add_argument("--dest", help="extract into this directory instead of extracted/disc")
-    d.set_defaults(fn=cmd_disc)
-    b = sp.add_parser("build")
-    b.add_argument("--reconfigure", action="store_true", help="wipe and reconfigure build trees configured from another path/case")
-    b.set_defaults(fn=cmd_build)
-    t = sp.add_parser("test")
-    t.add_argument("--full", action="store_true", help="also run slow-labelled tests")
-    t.set_defaults(fn=cmd_test)
-    c = sp.add_parser("check")
-    c.add_argument("--tracked", action="store_true")
-    c.set_defaults(fn=cmd_check)
-    r = sp.add_parser("run")
-    r.add_argument("--seconds", type=int)
-    r.add_argument("--user-dir")
-    r.add_argument("--save", help="copy a fixture's memcards/ subtree into a fresh isolated user dir")
-    r.add_argument("--profile", action="store_true")
-    r.add_argument("--route", choices=["match"], help="scripted input from the language menu to a quick match; fails unless the match scene opens")
-    r.add_argument("--match", action="store_true",
-                   help="diagnostic: boot straight into live match play in an isolated user dir (PS2X_BOOT_MATCH hook); reports time_to_play_s")
-    r.add_argument("--button-spam", action="store_true",
-                   help="alternate Cross/Square/Circle/Triangle/L1/R1 during confirmed match play")
-    r.add_argument("--app")
-    r.add_argument("--quit-cycles", type=int, metavar="N",
-                   help="with --app: N launch -> AppleEvent quit cycles; fails on non-zero exit or new crash report")
-    r.set_defaults(fn=cmd_run)
-    a = sp.add_parser("ab", help="alternating control/candidate probe runs")
-    a.add_argument("--control", action="append", required=True, metavar="ENV=VAL")
-    a.add_argument("--candidate", action="append", default=[], metavar="ENV=VAL")
-    a.add_argument("--pairs", type=int, default=2)
-    a.add_argument("--seconds", type=int)
-    a.add_argument("--profile", action="store_true")
-    a.add_argument("--match", action="store_true", default=True)
-    a.add_argument("--button-spam", action="store_true",
-                   help="alternate Cross/Square/Circle/Triangle/L1/R1 during confirmed match play")
-    a.set_defaults(fn=cmd_ab)
-    k = sp.add_parser("package")
-    k.add_argument("--install", action="store_true")
-    k.set_defaults(fn=cmd_package)
-    k = sp.add_parser("ipa")
-    k.add_argument("--platform", required=True, choices=["ios", "tvos", "ios-sim", "tvos-sim"])
-    k.add_argument("--app-only", action="store_true", help="build and assemble the app without simulator boot or IPA packaging")
-    k.set_defaults(fn=cmd_ipa)
-    d = sp.add_parser("device", help="sign, install, run and summarize a USB iOS/tvOS device")
-    d.add_argument("device_args", nargs=argparse.REMAINDER)
-    d.set_defaults(fn=cmd_device)
-    x = sp.add_parser("xcode")
-    x.set_defaults(fn=cmd_xcode)
-    w = sp.add_parser("where")
-    where_mode = w.add_mutually_exclusive_group(required=True)
-    where_mode.add_argument("query", nargs="?")
-    where_mode.add_argument("--unimplemented", action="store_true",
-                            help="audit configured direct TODO handlers, including underscore aliases")
-    w.set_defaults(fn=cmd_where)
-    argv = sys.argv[1:]
-    verbose = any(a in ("-v", "--verbose") for a in argv)
-    args, _extra = p.parse_known_args([a for a in argv if a not in ("-v", "--verbose")])
-    args.verbose = verbose
-    return args.fn(args)
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("setup", help="download and build dependencies").set_defaults(action=setup)
+    command = commands.add_parser("disc", help="verify and extract your PAL ISO")
+    command.add_argument("iso")
+    command.set_defaults(action=lambda args: Commands().must([tool_python(), "tools/disc.py", args.iso]))
+    command = commands.add_parser("build", help="generate and compile the game")
+    command.add_argument("--reconfigure", action="store_true")
+    command.set_defaults(action=build)
+    command = commands.add_parser("run", help="run the game from the build directory")
+    command.set_defaults(action=lambda args: Commands().must([ROOT / "build/game-metal/ps2recomp/ps2xRuntime/ps2EntryRunner"]))
+    command = commands.add_parser("package", help="create a macOS app bundle")
+    command.add_argument("--install", action="store_true")
+    command.set_defaults(action=lambda args: Commands().must([tool_python(), "tools/package/package.py"]
+                                                            + (["--install"] if args.install else [])))
+    command = commands.add_parser("ipa", help="build an iOS or tvOS app")
+    command.add_argument("--platform", required=True, choices=["ios", "tvos", "ios-sim", "tvos-sim"])
+    command.add_argument("--app-only", action="store_true")
+    command.set_defaults(action=ipa)
+    args = parser.parse_args()
+    try:
+        args.action(args)
+        return 0
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        print("rx: " + str(error), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":

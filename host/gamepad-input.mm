@@ -9,10 +9,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <mutex>
 
@@ -32,28 +28,6 @@ void publish_empty(bool connected = false)
     std::lock_guard<std::mutex> lock(s_snapshot_mutex);
     s_snapshot = {};
     s_snapshot.connected = connected ? 1 : 0;
-}
-
-bool trace_input()
-{
-    static const bool enabled = [] {
-        const char* value = std::getenv("PS2X_TRACE_INPUT");
-        return value && value[0] == '1';
-    }();
-    return enabled;
-}
-
-void trace(const char* format, ...)
-{
-    if (!trace_input())
-        return;
-    std::va_list args;
-    va_start(args, format);
-    std::fprintf(stderr, "[input] ");
-    std::vfprintf(stderr, format, args);
-    std::fputc('\n', stderr);
-    std::fflush(stderr);
-    va_end(args);
 }
 
 // tvOS always reports its Siri Remote as a gamepad, and it enumerates before a
@@ -82,8 +56,6 @@ SDL_Gamepad* open_preferred_gamepad(bool allow_remote)
             continue;
         if (!is_tv_remote(candidate)) {
             chosen = candidate;
-            trace("gamepad selected: \"%s\" (ps2 pad 1)",
-                SDL_GetGamepadName(candidate) ? SDL_GetGamepadName(candidate) : "?");
             break;
         }
         if (allow_remote && !remote) {
@@ -120,45 +92,12 @@ int16_t axis_from_float(float value)
     return static_cast<int16_t>(clamped * 32767.0F);
 }
 
-void trace_tv_controllers(const char* when)
-{
-    if (!trace_input())
-        return;
-    NSArray<GCController*>* controllers = [GCController controllers];
-    trace("%s: %lu GameController(s)", when, static_cast<unsigned long>([controllers count]));
-    for (GCController* controller in controllers) {
-        const char* vendor = controller.vendorName ? [controller.vendorName UTF8String] : "?";
-        const char* category = controller.productCategory ? [controller.productCategory UTF8String] : "?";
-        trace("  gc \"%s\" \"%s\" extended=%d micro=%d", vendor, category,
-            controller.extendedGamepad != nil, controller.microGamepad != nil);
-    }
-}
-
 // Fills the PS2 pad from an extended gamepad and reports whether one was present.
 bool read_tv_controller(Ps2xGamepadSnapshot& next)
 {
     GCController* controller = tv_controller();
     GCExtendedGamepad* pad = controller.extendedGamepad;
-    if (!pad) {
-        if (trace_input()) {
-            static bool traced_none = false;
-            if (!traced_none) {
-                traced_none = true;
-                trace_tv_controllers("poll (no extended gamepad)");
-            }
-        }
-        return false;
-    }
-    if (trace_input()) {
-        static const void* traced = nullptr;
-        const void* current = (__bridge const void*)controller;
-        if (current != traced) {
-            traced = current;
-            trace("controller in use: \"%s\" \"%s\"",
-                controller.vendorName ? [controller.vendorName UTF8String] : "?",
-                controller.productCategory ? [controller.productCategory UTF8String] : "?");
-        }
-    }
+    if (!pad) return false;
     next = {};
     next.connected = 1;
     next.buttons[PS2X_PAD_CROSS] = pad.buttonA.isPressed;
@@ -200,9 +139,6 @@ void open_first_gamepad()
     if (s_gamepad || !s_initialized || !s_active)
         return;
     s_gamepad = open_preferred_gamepad(true);
-    if (s_gamepad && is_tv_remote(s_gamepad))
-        trace("gamepad selected: \"%s\" (television remote; no controller connected)",
-            SDL_GetGamepadName(s_gamepad) ? SDL_GetGamepadName(s_gamepad) : "?");
 }
 
 // tvOS keeps its remote on the device list, so a controller connected or paired
@@ -253,21 +189,6 @@ extern "C" int ps2x_gamepad_init(void)
     s_active = true;
     SDL_PumpEvents();
     open_first_gamepad();
-    if (trace_input()) {
-        int count = 0;
-        if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
-            for (int i = 0; i < count; ++i) {
-                const char* name = SDL_GetGamepadNameForID(ids[i]);
-                trace("device %d/%d: \"%s\"", i + 1, count, name ? name : "?");
-            }
-            SDL_free(ids);
-        } else {
-            trace("no gamepad devices");
-        }
-    }
-#if defined(TARGET_OS_TV) && TARGET_OS_TV
-    trace_tv_controllers("init");
-#endif
     publish_empty(s_gamepad != nullptr);
     return 1;
 }
@@ -333,18 +254,6 @@ extern "C" void ps2x_gamepad_poll(void)
             : 0u;
         const uint16_t high = enabled && small ? static_cast<uint16_t>(65535u * static_cast<unsigned>(intensity) / 100u) : 0u;
         if (s_gamepad) (void)SDL_RumbleGamepad(s_gamepad, low, high, 200);
-        static const bool traceRumble = [] {
-            const char* value = std::getenv("PS2X_TRACE_RUMBLE");
-            return value && value[0] == '1';
-        }();
-        static int lastRumble = -1;
-        const int currentRumble = (static_cast<int>(small) << 8) | static_cast<int>(large) |
-            (enabled ? (1 << 16) : 0) | (s_gamepad ? (1 << 17) : 0);
-        if (traceRumble && currentRumble != lastRumble)
-            std::fprintf(stderr, "[rumble-host] small=%u large=%u low=%u high=%u intensity=%u%% device=%s\n", small, large,
-                         static_cast<unsigned>(low), static_cast<unsigned>(high), intensity,
-                         s_gamepad ? "connected" : "none");
-        lastRumble = currentRumble;
     }
 
     Ps2xGamepadSnapshot next{};
@@ -355,18 +264,6 @@ extern "C" void ps2x_gamepad_poll(void)
 #if defined(TARGET_OS_TV) && TARGET_OS_TV
     }
 #endif
-    if (trace_input()) {
-        static auto last = std::chrono::steady_clock::now() - std::chrono::seconds(1);
-        const auto now = std::chrono::steady_clock::now();
-        if (now - last >= std::chrono::seconds(1)) {
-            last = now;
-            unsigned bits = 0;
-            for (const uint8_t pressed : next.buttons)
-                bits = (bits << 1) | (pressed ? 1u : 0u);
-            trace("connected=%u buttons=0x%08x axes=%d,%d,%d,%d", static_cast<unsigned>(next.connected), bits,
-                next.axes[0], next.axes[1], next.axes[2], next.axes[3]);
-        }
-    }
     std::lock_guard<std::mutex> lock(s_snapshot_mutex);
     s_snapshot = next;
 }

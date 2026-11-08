@@ -2,7 +2,7 @@
 // Process entry for iOS and tvOS. UIApplicationMain keeps the main thread; once
 // the window exists the game runs on a 16 MB-stack thread inside ps2x_app_run.
 // Bundle layout mirrors the macOS .app Resources: <App>.app/game/<boot ELF> with
-// the disc data beside it. Saves, settings and logs live in the platform's
+// the disc data beside it. Saves and settings live in the platform's
 // writable container directory (see userBaseDirectory).
 #import <UIKit/UIKit.h>
 
@@ -80,14 +80,6 @@ void startGameThread() {
         return;
     }
     NSString* dir = [base stringByAppendingPathComponent:@PS2X_APP_EXECUTABLE];
-    if (const char* name = std::getenv("PS2X_USER_DIR"); name && *name) {
-        const std::filesystem::path relative(name);
-        if (relative.has_parent_path() || relative == "." || relative == "..") {
-            ps2x_show_error_alert("PS2X_USER_DIR must be a directory name within the application data directory.");
-            return;
-        }
-        dir = [base stringByAppendingPathComponent:[NSString stringWithUTF8String:name]];
-    }
     NSError* directoryError = nil;
     if (![[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES
         attributes:nil error:&directoryError]) {

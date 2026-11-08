@@ -43,14 +43,11 @@ public:
     uint32_t read_fifo(std::span<uint8_t> destination);
     void read_local_memory(std::span<uint8_t> destination, uint64_t bitbltbuf,
                            uint64_t trxpos, uint64_t trxreg);
-    void snapshot_local_memory(std::span<uint8_t> destination);
     void resize(uint32_t width_pixels, uint32_t height_pixels, float backing_scale);
-    RrvPcsx2GsBridgeStats stats();
     const RrvPcsx2GsBridgeCapabilities& capabilities() const noexcept { return capabilities_; }
     void close() noexcept;
 
 private:
-    void capture_after_vsync(uint64_t field_index);
     MetalGsAdapter(RrvPcsx2GsBridge* handle, RrvPcsx2GsBridgeCapabilities capabilities) noexcept;
     RrvPcsx2GsBridge* handle_{};
     RrvPcsx2GsBridgeCapabilities capabilities_{};

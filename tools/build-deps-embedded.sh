@@ -9,7 +9,7 @@ case "$PLATFORM" in
   iphonesimulator|iphoneos|appletvos|appletvsimulator) ;;
   *) echo "Usage: $0 <iphonesimulator|iphoneos|appletvos|appletvsimulator>" >&2; exit 2 ;;
 esac
-export DEVELOPER_DIR="${DEVELOPER_DIR:-$HOME/Developer/Xcode-12.5.1/Xcode.app/Contents/Developer}"
+export DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 LLVM="$ROOT/tools/build/llvm19"
 CMAKE="$ROOT/tools/build/cmake-3.31.12/CMake.app/Contents/bin/cmake"
 NINJA="$ROOT/tools/build/ninja-1.13.1/ninja"
@@ -20,12 +20,8 @@ SRC="$BASE/src"
 PREFIX="$BASE/$PLATFORM/prefix"
 BUILD="$ROOT/build/embedded/$PLATFORM/deps"
 LOG="$ROOT/build/embedded/logs"
-CCACHE="$ROOT/tools/build/ccache/ccache"
-CCACHE_DIR="$ROOT/build/embedded/$PLATFORM/ccache"
 source "$ROOT/tools/embedded-cmake.sh"
 source "$ROOT/tools/ffmpeg-minimal-components.sh"
-mkdir -p "$CCACHE_DIR"
-export CCACHE_DIR CCACHE_CONFIGPATH="$ROOT/cmake/ccache-settings.txt" CCACHE_MAXSIZE=2G
 mkdir -p "$SRC" "$PREFIX" "$BUILD" "$LOG"
 for tool in "$LLVM/bin/clang++" "$CMAKE" "$NINJA"; do
   [[ -x "$tool" ]] || { echo "Missing $tool" >&2; exit 2; }
@@ -108,7 +104,6 @@ mkdir -p "$FFMPEG_PREFIX/lib" "$FFMPEG_PREFIX/include"
   done
   export CC="$LLVM/bin/clang"
   BUILD_CC="$CC"
-  if [[ -x "$CCACHE" ]]; then BUILD_CC="$CCACHE $CC"; fi
   export AR="$(xcrun --find ar)" NM="$(xcrun --find nm)"
   export RANLIB="$(xcrun --find ranlib)" STRIP="$(xcrun --find strip)"
   export CFLAGS="--target=$TARGET $CPU_FLAG -isysroot $SDK $MIN_FLAG -ffile-prefix-map=$ROOT=."

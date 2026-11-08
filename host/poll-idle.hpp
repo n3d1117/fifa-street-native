@@ -1,24 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Sleep through the guest's vblank poll in sub_003C18D0 (PS2X_POLL_IDLE): the pure
-// decisions, kept free of the runtime so a test can prove the guard and the policy.
+// Retail-verified VBlank polling hook.
 #pragma once
 
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <functional>
 #include <string>
 
 namespace host::pollidle {
-
-enum class Mode { Off, On, Verify };
-
-// PS2X_POLL_IDLE: unset or anything else = On, "0" = Off (the original spin), "verify" = Verify.
-inline Mode parse(const char *env) {
-    if (!env) return Mode::On;
-    if (std::strcmp(env, "0") == 0) return Mode::Off;
-    return std::strcmp(env, "verify") == 0 ? Mode::Verify : Mode::On;
-}
 
 // The loop at 0x3C1900..0x3C1998 re-reads the poll word (s1+0xBC, cleared by the VBlank-start
 // interrupt handler sub_003C4ED0) and calls the callback in s1+0xCC when it is non-null. The hook
@@ -29,8 +18,8 @@ inline constexpr uint32_t kLoop = 0x3C1900u;  // where the back-edge continues
 inline constexpr uint32_t kPollOffset = 0xBCu;
 inline constexpr uint32_t kCallbackOffset = 0xCCu;
 
-inline bool shouldSleep(Mode mode, bool wallClock, uint32_t pollWord, uint32_t callback) {
-    return mode != Mode::Off && wallClock && pollWord != 0u && callback == 0u;
+inline bool shouldSleep(bool wallClock, uint32_t pollWord, uint32_t callback) {
+    return wallClock && pollWord != 0u && callback == 0u;
 }
 
 struct Word {

@@ -36,6 +36,5 @@ bool ps2x_video_mode_install(PS2Runtime& runtime, const std::filesystem::path& e
         std::fprintf(stderr, "[video-mode] refused: no generated mode setup\n");
         return false;
     }
-    std::fprintf(stderr, "[video-mode] NTSC: game's selector 0, render height 448\n");
     return true;
 }

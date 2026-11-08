@@ -1,12 +1,4 @@
-# Recompiler config for FIFA Street (SLES-53064, PAL). @ROOT@ is substituted by `rx build`.
-# The ELF is stripped: the recompiler discovers functions itself (entry, JAL targets, prologues), named sub_<ADDR>;
-# switch tables are resolved by the recompiler. Only Sony SDK entry points with runtime/HLE handlers are bound
-# (libm/libc run as guest code). Evidence per entry, both agreeing where they overlap (58 of 59):
-#  - ps2_analyzer (embedded Sony SDK signature database): Mpeg, Ipu, Mc, Cd, Pad, Sif, Fs, Deci2, Tty, GsResetGraph, threads.
-#  - byte-pattern matches of known Sony SDK function bodies against this ELF's .text, with
-#    jal targets and non-stack immediates masked, accepted only when unique: kernel syscall wrappers
-#    (0x445d50-0x446540: threads, semaphores, interrupts, alarms, cache, OSD, SIF DMA), Cd/Ipu/Pad/Sif/Fs bodies.
-#    Where the two disagree (sceCdDiskReady) the pattern match wins (126-word body ends exactly at the analyzer address).
+# FIFA Street PAL SLES-53064. @ROOT@ is replaced by ./rx build.
 
 [general]
 input = "@ROOT@/extracted/disc/SLES_530.64"
